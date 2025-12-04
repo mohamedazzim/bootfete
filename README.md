@@ -139,6 +139,33 @@ The Symposium Management System is designed to streamline the entire lifecycle o
   - Total score
   - Time taken (tiebreaker)
   - Completion status
+  - Time taken (tiebreaker)
+
+### ⚖️ Load Balancing & High Availability
+- **Multi-Server Architecture**
+  - Nginx Load Balancer distributing traffic
+  - PM2 Process Manager running 3 concurrent instances
+  - Stateless application design
+- **Redis-Backed State Management**
+  - Distributed Session Store (connect-redis)
+  - Synchronized WebSocket Broadcasting (Redis Adapter)
+  - Shared Cache and Message Queues
+
+### 📈 Monitoring & Observability
+- **Structured Logging**
+  - JSON-formatted logs with Winston
+  - Daily log rotation
+  - Unique `Correlation-ID` for request tracing
+- **Real-Time Metrics (Prometheus)**
+  - HTTP Request Duration & Throughput
+  - Database Query Performance
+  - Cache Hit/Miss Rates
+  - Active Session Counts
+  - Email Queue Depth
+- **Proactive Alerting**
+  - Automated checks every minute
+  - Alerts for High Latency, Error Rates, and Queue Backlogs
+  - Admin Dashboard for System Status
 
 ### 📧 Email Notification System
 - **Automated Emails**
@@ -252,7 +279,10 @@ The Symposium Management System is designed to streamline the entire lifecycle o
 - **Build Tool:** Vite
 - **Package Manager:** npm
 - **Database Migrations:** Drizzle Kit
-- **Environment:** Replit (Nix-based)
+- **Load Balancer:** Nginx
+- **Process Manager:** PM2
+- **State Store:** Redis
+- **Monitoring:** Prometheus, Winston
 
 ## 👤 User Roles
 
@@ -742,7 +772,14 @@ GET    /api/admin/audit-logs         - Get audit logs
 ```
 GET    /api/email-logs               - Get all email logs
 GET    /api/email-logs/:email        - Get logs by recipient
+GET    /api/email-logs/:email        - Get logs by recipient
 POST   /api/email-logs/:id/retry     - Retry failed email
+
+### System Monitoring
+GET    /health                       - System health status
+GET    /metrics                      - Prometheus metrics
+GET    /api/admin/status             - Cluster status (Super Admin)
+GET    /api/admin/queue-stats        - Queue metrics (Super Admin)
 ```
 
 ## 🚀 Deployment
