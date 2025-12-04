@@ -1,0 +1,106 @@
+# Node.js backend servers
+upstream nodejs_backend {
+    # Each server with failure detection
+    server 127.0.0.1:3001 max_fails=3 fail_timeout=30s weight=1;
+    server 127.0.0.1:3002 max_fails=3 fail_timeout=30s weight=1;
+    server 127.0.0.1:3003 max_fails=3 fail_timeout=30s weight=1;
+    
+    # Connection pooling to backends
+    keepalive 32;
+    keepalive_timeout 60s;
+    keepalive_requests 100;
+}
+
+# Rate limiting zones
+limit_req_zone $binary_remote_addr zone=general:10m rate=10r/s;
+limit_req_zone $binary_remote_addr zone=api:10m rate=30r/s;
+limit_req_zone $binary_remote_addr zone=login:10m rate=5r/m;
+
+server {
+    listen 80;
+    listen 443 ssl http2;
+    server_name symposium.example.com;
+    
+    # SSL configuration - PLACEHOLDERS - Update with actual paths
+    # ssl_certificate /etc/letsencrypt/live/symposium.example.com/fullchain.pem;
+    # ssl_certificate_key /etc/letsencrypt/live/symposium.example.com/privkey.pem;
+    # ssl_protocols TLSv1.2 TLSv1.3;
+    # ssl_ciphers HIGH:!aNULL:!MD5;
+    
+    # Redirect HTTP to HTTPS
+    if ($scheme != "https") {
+        # return 301 https://$server_name$request_uri;
+    }
+    
+    # Gzip compression
+    gzip on;
+    gzip_types text/plain text/css text/xml text/javascript 
+               application/x-javascript application/xml+rss 
+               application/json;
+    gzip_min_length 1000;
+    
+    # Health check endpoint (no logging)
+    location /health {
+        access_log off;
+        proxy_pass http://nodejs_backend;
+        proxy_http_version 1.1;
+    }
+    
+    # Login endpoint with strict rate limiting
+    location /api/auth/login {
+        limit_req zone=login burst=10 nodelay;
+        proxy_pass http://nodejs_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+    }
+    
+    # All other API endpoints
+    location /api/ {
+        limit_req zone=api burst=50 nodelay;
+        proxy_pass http://nodejs_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_cache_bypass $http_upgrade;
+        proxy_read_timeout 30s;
+        proxy_connect_timeout 10s;
+    }
+    
+    # WebSocket support (socket.io)
+    location /socket.io {
+        proxy_pass http://nodejs_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "Upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_read_timeout 86400;
+    }
+    
+    # Static files with caching
+    location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2)$ {
+        proxy_pass http://nodejs_backend;
+        expires 30d;
+        add_header Cache-Control "public, immutable";
+    }
+    
+    # Metrics endpoint (admin only)
+    location /metrics {
+        allow 192.168.1.0/24;  # Internal network only
+        deny all;
+        proxy_pass http://nodejs_backend;
+    }
+    
+    # All other traffic
+    location / {
+        limit_req zone=general burst=20 nodelay;
+        proxy_pass http://nodejs_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_cache_bypass $http_upgrade;
+    }
+}
