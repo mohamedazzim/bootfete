@@ -24,6 +24,8 @@ export const events = pgTable("events", {
   description: text("description").notNull(),
   type: varchar("type", { enum: ['technical', 'non_technical'] }).notNull().default('technical'), // technical or non-technical
   category: varchar("category", { enum: ['technical', 'non_technical'] }).notNull().default('technical'),
+  minMembers: integer("min_members").notNull().default(1), // Minimum team members (1 for solo)
+  maxMembers: integer("max_members").notNull().default(1), // Maximum team members (1 for solo)
   startDate: timestamp("start_date"),
   endDate: timestamp("end_date"),
   status: varchar("status", { enum: ['active', 'completed', 'draft'] }).notNull().default('active'), // active, completed, draft
@@ -177,17 +179,34 @@ export const registrationForms = pgTable("registration_forms", {
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
-// Registrations - submissions from public registration forms
+// Registrations - team-based event registrations
+// Each registration is for ONE event, with organizer and optional team members
 export const registrations = pgTable("registrations", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  formId: varchar("form_id").references(() => registrationForms.id, { onDelete: 'cascade' }).notNull(),
-  submittedData: jsonb("submitted_data").notNull().$type<Record<string, string>>(),
-  selectedEvents: jsonb("selected_events").notNull().$type<Array<string>>(),
-  paymentStatus: varchar("payment_status", { enum: ['pending', 'paid', 'declined'] }).default('pending').notNull(),
-  participantUserId: varchar("participant_user_id").references(() => users.id, { onDelete: 'set null' }),
-  submittedAt: timestamp("submitted_at").defaultNow().notNull(),
-  processedAt: timestamp("processed_at"),
-  processedBy: varchar("processed_by").references(() => users.id, { onDelete: 'set null' }),
+  eventId: varchar("event_id").references(() => events.id, { onDelete: 'cascade' }).notNull(),
+  organizerRollNo: varchar("organizer_roll_no").notNull(),
+  organizerName: text("organizer_name").notNull(),
+  organizerEmail: text("organizer_email").notNull(),
+  organizerDept: text("organizer_dept").notNull(),
+  organizerPhone: text("organizer_phone"),
+  registrationType: varchar("registration_type", { enum: ['solo', 'team'] }).notNull().default('solo'),
+  status: varchar("status", { enum: ['pending', 'confirmed', 'cancelled'] }).notNull().default('pending'),
+  confirmedAt: timestamp("confirmed_at"),
+  confirmedBy: varchar("confirmed_by").references(() => users.id, { onDelete: 'set null' }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+// Team Members - members of team registrations (excluding organizer)
+export const teamMembers = pgTable("team_members", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  registrationId: varchar("registration_id").references(() => registrations.id, { onDelete: 'cascade' }).notNull(),
+  memberRollNo: varchar("member_roll_no").notNull(),
+  memberName: text("member_name").notNull(),
+  memberEmail: text("member_email").notNull(),
+  memberDept: text("member_dept").notNull(),
+  memberPhone: text("member_phone"),
+  addedAt: timestamp("added_at").defaultNow().notNull(),
 });
 
 // Event Credentials - event-specific credentials for participants
@@ -303,8 +322,14 @@ export const insertRegistrationFormSchema = createInsertSchema(registrationForms
 
 export const insertRegistrationSchema = createInsertSchema(registrations).omit({
   id: true,
-  submittedAt: true,
-  processedAt: true,
+  createdAt: true,
+  updatedAt: true,
+  confirmedAt: true,
+});
+
+export const insertTeamMemberSchema = createInsertSchema(teamMembers).omit({
+  id: true,
+  addedAt: true,
 });
 
 export const insertEventCredentialSchema = createInsertSchema(eventCredentials).omit({
@@ -360,6 +385,9 @@ export type InsertRegistrationForm = z.infer<typeof insertRegistrationFormSchema
 
 export type Registration = typeof registrations.$inferSelect;
 export type InsertRegistration = z.infer<typeof insertRegistrationSchema>;
+
+export type TeamMember = typeof teamMembers.$inferSelect;
+export type InsertTeamMember = z.infer<typeof insertTeamMemberSchema>;
 
 export type EventCredential = typeof eventCredentials.$inferSelect;
 export type InsertEventCredential = z.infer<typeof insertEventCredentialSchema>;

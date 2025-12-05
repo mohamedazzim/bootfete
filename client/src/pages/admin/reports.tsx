@@ -63,18 +63,18 @@ export default function ReportsPage() {
 
   return (
     <AdminLayout>
-      <div className="p-8">
-        <div className="flex justify-between items-center mb-6">
+      <div className="p-4 md:p-8">
+        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
           <div>
             <h1 className="text-3xl font-bold text-gray-900" data-testid="heading-reports">Reports</h1>
             <p className="text-gray-600 mt-1">Generate and view event reports</p>
           </div>
-          <div className="flex gap-2">
-            <Button onClick={() => setLocation('/admin/reports/generate/event')} data-testid="button-generate-event">
+          <div className="flex flex-col sm:flex-row gap-2 w-full md:w-auto">
+            <Button onClick={() => setLocation('/admin/reports/generate/event')} data-testid="button-generate-event" className="w-full sm:w-auto">
               <Plus className="mr-2 h-4 w-4" />
               Generate Event Report
             </Button>
-            <Button onClick={() => setLocation('/admin/reports/generate/symposium')} data-testid="button-generate-symposium">
+            <Button onClick={() => setLocation('/admin/reports/generate/symposium')} data-testid="button-generate-symposium" className="w-full sm:w-auto">
               <Plus className="mr-2 h-4 w-4" />
               Generate Symposium Report
             </Button>
@@ -95,52 +95,54 @@ export default function ReportsPage() {
                 <p className="mt-2">Click the buttons above to generate your first report</p>
               </div>
             ) : (
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Title</TableHead>
-                    <TableHead>Type</TableHead>
-                    <TableHead>Generated At</TableHead>
-                    <TableHead className="text-right">Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {reports.map((report) => (
-                    <TableRow key={report.id} data-testid={`row-report-${report.id}`}>
-                      <TableCell className="font-medium" data-testid={`text-report-title-${report.id}`}>
-                        {report.title}
-                      </TableCell>
-                      <TableCell>
-                        <Badge variant={report.reportType === 'symposium_wide' ? 'default' : 'secondary'}>
-                          {report.reportType.replace('_', ' ')}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>{new Date(report.createdAt).toLocaleString()}</TableCell>
-                      <TableCell className="text-right">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => handleDownload(report)}
-                          disabled={downloadingId === report.id}
-                          data-testid={`button-download-${report.id}`}
-                        >
-                          {downloadingId === report.id ? (
-                            <>
-                              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                              Downloading...
-                            </>
-                          ) : (
-                            <>
-                              <Download className="mr-2 h-4 w-4" />
-                              Download
-                            </>
-                          )}
-                        </Button>
-                      </TableCell>
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Title</TableHead>
+                      <TableHead>Type</TableHead>
+                      <TableHead>Generated At</TableHead>
+                      <TableHead className="text-right">Actions</TableHead>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+                  </TableHeader>
+                  <TableBody>
+                    {reports.map((report) => (
+                      <TableRow key={report.id} data-testid={`row-report-${report.id}`}>
+                        <TableCell className="font-medium" data-testid={`text-report-title-${report.id}`}>
+                          {report.title}
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant={report.reportType === 'symposium_wide' ? 'default' : 'secondary'}>
+                            {report.reportType.replace('_', ' ')}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>{new Date(report.createdAt).toLocaleString()}</TableCell>
+                        <TableCell className="text-right">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => handleDownload(report)}
+                            disabled={downloadingId === report.id}
+                            data-testid={`button-download-${report.id}`}
+                          >
+                            {downloadingId === report.id ? (
+                              <>
+                                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                Downloading...
+                              </>
+                            ) : (
+                              <>
+                                <Download className="mr-2 h-4 w-4" />
+                                Download
+                              </>
+                            )}
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
             )}
           </CardContent>
         </Card>

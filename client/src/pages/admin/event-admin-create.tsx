@@ -85,7 +85,7 @@ export default function EventAdminCreatePage() {
 
   return (
     <AdminLayout>
-      <div className="p-8">
+      <div className="p-4 md:p-8">
         <div className="mb-6">
           <Button
             variant="ghost"
@@ -189,9 +189,9 @@ export default function EventAdminCreatePage() {
                         <FormControl>
                           <SelectTrigger data-testid="select-event">
                             <SelectValue placeholder={
-                              eventsLoading 
-                                ? "Loading events..." 
-                                : (!events || events.length === 0) 
+                              eventsLoading
+                                ? "Loading events..."
+                                : (!events || events.length === 0)
                                   ? "No events available - create an event first"
                                   : "Select an event"
                             } />

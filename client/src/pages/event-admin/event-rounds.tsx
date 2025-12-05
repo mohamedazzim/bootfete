@@ -45,7 +45,7 @@ function CountdownTimer({ round, onTimeExpired }: { round: Round; onTimeExpired?
     const interval = setInterval(() => {
       const newTimeRemaining = calculateTimeRemaining();
       setTimeRemaining(newTimeRemaining);
-      
+
       // Notify parent when time expires (only once)
       if (newTimeRemaining === 0 && onTimeExpired && !hasNotified) {
         onTimeExpired(round.id);
@@ -242,7 +242,7 @@ export default function EventRoundsPage() {
 
   return (
     <EventAdminLayout>
-      <div className="p-8">
+      <div className="p-4 md:p-8">
         <div className="mb-6">
           <Button
             variant="ghost"
@@ -253,7 +253,7 @@ export default function EventRoundsPage() {
             <ArrowLeft className="mr-2 h-4 w-4" />
             Back to My Events
           </Button>
-          <div className="flex justify-between items-start">
+          <div className="flex flex-col md:flex-row justify-between items-start gap-4">
             <div>
               <h1 className="text-3xl font-bold text-gray-900" data-testid="heading-rounds">Rounds Management</h1>
               <p className="text-gray-600 mt-1">{event?.name}</p>
@@ -292,111 +292,113 @@ export default function EventRoundsPage() {
                 </Button>
               </div>
             ) : (
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Round #</TableHead>
-                    <TableHead>Name</TableHead>
-                    <TableHead>Duration</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Time Remaining</TableHead>
-                    <TableHead className="text-right">Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {rounds.map((round) => (
-                    <TableRow key={round.id} data-testid={`row-round-${round.id}`}>
-                      <TableCell className="font-medium" data-testid={`text-round-number-${round.id}`}>
-                        Round {round.roundNumber}
-                      </TableCell>
-                      <TableCell>{round.name}</TableCell>
-                      <TableCell>{round.duration} minutes</TableCell>
-                      <TableCell>{getStatusBadge(round.status)}</TableCell>
-                      <TableCell>
-                        <CountdownTimer 
-                          round={round} 
-                          onTimeExpired={(roundId) => {
-                            setExpiredRoundIds(prev => new Set(prev).add(roundId));
-                          }}
-                        />
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <div className="flex justify-end gap-2">
-                          {round.status === 'not_started' && (
-                            <Button
-                              variant="default"
-                              size="sm"
-                              onClick={() => startRoundMutation.mutate(round.id)}
-                              disabled={startRoundMutation.isPending}
-                              data-testid={`button-start-${round.id}`}
-                              title="Start Round"
-                            >
-                              <Play className="h-4 w-4 mr-1" />
-                              Start
-                            </Button>
-                          )}
-                          {round.status === 'in_progress' && !expiredRoundIds.has(round.id) && (
-                            <Button
-                              variant="destructive"
-                              size="sm"
-                              onClick={() => endRoundMutation.mutate(round.id)}
-                              disabled={endRoundMutation.isPending}
-                              data-testid={`button-end-${round.id}`}
-                              title="End Round"
-                            >
-                              <Square className="h-4 w-4 mr-1" />
-                              End
-                            </Button>
-                          )}
-                          {round.status === 'completed' && !round.resultsPublished && (
-                            <Button
-                              variant="default"
-                              size="sm"
-                              onClick={() => publishResultsMutation.mutate(round.id)}
-                              disabled={publishResultsMutation.isPending}
-                              data-testid={`button-publish-results-${round.id}`}
-                              title="Publish Results"
-                              className="bg-green-600 hover:bg-green-700"
-                            >
-                              <Eye className="h-4 w-4 mr-1" />
-                              Publish Results
-                            </Button>
-                          )}
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => setRestartRoundId(round.id)}
-                            disabled={restartRoundMutation.isPending}
-                            data-testid={`button-restart-round-${round.id}`}
-                            title="Restart Round"
-                            className="border-orange-500 text-orange-600 hover:bg-orange-50 hover:text-orange-700"
-                          >
-                            <RotateCcw className="h-4 w-4" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => setLocation(`/event-admin/events/${eventId}/rounds/${round.id}/edit`)}
-                            data-testid={`button-edit-${round.id}`}
-                            title="Edit Round"
-                          >
-                            <Edit className="h-4 w-4" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => setLocation(`/event-admin/rounds/${round.id}/questions`)}
-                            data-testid={`button-questions-${round.id}`}
-                            title="Manage Questions"
-                          >
-                            <FileQuestion className="h-4 w-4" />
-                          </Button>
-                        </div>
-                      </TableCell>
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Round #</TableHead>
+                      <TableHead>Name</TableHead>
+                      <TableHead>Duration</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Time Remaining</TableHead>
+                      <TableHead className="text-right">Actions</TableHead>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+                  </TableHeader>
+                  <TableBody>
+                    {rounds.map((round) => (
+                      <TableRow key={round.id} data-testid={`row-round-${round.id}`}>
+                        <TableCell className="font-medium" data-testid={`text-round-number-${round.id}`}>
+                          Round {round.roundNumber}
+                        </TableCell>
+                        <TableCell>{round.name}</TableCell>
+                        <TableCell>{round.duration} minutes</TableCell>
+                        <TableCell>{getStatusBadge(round.status)}</TableCell>
+                        <TableCell>
+                          <CountdownTimer
+                            round={round}
+                            onTimeExpired={(roundId) => {
+                              setExpiredRoundIds(prev => new Set(prev).add(roundId));
+                            }}
+                          />
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <div className="flex justify-end gap-2">
+                            {round.status === 'not_started' && (
+                              <Button
+                                variant="default"
+                                size="sm"
+                                onClick={() => startRoundMutation.mutate(round.id)}
+                                disabled={startRoundMutation.isPending}
+                                data-testid={`button-start-${round.id}`}
+                                title="Start Round"
+                              >
+                                <Play className="h-4 w-4 mr-1" />
+                                Start
+                              </Button>
+                            )}
+                            {round.status === 'in_progress' && !expiredRoundIds.has(round.id) && (
+                              <Button
+                                variant="destructive"
+                                size="sm"
+                                onClick={() => endRoundMutation.mutate(round.id)}
+                                disabled={endRoundMutation.isPending}
+                                data-testid={`button-end-${round.id}`}
+                                title="End Round"
+                              >
+                                <Square className="h-4 w-4 mr-1" />
+                                End
+                              </Button>
+                            )}
+                            {round.status === 'completed' && !round.resultsPublished && (
+                              <Button
+                                variant="default"
+                                size="sm"
+                                onClick={() => publishResultsMutation.mutate(round.id)}
+                                disabled={publishResultsMutation.isPending}
+                                data-testid={`button-publish-results-${round.id}`}
+                                title="Publish Results"
+                                className="bg-green-600 hover:bg-green-700"
+                              >
+                                <Eye className="h-4 w-4 mr-1" />
+                                Publish Results
+                              </Button>
+                            )}
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => setRestartRoundId(round.id)}
+                              disabled={restartRoundMutation.isPending}
+                              data-testid={`button-restart-round-${round.id}`}
+                              title="Restart Round"
+                              className="border-orange-500 text-orange-600 hover:bg-orange-50 hover:text-orange-700"
+                            >
+                              <RotateCcw className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => setLocation(`/event-admin/events/${eventId}/rounds/${round.id}/edit`)}
+                              data-testid={`button-edit-${round.id}`}
+                              title="Edit Round"
+                            >
+                              <Edit className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => setLocation(`/event-admin/rounds/${round.id}/questions`)}
+                              data-testid={`button-questions-${round.id}`}
+                              title="Manage Questions"
+                            >
+                              <FileQuestion className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
             )}
           </CardContent>
         </Card>
@@ -406,7 +408,7 @@ export default function EventRoundsPage() {
             <AlertDialogHeader>
               <AlertDialogTitle>Restart Round?</AlertDialogTitle>
               <AlertDialogDescription>
-                This will reset the round to 'Not Started' and delete ALL participant test attempts. 
+                This will reset the round to 'Not Started' and delete ALL participant test attempts.
                 Participants will be able to retake the test. This action cannot be undone.
               </AlertDialogDescription>
             </AlertDialogHeader>

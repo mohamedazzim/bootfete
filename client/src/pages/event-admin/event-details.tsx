@@ -126,7 +126,7 @@ export default function EventDetailsPage() {
 
   return (
     <EventAdminLayout>
-      <div className="p-8">
+      <div className="p-4 md:p-8">
         <div className="mb-6">
           <Button
             variant="ghost"
@@ -137,7 +137,7 @@ export default function EventDetailsPage() {
             <ArrowLeft className="mr-2 h-4 w-4" />
             Back to My Events
           </Button>
-          <div className="flex justify-between items-start">
+          <div className="flex flex-col md:flex-row justify-between items-start gap-4">
             <div>
               <h1 className="text-3xl font-bold text-gray-900" data-testid="heading-event-name">{event.name}</h1>
               <p className="text-gray-600 mt-1" data-testid="text-event-description">{event.description}</p>
@@ -176,10 +176,10 @@ export default function EventDetailsPage() {
         </div>
 
         <Tabs defaultValue="overview" className="space-y-4">
-          <TabsList>
-            <TabsTrigger value="overview" data-testid="tab-overview">Overview</TabsTrigger>
-            <TabsTrigger value="rounds" data-testid="tab-rounds">Rounds</TabsTrigger>
-            <TabsTrigger value="participants" data-testid="tab-participants">Participants</TabsTrigger>
+          <TabsList className="flex flex-wrap h-auto gap-2">
+            <TabsTrigger value="overview" data-testid="tab-overview" className="flex-1">Overview</TabsTrigger>
+            <TabsTrigger value="rounds" data-testid="tab-rounds" className="flex-1">Rounds</TabsTrigger>
+            <TabsTrigger value="participants" data-testid="tab-participants" className="flex-1">Participants</TabsTrigger>
           </TabsList>
 
           <TabsContent value="overview">
@@ -192,7 +192,7 @@ export default function EventDetailsPage() {
                   <p className="text-sm font-medium text-gray-600">Description</p>
                   <p className="mt-1" data-testid="text-description">{event.description}</p>
                 </div>
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
                     <p className="text-sm font-medium text-gray-600">Start Date</p>
                     <p className="mt-1" data-testid="text-start-date">
@@ -227,55 +227,57 @@ export default function EventDetailsPage() {
                     No rounds created yet
                   </div>
                 ) : (
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Round #</TableHead>
-                        <TableHead>Name</TableHead>
-                        <TableHead>Duration</TableHead>
-                        <TableHead>Status</TableHead>
-                        <TableHead>Start Time</TableHead>
-                        <TableHead className="text-right">Actions</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {rounds.map((round) => (
-                        <TableRow key={round.id} data-testid={`row-round-${round.id}`}>
-                          <TableCell className="font-medium">{round.roundNumber}</TableCell>
-                          <TableCell>{round.name}</TableCell>
-                          <TableCell>{round.duration} min</TableCell>
-                          <TableCell>
-                            {getStatusBadge(round.status)}
-                          </TableCell>
-                          <TableCell>
-                            {round.startTime ? new Date(round.startTime).toLocaleString() : 'Not scheduled'}
-                          </TableCell>
-                          <TableCell className="text-right">
-                            <div className="flex justify-end gap-2">
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => setLocation(`/event-admin/events/${eventId}/rounds/${round.id}/edit`)}
-                                data-testid={`button-edit-round-${round.id}`}
-                                title="Edit Round"
-                              >
-                                <Edit className="h-4 w-4" />
-                              </Button>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => setLocation(`/event-admin/rounds/${round.id}/questions`)}
-                                data-testid={`button-manage-round-${round.id}`}
-                                title="Manage Questions"
-                              >
-                                <FileQuestion className="h-4 w-4" />
-                              </Button>
-                            </div>
-                          </TableCell>
+                  <div className="overflow-x-auto">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Round #</TableHead>
+                          <TableHead>Name</TableHead>
+                          <TableHead>Duration</TableHead>
+                          <TableHead>Status</TableHead>
+                          <TableHead>Start Time</TableHead>
+                          <TableHead className="text-right">Actions</TableHead>
                         </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
+                      </TableHeader>
+                      <TableBody>
+                        {rounds.map((round) => (
+                          <TableRow key={round.id} data-testid={`row-round-${round.id}`}>
+                            <TableCell className="font-medium">{round.roundNumber}</TableCell>
+                            <TableCell>{round.name}</TableCell>
+                            <TableCell>{round.duration} min</TableCell>
+                            <TableCell>
+                              {getStatusBadge(round.status)}
+                            </TableCell>
+                            <TableCell>
+                              {round.startTime ? new Date(round.startTime).toLocaleString() : 'Not scheduled'}
+                            </TableCell>
+                            <TableCell className="text-right">
+                              <div className="flex justify-end gap-2">
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => setLocation(`/event-admin/events/${eventId}/rounds/${round.id}/edit`)}
+                                  data-testid={`button-edit-round-${round.id}`}
+                                  title="Edit Round"
+                                >
+                                  <Edit className="h-4 w-4" />
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => setLocation(`/event-admin/rounds/${round.id}/questions`)}
+                                  data-testid={`button-manage-round-${round.id}`}
+                                  title="Manage Questions"
+                                >
+                                  <FileQuestion className="h-4 w-4" />
+                                </Button>
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
                 )}
               </CardContent>
             </Card>
@@ -292,70 +294,72 @@ export default function EventDetailsPage() {
                     No participants registered yet
                   </div>
                 ) : (
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Participant Name</TableHead>
-                        <TableHead>Event Username</TableHead>
-                        <TableHead>Registration Date</TableHead>
-                        <TableHead>Test Access</TableHead>
-                        <TableHead className="text-right">Actions</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {credentials.map((cred) => (
-                        <TableRow key={cred.id} data-testid={`row-participant-${cred.id}`}>
-                          <TableCell data-testid={`text-name-${cred.id}`}>
-                            {cred.participant.fullName}
-                          </TableCell>
-                          <TableCell className="font-mono" data-testid={`text-username-${cred.id}`}>
-                            {cred.eventUsername}
-                          </TableCell>
-                          <TableCell data-testid={`text-date-${cred.id}`}>
-                            {new Date(cred.createdAt).toLocaleDateString()}
-                          </TableCell>
-                          <TableCell data-testid={`text-test-status-${cred.id}`}>
-                            {cred.testEnabled ? (
-                              <Badge variant="default" className="gap-1">
-                                <CheckCircle className="h-3 w-3" />
-                                Enabled
-                              </Badge>
-                            ) : (
-                              <Badge variant="secondary" className="gap-1">
-                                <XCircle className="h-3 w-3" />
-                                Disabled
-                              </Badge>
-                            )}
-                          </TableCell>
-                          <TableCell className="text-right">
-                            {cred.testEnabled ? (
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() => disableTestMutation.mutate(cred.id)}
-                                disabled={disableTestMutation.isPending}
-                                data-testid={`button-disable-test-${cred.id}`}
-                              >
-                                <XCircle className="h-4 w-4 mr-2" />
-                                Disable Test
-                              </Button>
-                            ) : (
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() => enableTestMutation.mutate(cred.id)}
-                                disabled={enableTestMutation.isPending}
-                                data-testid={`button-enable-test-${cred.id}`}
-                              >
-                                <CheckCircle className="h-4 w-4 mr-2" />
-                                Enable Test
-                              </Button>
-                            )}
-                          </TableCell>
+                  <div className="overflow-x-auto">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Participant Name</TableHead>
+                          <TableHead>Event Username</TableHead>
+                          <TableHead>Registration Date</TableHead>
+                          <TableHead>Test Access</TableHead>
+                          <TableHead className="text-right">Actions</TableHead>
                         </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
+                      </TableHeader>
+                      <TableBody>
+                        {credentials.map((cred) => (
+                          <TableRow key={cred.id} data-testid={`row-participant-${cred.id}`}>
+                            <TableCell data-testid={`text-name-${cred.id}`}>
+                              {cred.participant.fullName}
+                            </TableCell>
+                            <TableCell className="font-mono" data-testid={`text-username-${cred.id}`}>
+                              {cred.eventUsername}
+                            </TableCell>
+                            <TableCell data-testid={`text-date-${cred.id}`}>
+                              {new Date(cred.createdAt).toLocaleDateString()}
+                            </TableCell>
+                            <TableCell data-testid={`text-test-status-${cred.id}`}>
+                              {cred.testEnabled ? (
+                                <Badge variant="default" className="gap-1">
+                                  <CheckCircle className="h-3 w-3" />
+                                  Enabled
+                                </Badge>
+                              ) : (
+                                <Badge variant="secondary" className="gap-1">
+                                  <XCircle className="h-3 w-3" />
+                                  Disabled
+                                </Badge>
+                              )}
+                            </TableCell>
+                            <TableCell className="text-right">
+                              {cred.testEnabled ? (
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => disableTestMutation.mutate(cred.id)}
+                                  disabled={disableTestMutation.isPending}
+                                  data-testid={`button-disable-test-${cred.id}`}
+                                >
+                                  <XCircle className="h-4 w-4 mr-2" />
+                                  Disable Test
+                                </Button>
+                              ) : (
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => enableTestMutation.mutate(cred.id)}
+                                  disabled={enableTestMutation.isPending}
+                                  data-testid={`button-enable-test-${cred.id}`}
+                                >
+                                  <CheckCircle className="h-4 w-4 mr-2" />
+                                  Enable Test
+                                </Button>
+                              )}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
                 )}
               </CardContent>
             </Card>

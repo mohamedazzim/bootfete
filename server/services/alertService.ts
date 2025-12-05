@@ -4,8 +4,13 @@ type AlertLevel = 'CRITICAL' | 'WARNING' | 'INFO';
 
 class AlertService {
     async sendAlert(level: AlertLevel, title: string, details: any) {
+        // Map AlertLevel to Winston's log levels
+        let logLevel = 'info';
+        if (level === 'CRITICAL') logLevel = 'error';
+        else if (level === 'WARNING') logLevel = 'warn';
+
         // Log the alert
-        logger.log(level.toLowerCase(), title, details);
+        logger.log(logLevel, title, details);
 
         if (level === 'CRITICAL') {
             await this.sendEmailAlert(title, details);

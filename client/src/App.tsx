@@ -51,16 +51,17 @@ import RegistrationCommitteeDashboard from "@/pages/registration-committee/dashb
 import RegistrationCommitteeRegistrationsPage from "@/pages/registration-committee/registrations";
 import OnSpotRegistrationPage from "@/pages/registration-committee/on-spot-registration";
 import PublicRegistrationFormPage from "@/pages/public/registration-form";
+import EventRegistrationPage from "@/pages/public/event-registration";
 import SuperAdminOverridesPage from "@/pages/admin/super-admin-overrides";
 import EmailLogsPage from "@/pages/admin/email-logs";
 import AdminSettingsPage from "@/pages/admin/settings";
 
-function ProtectedRoute({ 
-  component: Component, 
-  allowedRoles 
-}: { 
-  component: () => JSX.Element; 
-  allowedRoles?: string[] 
+function ProtectedRoute({
+  component: Component,
+  allowedRoles
+}: {
+  component: () => JSX.Element;
+  allowedRoles?: string[]
 }) {
   const { user, isLoading } = useAuth();
 
@@ -97,19 +98,20 @@ function Router() {
   return (
     <Switch>
       <Route path="/login" component={Login} />
-      
+
       <Route path="/">
         {user ? (
           user.role === 'super_admin' ? <Redirect to="/admin/dashboard" /> :
-          user.role === 'event_admin' ? <Redirect to="/event-admin/dashboard" /> :
-          user.role === 'registration_committee' ? <Redirect to="/registration-committee/dashboard" /> :
-          <Redirect to="/participant/dashboard" />
+            user.role === 'event_admin' ? <Redirect to="/event-admin/dashboard" /> :
+              user.role === 'registration_committee' ? <Redirect to="/registration-committee/dashboard" /> :
+                <Redirect to="/participant/dashboard" />
         ) : (
           <Redirect to="/login" />
         )}
       </Route>
 
       <Route path="/register/:slug" component={PublicRegistrationFormPage} />
+      <Route path="/register/event/:eventId" component={EventRegistrationPage} />
 
       <Route path="/admin/dashboard">
         <ProtectedRoute component={AdminDashboard} allowedRoles={['super_admin']} />

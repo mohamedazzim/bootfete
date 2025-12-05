@@ -74,7 +74,7 @@ export default function ParticipantEventDetailsPage() {
 
   return (
     <ParticipantLayout>
-      <div className="p-8">
+      <div className="p-4 md:p-8">
         <div className="mb-6">
           <Button
             variant="ghost"
@@ -85,7 +85,7 @@ export default function ParticipantEventDetailsPage() {
             <ArrowLeft className="mr-2 h-4 w-4" />
             Back to Events
           </Button>
-          <div className="flex justify-between items-start">
+          <div className="flex flex-col md:flex-row justify-between items-start gap-4">
             <div>
               <h1 className="text-3xl font-bold text-gray-900" data-testid="heading-event-name">{event.name}</h1>
               <p className="text-gray-600 mt-1">Event Details and Registration</p>
@@ -106,7 +106,7 @@ export default function ParticipantEventDetailsPage() {
                 <p className="text-gray-700 whitespace-pre-wrap" data-testid="text-description">
                   {event.description}
                 </p>
-                <div className="grid grid-cols-2 gap-4 mt-6">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-6">
                   <div className="flex items-center gap-3">
                     <Calendar className="h-5 w-5 text-green-600" />
                     <div>
@@ -159,10 +159,10 @@ export default function ParticipantEventDetailsPage() {
                       return (
                         <div
                           key={round.id}
-                          className="flex justify-between items-center p-4 border rounded-lg"
+                          className="flex flex-col md:flex-row justify-between items-start md:items-center p-4 border rounded-lg gap-4"
                           data-testid={`card-round-${round.id}`}
                         >
-                          <div className="flex-1">
+                          <div className="flex-1 w-full">
                             <div className="font-medium">Round {round.roundNumber}: {round.name}</div>
                             {round.description && (
                               <div className="text-sm text-gray-600 mt-1">{round.description}</div>
@@ -175,10 +175,11 @@ export default function ParticipantEventDetailsPage() {
                               <Badge variant="outline">{round.status}</Badge>
                             </div>
                           </div>
-                          <div className="flex-shrink-0 ml-4">
+                          <div className="flex-shrink-0 w-full md:w-auto">
                             {round.status === 'not_started' && (
                               <Button
                                 disabled
+                                className="w-full md:w-auto"
                                 data-testid={`button-start-test-${round.id}`}
                               >
                                 Not Started
@@ -188,6 +189,7 @@ export default function ParticipantEventDetailsPage() {
                               <Button
                                 onClick={() => startTestMutation.mutate()}
                                 disabled={startTestMutation.isPending}
+                                className="w-full md:w-auto"
                                 data-testid={`button-start-test-${round.id}`}
                               >
                                 {startTestMutation.isPending ? 'Starting...' : 'Take Test'}
@@ -197,6 +199,7 @@ export default function ParticipantEventDetailsPage() {
                               <Button
                                 variant="outline"
                                 disabled
+                                className="w-full md:w-auto"
                                 data-testid={`button-start-test-${round.id}`}
                               >
                                 Completed

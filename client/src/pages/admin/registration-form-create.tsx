@@ -54,7 +54,7 @@ export default function RegistrationFormCreatePage() {
         });
         return;
       }
-      
+
       const reader = new FileReader();
       reader.onloadend = () => {
         setHeaderImage(reader.result as string);
@@ -72,11 +72,11 @@ export default function RegistrationFormCreatePage() {
 
   const createFormMutation = useMutation({
     mutationFn: async () => {
-      const response = await apiRequest('POST', '/api/registration-forms', { 
-        title, 
+      const response = await apiRequest('POST', '/api/registration-forms', {
+        title,
         description,
         headerImage,
-        formFields 
+        formFields
       });
       const form = await response.json();
       return form;
@@ -113,7 +113,7 @@ export default function RegistrationFormCreatePage() {
   };
 
   const updateField = (id: string, updates: Partial<FormField>) => {
-    setFormFields(formFields.map(f => 
+    setFormFields(formFields.map(f =>
       f.id === id ? { ...f, ...updates } : f
     ));
   };
@@ -252,7 +252,7 @@ export default function RegistrationFormCreatePage() {
 
   return (
     <AdminLayout>
-      <div className="container mx-auto p-6 max-w-6xl" data-testid="page-create-form">
+      <div className="container mx-auto p-4 md:p-6 max-w-6xl" data-testid="page-create-form">
         <div className="mb-6">
           <h1 className="text-3xl font-bold mb-2" data-testid="heading-create-form">Create Registration Form</h1>
           <p className="text-muted-foreground">Design a custom registration form for your symposium events</p>
@@ -300,9 +300,9 @@ export default function RegistrationFormCreatePage() {
                   />
                   {headerImage ? (
                     <div className="relative">
-                      <img 
-                        src={headerImage} 
-                        alt="Header preview" 
+                      <img
+                        src={headerImage}
+                        alt="Header preview"
                         className="w-full max-h-48 object-cover rounded-md border"
                         data-testid="preview-header-image"
                       />
@@ -353,11 +353,11 @@ export default function RegistrationFormCreatePage() {
                             />
                           </div>
 
-                          <div className="grid grid-cols-2 gap-3">
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                             <div>
                               <label className="text-xs font-medium text-muted-foreground">Field Type</label>
-                              <Select 
-                                value={field.type} 
+                              <Select
+                                value={field.type}
                                 onValueChange={(value: any) => updateField(field.id, { type: value })}
                               >
                                 <SelectTrigger data-testid={`select-type-${field.id}`}>
@@ -390,7 +390,7 @@ export default function RegistrationFormCreatePage() {
                               onCheckedChange={(checked) => updateField(field.id, { required: !!checked })}
                               data-testid={`checkbox-required-${field.id}`}
                             />
-                            <label 
+                            <label
                               htmlFor={`required-${field.id}`}
                               className="text-sm font-medium cursor-pointer"
                             >

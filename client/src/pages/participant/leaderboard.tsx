@@ -28,7 +28,7 @@ export default function LeaderboardPage() {
   if (isLoading) {
     return (
       <ParticipantLayout>
-        <div className="p-8">
+        <div className="p-4 md:p-8">
           <div className="text-center py-12" data-testid="loading-leaderboard">Loading leaderboard...</div>
         </div>
       </ParticipantLayout>
@@ -38,7 +38,7 @@ export default function LeaderboardPage() {
   if (!leaderboard || leaderboard.length === 0) {
     return (
       <ParticipantLayout>
-        <div className="p-8 max-w-6xl mx-auto">
+        <div className="p-4 md:p-8 max-w-6xl mx-auto">
           <Button
             variant="ghost"
             onClick={() => window.history.back()}
@@ -75,7 +75,7 @@ export default function LeaderboardPage() {
 
   return (
     <ParticipantLayout>
-      <div className="p-8 max-w-6xl mx-auto">
+      <div className="p-4 md:p-8 max-w-6xl mx-auto">
         <div className="mb-6">
           <Button
             variant="ghost"
@@ -99,9 +99,9 @@ export default function LeaderboardPage() {
 
         {/* Top 3 Podium */}
         {leaderboard.length >= 3 && (
-          <div className="grid grid-cols-3 gap-4 mb-6">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
             {/* 2nd Place */}
-            <Card className="mt-8 bg-gray-50 border-2 border-gray-300" data-testid="card-podium-2">
+            <Card className="mt-0 md:mt-8 bg-gray-50 border-2 border-gray-300 order-2 md:order-1" data-testid="card-podium-2">
               <CardHeader className="text-center pb-2">
                 <div className="flex justify-center mb-2">
                   <Medal className="h-12 w-12 text-gray-400" />
@@ -118,7 +118,7 @@ export default function LeaderboardPage() {
             </Card>
 
             {/* 1st Place */}
-            <Card className="bg-yellow-50 border-2 border-yellow-400" data-testid="card-podium-1">
+            <Card className="bg-yellow-50 border-2 border-yellow-400 order-1 md:order-2" data-testid="card-podium-1">
               <CardHeader className="text-center pb-2">
                 <div className="flex justify-center mb-2">
                   <Trophy className="h-16 w-16 text-yellow-500" />
@@ -135,7 +135,7 @@ export default function LeaderboardPage() {
             </Card>
 
             {/* 3rd Place */}
-            <Card className="mt-8 bg-amber-50 border-2 border-amber-400" data-testid="card-podium-3">
+            <Card className="mt-0 md:mt-8 bg-amber-50 border-2 border-amber-400 order-3" data-testid="card-podium-3">
               <CardHeader className="text-center pb-2">
                 <div className="flex justify-center mb-2">
                   <Award className="h-12 w-12 text-amber-600" />
@@ -160,49 +160,51 @@ export default function LeaderboardPage() {
             <CardDescription>Ranked by score, then by submission time (earlier submissions rank higher)</CardDescription>
           </CardHeader>
           <CardContent>
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="w-20">Rank</TableHead>
-                  <TableHead>Participant</TableHead>
-                  <TableHead className="text-right">Score</TableHead>
-                  <TableHead className="text-right">Submitted</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {leaderboard.map((entry) => (
-                  <TableRow 
-                    key={entry.userId} 
-                    className={entry.rank <= 3 ? 'bg-gray-50' : ''}
-                    data-testid={`row-participant-${entry.rank}`}
-                  >
-                    <TableCell>
-                      <div className="flex items-center justify-center">
-                        <Badge 
-                          variant="outline" 
-                          className={`${getRankBadgeColor(entry.rank)} flex items-center gap-1 px-3 py-1`}
-                        >
-                          {getRankIcon(entry.rank)}
-                        </Badge>
-                      </div>
-                    </TableCell>
-                    <TableCell className="font-medium" data-testid={`text-name-${entry.rank}`}>
-                      {entry.userName}
-                    </TableCell>
-                    <TableCell className="text-right font-semibold" data-testid={`text-score-${entry.rank}`}>
-                      {entry.totalScore}
-                      {entry.maxScore && <span className="text-gray-500 text-sm font-normal"> / {entry.maxScore}</span>}
-                    </TableCell>
-                    <TableCell className="text-right text-sm text-gray-600" data-testid={`text-time-${entry.rank}`}>
-                      <div className="flex items-center justify-end gap-1">
-                        <Clock className="h-3 w-3" />
-                        {new Date(entry.submittedAt).toLocaleString()}
-                      </div>
-                    </TableCell>
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="w-20">Rank</TableHead>
+                    <TableHead>Participant</TableHead>
+                    <TableHead className="text-right">Score</TableHead>
+                    <TableHead className="text-right">Submitted</TableHead>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+                </TableHeader>
+                <TableBody>
+                  {leaderboard.map((entry) => (
+                    <TableRow
+                      key={entry.userId}
+                      className={entry.rank <= 3 ? 'bg-gray-50' : ''}
+                      data-testid={`row-participant-${entry.rank}`}
+                    >
+                      <TableCell>
+                        <div className="flex items-center justify-center">
+                          <Badge
+                            variant="outline"
+                            className={`${getRankBadgeColor(entry.rank)} flex items-center gap-1 px-3 py-1`}
+                          >
+                            {getRankIcon(entry.rank)}
+                          </Badge>
+                        </div>
+                      </TableCell>
+                      <TableCell className="font-medium" data-testid={`text-name-${entry.rank}`}>
+                        {entry.userName}
+                      </TableCell>
+                      <TableCell className="text-right font-semibold" data-testid={`text-score-${entry.rank}`}>
+                        {entry.totalScore}
+                        {entry.maxScore && <span className="text-gray-500 text-sm font-normal"> / {entry.maxScore}</span>}
+                      </TableCell>
+                      <TableCell className="text-right text-sm text-gray-600" data-testid={`text-time-${entry.rank}`}>
+                        <div className="flex items-center justify-end gap-1">
+                          <Clock className="h-3 w-3" />
+                          {new Date(entry.submittedAt).toLocaleString()}
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
           </CardContent>
         </Card>
 

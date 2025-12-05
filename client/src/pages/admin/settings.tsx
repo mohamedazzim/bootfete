@@ -59,7 +59,7 @@ export default function AdminSettings() {
 
   return (
     <AdminLayout>
-      <div className="p-8">
+      <div className="p-4 md:p-8">
         <div className="mb-8">
           <h1 className="text-3xl font-bold text-gray-900">System Settings</h1>
           <p className="text-gray-600 mt-2">Configure system-wide preferences and settings</p>
@@ -79,7 +79,7 @@ export default function AdminSettings() {
                 <div className="text-sm text-gray-500">Loading settings...</div>
               ) : systemSettings?.email?.configured ? (
                 <>
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="space-y-2">
                       <Label htmlFor="email-provider">Email Provider</Label>
                       <Input
@@ -124,7 +124,7 @@ export default function AdminSettings() {
                       To enable email sending, configure RESEND_API_KEY and RESEND_FROM_EMAIL
                     </p>
                   </div>
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="space-y-2">
                       <Label htmlFor="email-provider">Email Provider</Label>
                       <Input

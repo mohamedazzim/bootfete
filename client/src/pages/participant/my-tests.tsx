@@ -11,8 +11,8 @@ import type { TestAttempt } from '@shared/schema';
 export default function MyTestsPage() {
   const [, setLocation] = useLocation();
 
-  const { data: attempts, isLoading } = useQuery<(TestAttempt & { 
-    round: { name: string; event: { name: string } } 
+  const { data: attempts, isLoading } = useQuery<(TestAttempt & {
+    round: { name: string; event: { name: string } }
   })[]>({
     queryKey: ['/api/participants/my-attempts'],
   });
@@ -37,7 +37,7 @@ export default function MyTestsPage() {
 
   return (
     <ParticipantLayout>
-      <div className="p-8">
+      <div className="p-4 md:p-8">
         <div className="mb-6">
           <h1 className="text-3xl font-bold text-gray-900" data-testid="heading-my-tests">
             My Tests
@@ -69,60 +69,62 @@ export default function MyTestsPage() {
               <CardTitle>Test History</CardTitle>
             </CardHeader>
             <CardContent>
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Event</TableHead>
-                    <TableHead>Round</TableHead>
-                    <TableHead>Score</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Completed</TableHead>
-                    <TableHead className="text-right">Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {attempts.map((attempt) => (
-                    <TableRow key={attempt.id} data-testid={`row-attempt-${attempt.id}`}>
-                      <TableCell className="font-medium" data-testid={`text-event-${attempt.id}`}>
-                        {attempt.round?.event?.name || 'N/A'}
-                      </TableCell>
-                      <TableCell data-testid={`text-round-${attempt.id}`}>
-                        {attempt.round?.name || 'N/A'}
-                      </TableCell>
-                      <TableCell>
-                        {attempt.totalScore !== null && attempt.totalScore !== undefined ? (
-                          <span className="font-semibold text-blue-600" data-testid={`text-score-${attempt.id}`}>
-                            {attempt.totalScore} points
-                          </span>
-                        ) : (
-                          <span className="text-gray-400">Pending</span>
-                        )}
-                      </TableCell>
-                      <TableCell>{getStatusBadge(attempt.status)}</TableCell>
-                      <TableCell data-testid={`text-completed-${attempt.id}`}>
-                        {attempt.completedAt 
-                          ? new Date(attempt.completedAt).toLocaleString()
-                          : attempt.status === 'in_progress'
-                          ? 'In Progress'
-                          : 'N/A'}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        {attempt.status !== 'in_progress' && (
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => setLocation(`/participant/results/${attempt.id}`)}
-                            data-testid={`button-results-${attempt.id}`}
-                          >
-                            <Trophy className="h-4 w-4 mr-1" />
-                            View Results
-                          </Button>
-                        )}
-                      </TableCell>
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Event</TableHead>
+                      <TableHead>Round</TableHead>
+                      <TableHead>Score</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Completed</TableHead>
+                      <TableHead className="text-right">Actions</TableHead>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+                  </TableHeader>
+                  <TableBody>
+                    {attempts.map((attempt) => (
+                      <TableRow key={attempt.id} data-testid={`row-attempt-${attempt.id}`}>
+                        <TableCell className="font-medium" data-testid={`text-event-${attempt.id}`}>
+                          {attempt.round?.event?.name || 'N/A'}
+                        </TableCell>
+                        <TableCell data-testid={`text-round-${attempt.id}`}>
+                          {attempt.round?.name || 'N/A'}
+                        </TableCell>
+                        <TableCell>
+                          {attempt.totalScore !== null && attempt.totalScore !== undefined ? (
+                            <span className="font-semibold text-blue-600" data-testid={`text-score-${attempt.id}`}>
+                              {attempt.totalScore} points
+                            </span>
+                          ) : (
+                            <span className="text-gray-400">Pending</span>
+                          )}
+                        </TableCell>
+                        <TableCell>{getStatusBadge(attempt.status)}</TableCell>
+                        <TableCell data-testid={`text-completed-${attempt.id}`}>
+                          {attempt.completedAt
+                            ? new Date(attempt.completedAt).toLocaleString()
+                            : attempt.status === 'in_progress'
+                              ? 'In Progress'
+                              : 'N/A'}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          {attempt.status !== 'in_progress' && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => setLocation(`/participant/results/${attempt.id}`)}
+                              data-testid={`button-results-${attempt.id}`}
+                            >
+                              <Trophy className="h-4 w-4 mr-1" />
+                              View Results
+                            </Button>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
             </CardContent>
           </Card>
         )}

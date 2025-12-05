@@ -17,15 +17,15 @@ export default function ParticipantEventsPage() {
     queryKey: ['/api/events'],
   });
 
-  const filteredEvents = events?.filter(event => 
-    event.status === 'active' && 
+  const filteredEvents = events?.filter(event =>
+    event.status === 'active' &&
     (event.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-     event.description?.toLowerCase().includes(searchQuery.toLowerCase()))
+      event.description?.toLowerCase().includes(searchQuery.toLowerCase()))
   ) || [];
 
   return (
     <ParticipantLayout>
-      <div className="p-8">
+      <div className="p-4 md:p-8">
         <div className="mb-6">
           <h1 className="text-3xl font-bold text-gray-900" data-testid="heading-browse-events">
             Browse Events
@@ -84,7 +84,7 @@ export default function ParticipantEventsPage() {
                     <div className="flex items-center text-sm text-gray-600">
                       <Calendar className="h-4 w-4 mr-2" />
                       <span>
-                        {event.startDate 
+                        {event.startDate
                           ? new Date(event.startDate).toLocaleDateString()
                           : 'Date TBA'}
                       </span>

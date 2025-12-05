@@ -71,14 +71,14 @@ export default function EventAdminEditPage() {
 
     try {
       await apiRequest('PATCH', `/api/users/${adminId}/credentials`, updates);
-      
+
       queryClient.invalidateQueries({ queryKey: ['/api/users'] });
-      
+
       toast({
         title: 'Admin updated',
         description: 'Admin credentials have been updated successfully',
       });
-      
+
       navigate('/admin/event-admins');
     } catch (error: any) {
       toast({
@@ -118,7 +118,7 @@ export default function EventAdminEditPage() {
 
   return (
     <AdminLayout>
-      <div className="p-8">
+      <div className="p-4 md:p-8">
         <div className="mb-6">
           <Button
             variant="ghost"
@@ -216,9 +216,9 @@ export default function EventAdminEditPage() {
                   >
                     Cancel
                   </Button>
-                  <Button 
-                    type="submit" 
-                    disabled={form.formState.isSubmitting} 
+                  <Button
+                    type="submit"
+                    disabled={form.formState.isSubmitting}
                     data-testid="button-submit"
                   >
                     {form.formState.isSubmitting ? 'Updating...' : 'Update Admin'}

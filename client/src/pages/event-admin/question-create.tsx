@@ -15,11 +15,11 @@ import { insertQuestionSchema } from '@shared/schema';
 import { z } from 'zod';
 import { ArrowLeft, Plus, X } from 'lucide-react';
 
-const formSchema = insertQuestionSchema.omit({ 
-  options: true, 
+const formSchema = insertQuestionSchema.omit({
+  options: true,
   correctAnswer: true,
   expectedOutput: true,
-  testCases: true 
+  testCases: true
 }).extend({
   questionType: z.enum(['mcq', 'true_false', 'short_answer', 'coding']),
 });
@@ -117,7 +117,7 @@ export default function QuestionCreatePage() {
 
   return (
     <EventAdminLayout>
-      <div className="p-8">
+      <div className="p-4 md:p-8">
         <div className="mb-6">
           <Button
             variant="ghost"
@@ -145,11 +145,11 @@ export default function QuestionCreatePage() {
                   render={({ field }) => (
                     <FormItem>
                       <FormLabel>Question Type</FormLabel>
-                      <Select 
+                      <Select
                         onValueChange={(value) => {
                           field.onChange(value);
                           setQuestionType(value);
-                        }} 
+                        }}
                         defaultValue={field.value}
                       >
                         <FormControl>
@@ -169,7 +169,7 @@ export default function QuestionCreatePage() {
                   )}
                 />
 
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <FormField
                     control={form.control}
                     name="questionNumber"

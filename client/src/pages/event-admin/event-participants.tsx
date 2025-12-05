@@ -28,17 +28,17 @@ interface EventCredentialWithDetails {
 export default function EventParticipantsPage() {
   const { eventId } = useParams();
   const [, setLocation] = useLocation();
-  
+
   const { data: event } = useQuery<Event>({
     queryKey: ['/api/events', eventId],
     enabled: !!eventId,
   });
-  
+
   const { data: credentials = [], isLoading } = useQuery<EventCredentialWithDetails[]>({
     queryKey: [`/api/events/${eventId}/event-credentials`],
     enabled: !!eventId,
   });
-  
+
   const handleDownloadIdPass = (credentialId: string) => {
     window.open(`/api/event-credentials/${credentialId}/id-pass`, '_blank');
   };
@@ -70,7 +70,7 @@ export default function EventParticipantsPage() {
       (c.paymentStatus || 'pending').toUpperCase(),
       '________________',
     ]);
-    
+
     const csv = [headers, ...rows].map(row => row.join(',')).join('\n');
     const blob = new Blob([csv], { type: 'text/csv' });
     const url = URL.createObjectURL(blob);
@@ -79,7 +79,7 @@ export default function EventParticipantsPage() {
     a.download = `${event?.name || 'event'}-participants.csv`;
     a.click();
   };
-  
+
   const handlePrint = () => {
     const printContent = `
       <html>
@@ -118,7 +118,7 @@ export default function EventParticipantsPage() {
         </body>
       </html>
     `;
-    
+
     const printWindow = window.open('', '_blank');
     if (printWindow) {
       printWindow.document.write(printContent);
@@ -126,10 +126,10 @@ export default function EventParticipantsPage() {
       printWindow.print();
     }
   };
-  
+
   return (
     <EventAdminLayout>
-      <div className="p-8">
+      <div className="p-4 md:p-8">
         <Button
           variant="ghost"
           onClick={() => setLocation('/event-admin/events')}
@@ -140,33 +140,35 @@ export default function EventParticipantsPage() {
           Back to My Events
         </Button>
 
-        <div className="flex justify-between items-center mb-6">
+        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
           <div>
             <h1 className="text-3xl font-bold" data-testid="heading-participants">Event Participants</h1>
             <p className="text-muted-foreground mt-2">{event?.name}</p>
           </div>
-          <div className="flex gap-2">
-            <Button 
-              onClick={handleExport} 
-              variant="outline" 
+          <div className="flex gap-2 w-full md:w-auto">
+            <Button
+              onClick={handleExport}
+              variant="outline"
               data-testid="button-export"
               disabled={credentials.length === 0}
+              className="flex-1 md:flex-none"
             >
               <Download className="h-4 w-4 mr-2" />
               Export CSV
             </Button>
-            <Button 
-              onClick={handlePrint} 
-              variant="outline" 
+            <Button
+              onClick={handlePrint}
+              variant="outline"
               data-testid="button-print"
               disabled={credentials.length === 0}
+              className="flex-1 md:flex-none"
             >
               <Printer className="h-4 w-4 mr-2" />
               Print
             </Button>
           </div>
         </div>
-        
+
         <Card>
           <CardHeader>
             <CardTitle>Participants ({credentials.length})</CardTitle>
@@ -181,50 +183,52 @@ export default function EventParticipantsPage() {
                 No participants registered for this event yet
               </div>
             ) : (
-              <Table data-testid="table-credentials">
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Participant Name</TableHead>
-                    <TableHead>Event Username</TableHead>
-                    <TableHead>Event Password</TableHead>
-                    <TableHead>Payment Status</TableHead>
-                    <TableHead>Registration Date</TableHead>
-                    <TableHead className="text-right">Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {credentials.map((cred) => (
-                    <TableRow key={cred.id} data-testid={`row-credential-${cred.id}`}>
-                      <TableCell data-testid={`text-name-${cred.id}`}>
-                        {cred.participant.fullName}
-                      </TableCell>
-                      <TableCell className="font-mono" data-testid={`text-username-${cred.id}`}>
-                        {cred.eventUsername}
-                      </TableCell>
-                      <TableCell className="font-mono" data-testid={`text-password-${cred.id}`}>
-                        {cred.eventPassword}
-                      </TableCell>
-                      <TableCell data-testid={`text-payment-${cred.id}`}>
-                        {getPaymentStatusBadge(cred.paymentStatus)}
-                      </TableCell>
-                      <TableCell data-testid={`text-date-${cred.id}`}>
-                        {new Date(cred.createdAt).toLocaleDateString()}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => handleDownloadIdPass(cred.id)}
-                          data-testid={`button-download-pdf-${cred.id}`}
-                        >
-                          <FileDown className="h-4 w-4 mr-2" />
-                          ID Pass
-                        </Button>
-                      </TableCell>
+              <div className="overflow-x-auto">
+                <Table data-testid="table-credentials">
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Participant Name</TableHead>
+                      <TableHead>Event Username</TableHead>
+                      <TableHead>Event Password</TableHead>
+                      <TableHead>Payment Status</TableHead>
+                      <TableHead>Registration Date</TableHead>
+                      <TableHead className="text-right">Actions</TableHead>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+                  </TableHeader>
+                  <TableBody>
+                    {credentials.map((cred) => (
+                      <TableRow key={cred.id} data-testid={`row-credential-${cred.id}`}>
+                        <TableCell data-testid={`text-name-${cred.id}`}>
+                          {cred.participant.fullName}
+                        </TableCell>
+                        <TableCell className="font-mono" data-testid={`text-username-${cred.id}`}>
+                          {cred.eventUsername}
+                        </TableCell>
+                        <TableCell className="font-mono" data-testid={`text-password-${cred.id}`}>
+                          {cred.eventPassword}
+                        </TableCell>
+                        <TableCell data-testid={`text-payment-${cred.id}`}>
+                          {getPaymentStatusBadge(cred.paymentStatus)}
+                        </TableCell>
+                        <TableCell data-testid={`text-date-${cred.id}`}>
+                          {new Date(cred.createdAt).toLocaleDateString()}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => handleDownloadIdPass(cred.id)}
+                            data-testid={`button-download-pdf-${cred.id}`}
+                          >
+                            <FileDown className="h-4 w-4 mr-2" />
+                            ID Pass
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
             )}
           </CardContent>
         </Card>

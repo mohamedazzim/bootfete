@@ -38,6 +38,8 @@ export default function EventCreatePage() {
       createdBy: user?.id || '',
       startDate: '',
       endDate: '',
+      minMembers: 1,
+      maxMembers: 1,
     },
   });
 
@@ -47,11 +49,13 @@ export default function EventCreatePage() {
         name: data.name,
         description: data.description,
         type: data.type,
-        category: data.category,
+        category: data.type, // Category should match type (technical/non_technical)
         status: data.status,
         createdBy: user?.id || '',
         startDate: data.startDate ? new Date(data.startDate) : null,
         endDate: data.endDate ? new Date(data.endDate) : null,
+        minMembers: data.minMembers || 1,
+        maxMembers: data.maxMembers || 1,
       };
 
       await apiRequest('POST', '/api/events', eventData);
@@ -74,7 +78,7 @@ export default function EventCreatePage() {
 
   return (
     <AdminLayout>
-      <div className="p-8">
+      <div className="p-4 md:p-8">
         <div className="mb-6">
           <Button
             variant="ghost"
@@ -151,7 +155,53 @@ export default function EventCreatePage() {
                   )}
                 />
 
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <FormField
+                    control={form.control}
+                    name="minMembers"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Min Team Size</FormLabel>
+                        <FormControl>
+                          <Input
+                            type="number"
+                            min={1}
+                            {...field}
+                            onChange={(e) => field.onChange(parseInt(e.target.value) || 1)}
+                            data-testid="input-min-members"
+                          />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+
+                  <FormField
+                    control={form.control}
+                    name="maxMembers"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Max Team Size</FormLabel>
+                        <FormControl>
+                          <Input
+                            type="number"
+                            min={1}
+                            {...field}
+                            onChange={(e) => field.onChange(parseInt(e.target.value) || 1)}
+                            data-testid="input-max-members"
+                          />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                </div>
+
+                <p className="text-sm text-muted-foreground">
+                  Solo event: Min=1, Max=1 | Team event: Min≥1, Max&gt;1
+                </p>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <FormField
                     control={form.control}
                     name="startDate"

@@ -1,4 +1,4 @@
-# BootFeet 2K26 - Symposium Management System
+![alt text](image.png)# BootFeet 2K26 - Symposium Management System
 
 ## Project Overview
 A comprehensive React-based web application for managing symposium events with role-based access control, proctored online testing, real-time updates, and advanced reporting capabilities.

@@ -1,4 +1,5 @@
 import express, { type Request, Response, NextFunction } from "express";
+// Force restart timestamp: 2025-12-05T14:30:00
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
 import { setupWebSocket, setIO } from "./websocket";

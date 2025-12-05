@@ -1,7 +1,7 @@
-import { eq, and, desc, asc, sql, gte, lte } from 'drizzle-orm';
+import { eq, and, desc, asc, sql, gte, lte, or } from 'drizzle-orm';
 import { db } from './db';
-import { users, events, eventAdmins, eventRules, rounds, roundRules, questions, participants, testAttempts, answers, reports, registrationForms, registrations, eventCredentials, auditLogs, emailLogs } from '@shared/schema';
-import type { User, InsertUser, Event, InsertEvent, EventRules, InsertEventRules, Round, InsertRound, RoundRules, InsertRoundRules, Question, InsertQuestion, Participant, InsertParticipant, TestAttempt, InsertTestAttempt, Answer, InsertAnswer, Report, InsertReport, RegistrationForm, InsertRegistrationForm, Registration, InsertRegistration, EventCredential, InsertEventCredential, AuditLog, InsertAuditLog, EmailLog, InsertEmailLog } from '@shared/schema';
+import { users, events, eventAdmins, eventRules, rounds, roundRules, questions, participants, testAttempts, answers, reports, registrationForms, registrations, teamMembers, eventCredentials, auditLogs, emailLogs } from '@shared/schema';
+import type { User, InsertUser, Event, InsertEvent, EventRules, InsertEventRules, Round, InsertRound, RoundRules, InsertRoundRules, Question, InsertQuestion, Participant, InsertParticipant, TestAttempt, InsertTestAttempt, Answer, InsertAnswer, Report, InsertReport, RegistrationForm, InsertRegistrationForm, Registration, InsertRegistration, TeamMember, InsertTeamMember, EventCredential, InsertEventCredential, AuditLog, InsertAuditLog, EmailLog, InsertEmailLog } from '@shared/schema';
 
 export interface IStorage {
   getUsers(): Promise<User[]>;
@@ -83,11 +83,42 @@ export interface IStorage {
   getParticipant(id: string): Promise<Participant | undefined>;
   getActiveRegistrationForm(): Promise<RegistrationForm | undefined>;
   updateRegistrationForm(id: string, updates: Partial<RegistrationForm>): Promise<RegistrationForm | undefined>;
+  deleteRegistrationForm(id: string): Promise<void>;
 
-  createRegistration(formId: string, data: Record<string, string>, selectedEvents: string[]): Promise<Registration>;
-  getRegistrations(): Promise<Registration[]>;
-  getRegistration(id: string): Promise<Registration | undefined>;
-  updateRegistrationStatus(id: string, status: 'pending' | 'paid' | 'declined', participantUserId: string | null, processedBy: string): Promise<Registration>;
+  // Team-based Registration methods
+  createTeamRegistration(data: {
+    eventId: string;
+    organizerRollNo: string;
+    organizerName: string;
+    organizerEmail: string;
+    organizerDept: string;
+    organizerPhone?: string;
+    registrationType: 'solo' | 'team';
+    teamMembers?: Array<{
+      memberRollNo: string;
+      memberName: string;
+      memberEmail: string;
+      memberDept: string;
+      memberPhone?: string;
+    }>;
+  }): Promise<Registration>;
+  getRegistrations(): Promise<any[]>;
+  getRegistrationsByEvent(eventId: string): Promise<any[]>;
+  getRegistration(id: string): Promise<any | undefined>;
+  confirmRegistration(id: string, confirmedBy: string): Promise<Registration>;
+  cancelRegistration(id: string): Promise<Registration>;
+
+  // Roll number validation
+  checkRollNoCategoryRegistration(rollNo: string, category: 'technical' | 'non_technical'): Promise<{
+    isRegistered: boolean;
+    registration?: Registration;
+    event?: Event;
+    role?: 'organizer' | 'team_member';
+  }>;
+  getRegistrationsByRollNo(rollNo: string): Promise<any[]>;
+
+  // Team members
+  getTeamMembersByRegistration(registrationId: string): Promise<TeamMember[]>;
 
   getEventsByIds(eventIds: string[]): Promise<Event[]>;
   createParticipant(userId: string, eventId: string): Promise<Participant>;
@@ -116,6 +147,7 @@ export interface IStorage {
   getEmailLogsByRecipient(email: string): Promise<EmailLog[]>;
 
   getParticipantsByEventId(eventId: string): Promise<User[]>;
+  removeEventFromRegistrations(eventId: string): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -849,116 +881,250 @@ export class DatabaseStorage implements IStorage {
     return form;
   }
 
-  async createRegistration(formId: string, data: Record<string, string>, selectedEvents: string[]): Promise<Registration> {
+  // ============ Team-Based Registration Methods ============
+
+  async createTeamRegistration(data: {
+    eventId: string;
+    organizerRollNo: string;
+    organizerName: string;
+    organizerEmail: string;
+    organizerDept: string;
+    organizerPhone?: string;
+    registrationType: 'solo' | 'team';
+    teamMembers?: Array<{
+      memberRollNo: string;
+      memberName: string;
+      memberEmail: string;
+      memberDept: string;
+      memberPhone?: string;
+    }>;
+  }): Promise<Registration> {
+    // Create the registration
     const [registration] = await db.insert(registrations).values({
-      formId,
-      submittedData: data,
-      selectedEvents,
-      paymentStatus: 'pending',
-      participantUserId: null,
-      processedBy: null
+      eventId: data.eventId,
+      organizerRollNo: data.organizerRollNo,
+      organizerName: data.organizerName,
+      organizerEmail: data.organizerEmail,
+      organizerDept: data.organizerDept,
+      organizerPhone: data.organizerPhone || null,
+      registrationType: data.registrationType,
+      status: 'pending',
+      confirmedBy: null,
     }).returning();
+
+    // Add team members if provided
+    if (data.teamMembers && data.teamMembers.length > 0) {
+      await db.insert(teamMembers).values(
+        data.teamMembers.map(member => ({
+          registrationId: registration.id,
+          memberRollNo: member.memberRollNo,
+          memberName: member.memberName,
+          memberEmail: member.memberEmail,
+          memberDept: member.memberDept,
+          memberPhone: member.memberPhone || null,
+        }))
+      );
+    }
+
     return registration;
   }
 
   async getRegistrations(): Promise<any[]> {
     const result = await db.select({
       registration: registrations,
-      form: registrationForms
+      event: events
     })
       .from(registrations)
-      .leftJoin(registrationForms, eq(registrations.formId, registrationForms.id))
-      .orderBy(desc(registrations.submittedAt));
+      .leftJoin(events, eq(registrations.eventId, events.id))
+      .orderBy(desc(registrations.createdAt));
 
-    return result.map(r => {
-      const participantDetails = this.extractParticipantDetails(r.registration.submittedData, r.form?.formFields || []);
-      return {
-        ...r.registration,
-        participantName: participantDetails.name,
-        participantEmail: participantDetails.email,
-        participantPhone: participantDetails.phone,
-        form: r.form
-      };
-    });
+    // Fetch team members for each registration
+    const registrationIds = result.map(r => r.registration.id);
+    const allTeamMembers = registrationIds.length > 0
+      ? await db.select().from(teamMembers).where(
+        sql`${teamMembers.registrationId} IN (${sql.join(registrationIds.map(id => sql`${id}`), sql`, `)})`
+      )
+      : [];
+
+    return result.map(r => ({
+      ...r.registration,
+      event: r.event,
+      teamMembers: allTeamMembers.filter(m => m.registrationId === r.registration.id)
+    }));
+  }
+
+  async getRegistrationsByEvent(eventId: string): Promise<any[]> {
+    const result = await db.select({
+      registration: registrations,
+      event: events
+    })
+      .from(registrations)
+      .leftJoin(events, eq(registrations.eventId, events.id))
+      .where(eq(registrations.eventId, eventId))
+      .orderBy(desc(registrations.createdAt));
+
+    // Fetch team members for each registration
+    const registrationIds = result.map(r => r.registration.id);
+    const allTeamMembers = registrationIds.length > 0
+      ? await db.select().from(teamMembers).where(
+        sql`${teamMembers.registrationId} IN (${sql.join(registrationIds.map(id => sql`${id}`), sql`, `)})`
+      )
+      : [];
+
+    return result.map(r => ({
+      ...r.registration,
+      event: r.event,
+      teamMembers: allTeamMembers.filter(m => m.registrationId === r.registration.id)
+    }));
   }
 
   async getRegistration(id: string): Promise<any | undefined> {
     const result = await db.select({
       registration: registrations,
-      form: registrationForms
+      event: events
     })
       .from(registrations)
-      .leftJoin(registrationForms, eq(registrations.formId, registrationForms.id))
+      .leftJoin(events, eq(registrations.eventId, events.id))
       .where(eq(registrations.id, id));
 
     if (result.length === 0) return undefined;
 
     const r = result[0];
-    const participantDetails = this.extractParticipantDetails(r.registration.submittedData, r.form?.formFields || []);
+    const members = await db.select().from(teamMembers)
+      .where(eq(teamMembers.registrationId, id));
+
     return {
       ...r.registration,
-      participantName: participantDetails.name,
-      participantEmail: participantDetails.email,
-      participantPhone: participantDetails.phone,
-      form: r.form
+      event: r.event,
+      teamMembers: members
     };
   }
 
-  async getRegistrationByUserId(userId: string): Promise<any | undefined> {
-    const result = await db.select({
+  async confirmRegistration(id: string, confirmedBy: string): Promise<Registration> {
+    const [registration] = await db.update(registrations).set({
+      status: 'confirmed',
+      confirmedAt: new Date(),
+      confirmedBy,
+      updatedAt: new Date()
+    }).where(eq(registrations.id, id)).returning();
+    return registration;
+  }
+
+  async cancelRegistration(id: string): Promise<Registration> {
+    const [registration] = await db.update(registrations).set({
+      status: 'cancelled',
+      updatedAt: new Date()
+    }).where(eq(registrations.id, id)).returning();
+    return registration;
+  }
+
+  async checkRollNoCategoryRegistration(rollNo: string, category: 'technical' | 'non_technical'): Promise<{
+    isRegistered: boolean;
+    registration?: Registration;
+    event?: Event;
+    role?: 'organizer' | 'team_member';
+  }> {
+    // Check if rollNo is an organizer in any registration for this category
+    const organizerResult = await db.select({
       registration: registrations,
-      form: registrationForms
+      event: events
     })
       .from(registrations)
-      .leftJoin(registrationForms, eq(registrations.formId, registrationForms.id))
-      .where(eq(registrations.participantUserId, userId));
+      .innerJoin(events, eq(registrations.eventId, events.id))
+      .where(and(
+        eq(registrations.organizerRollNo, rollNo),
+        eq(events.category, category),
+        or(eq(registrations.status, 'pending'), eq(registrations.status, 'confirmed'))
+      ));
 
-    if (result.length === 0) return undefined;
+    if (organizerResult.length > 0) {
+      return {
+        isRegistered: true,
+        registration: organizerResult[0].registration,
+        event: organizerResult[0].event,
+        role: 'organizer'
+      };
+    }
 
-    const r = result[0];
-    const participantDetails = this.extractParticipantDetails(r.registration.submittedData, r.form?.formFields || []);
-    return {
-      ...r.registration,
-      participantName: participantDetails.name,
-      participantEmail: participantDetails.email,
-      participantPhone: participantDetails.phone,
-      form: r.form
-    };
+    // Check if rollNo is a team member in any registration for this category
+    const memberResult = await db.select({
+      teamMember: teamMembers,
+      registration: registrations,
+      event: events
+    })
+      .from(teamMembers)
+      .innerJoin(registrations, eq(teamMembers.registrationId, registrations.id))
+      .innerJoin(events, eq(registrations.eventId, events.id))
+      .where(and(
+        eq(teamMembers.memberRollNo, rollNo),
+        eq(events.category, category),
+        or(eq(registrations.status, 'pending'), eq(registrations.status, 'confirmed'))
+      ));
+
+    if (memberResult.length > 0) {
+      return {
+        isRegistered: true,
+        registration: memberResult[0].registration,
+        event: memberResult[0].event,
+        role: 'team_member'
+      };
+    }
+
+    return { isRegistered: false };
   }
 
-  private extractParticipantDetails(submittedData: Record<string, string>, formFields: Array<{ id: string, label: string, type: string, required: boolean, placeholder?: string }>): { name: string; email: string; phone: string } {
-    let name = 'N/A';
-    let email = 'N/A';
-    let phone = 'N/A';
+  async getRegistrationsByRollNo(rollNo: string): Promise<any[]> {
+    // Get registrations where rollNo is organizer
+    const organizerRegs = await db.select({
+      registration: registrations,
+      event: events
+    })
+      .from(registrations)
+      .innerJoin(events, eq(registrations.eventId, events.id))
+      .where(eq(registrations.organizerRollNo, rollNo));
 
-    for (const field of formFields) {
-      const value = submittedData[field.id];
-      if (!value) continue;
+    // Get registrations where rollNo is team member
+    const memberRegs = await db.select({
+      teamMember: teamMembers,
+      registration: registrations,
+      event: events
+    })
+      .from(teamMembers)
+      .innerJoin(registrations, eq(teamMembers.registrationId, registrations.id))
+      .innerJoin(events, eq(registrations.eventId, events.id))
+      .where(eq(teamMembers.memberRollNo, rollNo));
 
-      const lowerLabel = field.label.toLowerCase();
+    const allRegs: any[] = [];
 
-      if (field.type === 'email' || lowerLabel.includes('email')) {
-        email = value;
-      } else if (field.type === 'tel' || lowerLabel.includes('phone') || lowerLabel.includes('mobile') || lowerLabel.includes('contact')) {
-        phone = value;
-      } else if (lowerLabel.includes('name') && !lowerLabel.includes('college') && !lowerLabel.includes('school') && !lowerLabel.includes('institution')) {
-        if (name === 'N/A' || lowerLabel.includes('full')) {
-          name = value;
-        }
+    for (const r of organizerRegs) {
+      const members = await this.getTeamMembersByRegistration(r.registration.id);
+      allRegs.push({
+        ...r.registration,
+        event: r.event,
+        role: 'organizer',
+        teamMembers: members
+      });
+    }
+
+    for (const r of memberRegs) {
+      // Avoid duplicates if somehow in both (shouldn't happen)
+      if (!allRegs.find(reg => reg.id === r.registration.id)) {
+        const members = await this.getTeamMembersByRegistration(r.registration.id);
+        allRegs.push({
+          ...r.registration,
+          event: r.event,
+          role: 'team_member',
+          teamMembers: members
+        });
       }
     }
 
-    return { name, email, phone };
+    return allRegs;
   }
 
-  async updateRegistrationStatus(id: string, status: 'pending' | 'paid' | 'declined', participantUserId: string | null, processedBy: string): Promise<Registration> {
-    const [registration] = await db.update(registrations).set({
-      paymentStatus: status,
-      participantUserId,
-      processedBy,
-      processedAt: new Date()
-    }).where(eq(registrations.id, id)).returning();
-    return registration;
+  async getTeamMembersByRegistration(registrationId: string): Promise<TeamMember[]> {
+    return await db.select().from(teamMembers)
+      .where(eq(teamMembers.registrationId, registrationId));
   }
 
   async getEventsByIds(eventIds: string[]): Promise<Event[]> {
@@ -993,7 +1159,7 @@ export class DatabaseStorage implements IStorage {
       .where(eq(eventCredentials.participantUserId, participantUserId));
   }
 
-  async getEventCredentialsByEvent(eventId: string): Promise<Array<EventCredential & { participant: User, event: Event, paymentStatus?: string }>> {
+  async getEventCredentialsByEvent(eventId: string): Promise<Array<EventCredential & { participant: User, event: Event }>> {
     const result = await db.select({
       id: eventCredentials.id,
       participantUserId: eventCredentials.participantUserId,
@@ -1006,12 +1172,10 @@ export class DatabaseStorage implements IStorage {
       createdAt: eventCredentials.createdAt,
       participant: users,
       event: events,
-      paymentStatus: registrations.paymentStatus,
     })
       .from(eventCredentials)
       .innerJoin(users, eq(eventCredentials.participantUserId, users.id))
       .innerJoin(events, eq(eventCredentials.eventId, events.id))
-      .leftJoin(registrations, eq(registrations.participantUserId, users.id))
       .where(eq(eventCredentials.eventId, eventId));
 
     return result as any;
@@ -1254,6 +1418,32 @@ export class DatabaseStorage implements IStorage {
       .from(participants)
       .where(eq(participants.id, id));
     return participant;
+  }
+
+  async removeEventFromRegistrations(eventId: string): Promise<void> {
+    // With new schema, registrations are 1:1 with events, so delete registrations for this event
+    await db.delete(registrations).where(eq(registrations.eventId, eventId));
+  }
+
+  async deleteRegistrationForm(id: string): Promise<void> {
+    console.log(`[Storage] Starting deletion of registration form ${id}`);
+
+    try {
+      // Delete the form (registrations are now separate from forms)
+      const deletedForms = await db.delete(registrationForms).where(eq(registrationForms.id, id)).returning({ id: registrationForms.id });
+      console.log(`[Storage] Deleted ${deletedForms.length} registration forms`);
+
+      // Verify deletion
+      const check = await db.select().from(registrationForms).where(eq(registrationForms.id, id));
+      if (check.length > 0) {
+        throw new Error(`Verification failed: Form ${id} still exists in database`);
+      }
+
+      console.log(`[Storage] Deletion verified for form ${id}`);
+    } catch (error) {
+      console.error(`[Storage] Delete failed for form ${id}:`, error);
+      throw error;
+    }
   }
 }
 

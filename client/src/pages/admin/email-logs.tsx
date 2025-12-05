@@ -40,7 +40,7 @@ export default function EmailLogsPage() {
     if (templateTypeFilter !== 'all') params.append('templateType', templateTypeFilter);
     if (dateRange?.from) params.append('startDate', dateRange.from.toISOString());
     if (dateRange?.to) params.append('endDate', dateRange.to.toISOString());
-    
+
     const queryString = params.toString();
     return queryString ? `/api/email-logs?${queryString}` : '/api/email-logs';
   };
@@ -180,8 +180,8 @@ export default function EmailLogsPage() {
 
   return (
     <AdminLayout>
-      <div className="p-6 space-y-6">
-        <div className="flex items-center justify-between">
+      <div className="p-4 md:p-6 space-y-6">
+        <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
           <div>
             <h1 className="text-3xl font-bold text-gray-900" data-testid="text-page-title">
               Email Logs

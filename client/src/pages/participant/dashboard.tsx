@@ -35,11 +35,11 @@ export default function ParticipantDashboard() {
         throw new Error(error.message || 'Failed to check for existing attempt');
       }
       const checkData = await checkResponse.json();
-      
+
       if (checkData.attempt) {
         return checkData.attempt;
       }
-      
+
       const createResponse = await apiRequest('POST', `/api/events/${event?.id}/rounds/${roundId}/start`, {});
       if (!createResponse.ok) {
         const error = await createResponse.json();
@@ -100,7 +100,7 @@ export default function ParticipantDashboard() {
 
   return (
     <ParticipantLayout>
-      <div className="max-w-4xl mx-auto p-8">
+      <div className="max-w-4xl mx-auto p-4 md:p-8">
         <div className="text-center mb-8">
           <h1 className="text-3xl font-bold text-gray-900 mb-2" data-testid="heading-dashboard">
             BootFeet 2K26 | {event?.name || 'Event'} | {user?.fullName || 'Participant'}

@@ -100,7 +100,7 @@ export default function RoundRulesPage() {
 
   return (
     <EventAdminLayout>
-      <div className="p-8">
+      <div className="p-4 md:p-8">
         <div className="mb-6">
           <Button
             variant="ghost"
@@ -150,7 +150,7 @@ export default function RoundRulesPage() {
                     control={form.control}
                     name="forceFullscreen"
                     render={({ field }) => (
-                      <FormItem className="flex flex-row items-center justify-between rounded-lg border p-4">
+                      <FormItem className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 rounded-lg border p-4">
                         <div className="space-y-0.5">
                           <FormLabel className="text-base" data-testid="label-fullscreen">
                             Force Fullscreen Mode
@@ -174,7 +174,7 @@ export default function RoundRulesPage() {
                     control={form.control}
                     name="noTabSwitch"
                     render={({ field }) => (
-                      <FormItem className="flex flex-row items-center justify-between rounded-lg border p-4">
+                      <FormItem className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 rounded-lg border p-4">
                         <div className="space-y-0.5">
                           <FormLabel className="text-base" data-testid="label-tab-switch">
                             Disable Tab Switching
@@ -198,7 +198,7 @@ export default function RoundRulesPage() {
                     control={form.control}
                     name="noRefresh"
                     render={({ field }) => (
-                      <FormItem className="flex flex-row items-center justify-between rounded-lg border p-4">
+                      <FormItem className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 rounded-lg border p-4">
                         <div className="space-y-0.5">
                           <FormLabel className="text-base" data-testid="label-no-refresh">
                             Block Page Refresh
@@ -222,7 +222,7 @@ export default function RoundRulesPage() {
                     control={form.control}
                     name="disableShortcuts"
                     render={({ field }) => (
-                      <FormItem className="flex flex-row items-center justify-between rounded-lg border p-4">
+                      <FormItem className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 rounded-lg border p-4">
                         <div className="space-y-0.5">
                           <FormLabel className="text-base" data-testid="label-shortcuts">
                             Disable Keyboard Shortcuts
@@ -246,7 +246,7 @@ export default function RoundRulesPage() {
                     control={form.control}
                     name="autoSubmitOnViolation"
                     render={({ field }) => (
-                      <FormItem className="flex flex-row items-center justify-between rounded-lg border p-4 border-red-200 bg-red-50">
+                      <FormItem className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 rounded-lg border p-4 border-red-200 bg-red-50">
                         <div className="space-y-0.5">
                           <FormLabel className="text-base text-red-900" data-testid="label-auto-submit">
                             Auto-Submit on Violation

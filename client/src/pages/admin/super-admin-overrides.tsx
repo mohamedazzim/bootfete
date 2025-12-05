@@ -47,7 +47,7 @@ export default function SuperAdminOverridesPage() {
 
   return (
     <AdminLayout>
-      <div className="p-8">
+      <div className="p-4 md:p-8">
         <div className="text-center mb-8">
           <h1 className="text-4xl font-bold text-gray-900 mb-2" data-testid="heading-super-admin-overrides">
             Super Admin Overrides
@@ -87,7 +87,7 @@ function EventsTab() {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [selectedEvent, setSelectedEvent] = useState<Event | null>(null);
   const [deleteReason, setDeleteReason] = useState('');
-  
+
   const [editForm, setEditForm] = useState({
     name: '',
     description: '',
@@ -201,51 +201,53 @@ function EventsTab() {
             No events available
           </div>
         ) : (
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Event Name</TableHead>
-                <TableHead>Type</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Created By</TableHead>
-                <TableHead className="text-right">Actions</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {events.map((event) => (
-                <TableRow key={event.id} data-testid={`row-event-${event.id}`}>
-                  <TableCell className="font-medium" data-testid={`text-event-name-${event.id}`}>
-                    {event.name}
-                  </TableCell>
-                  <TableCell>{event.type}</TableCell>
-                  <TableCell>
-                    <Badge data-testid={`badge-status-${event.id}`}>{event.status}</Badge>
-                  </TableCell>
-                  <TableCell>{getUserName(event.createdBy)}</TableCell>
-                  <TableCell className="text-right">
-                    <div className="flex justify-end gap-2">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => handleEditClick(event)}
-                        data-testid={`button-edit-event-${event.id}`}
-                      >
-                        <Edit className="h-4 w-4" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => handleDeleteClick(event)}
-                        data-testid={`button-delete-event-${event.id}`}
-                      >
-                        <Trash2 className="h-4 w-4 text-red-600" />
-                      </Button>
-                    </div>
-                  </TableCell>
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Event Name</TableHead>
+                  <TableHead>Type</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Created By</TableHead>
+                  <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+              </TableHeader>
+              <TableBody>
+                {events.map((event) => (
+                  <TableRow key={event.id} data-testid={`row-event-${event.id}`}>
+                    <TableCell className="font-medium" data-testid={`text-event-name-${event.id}`}>
+                      {event.name}
+                    </TableCell>
+                    <TableCell>{event.type}</TableCell>
+                    <TableCell>
+                      <Badge data-testid={`badge-status-${event.id}`}>{event.status}</Badge>
+                    </TableCell>
+                    <TableCell>{getUserName(event.createdBy)}</TableCell>
+                    <TableCell className="text-right">
+                      <div className="flex justify-end gap-2">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => handleEditClick(event)}
+                          data-testid={`button-edit-event-${event.id}`}
+                        >
+                          <Edit className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => handleDeleteClick(event)}
+                          data-testid={`button-delete-event-${event.id}`}
+                        >
+                          <Trash2 className="h-4 w-4 text-red-600" />
+                        </Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
         )}
       </CardContent>
 
@@ -384,7 +386,7 @@ function QuestionsTab() {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [selectedQuestion, setSelectedQuestion] = useState<Question | null>(null);
   const [deleteReason, setDeleteReason] = useState('');
-  
+
   const [editForm, setEditForm] = useState({
     questionText: '',
     points: 0,
@@ -542,47 +544,49 @@ function QuestionsTab() {
             No questions available for this round
           </div>
         ) : (
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Question Text</TableHead>
-                <TableHead>Type</TableHead>
-                <TableHead>Points</TableHead>
-                <TableHead className="text-right">Actions</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {questions.map((question) => (
-                <TableRow key={question.id} data-testid={`row-question-${question.id}`}>
-                  <TableCell className="max-w-md" data-testid={`text-question-text-${question.id}`}>
-                    {truncateText(question.questionText, 100)}
-                  </TableCell>
-                  <TableCell>{question.questionType}</TableCell>
-                  <TableCell>{question.points}</TableCell>
-                  <TableCell className="text-right">
-                    <div className="flex justify-end gap-2">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => handleEditClick(question)}
-                        data-testid={`button-edit-question-${question.id}`}
-                      >
-                        <Edit className="h-4 w-4" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => handleDeleteClick(question)}
-                        data-testid={`button-delete-question-${question.id}`}
-                      >
-                        <Trash2 className="h-4 w-4 text-red-600" />
-                      </Button>
-                    </div>
-                  </TableCell>
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Question Text</TableHead>
+                  <TableHead>Type</TableHead>
+                  <TableHead>Points</TableHead>
+                  <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+              </TableHeader>
+              <TableBody>
+                {questions.map((question) => (
+                  <TableRow key={question.id} data-testid={`row-question-${question.id}`}>
+                    <TableCell className="max-w-md" data-testid={`text-question-text-${question.id}`}>
+                      {truncateText(question.questionText, 100)}
+                    </TableCell>
+                    <TableCell>{question.questionType}</TableCell>
+                    <TableCell>{question.points}</TableCell>
+                    <TableCell className="text-right">
+                      <div className="flex justify-end gap-2">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => handleEditClick(question)}
+                          data-testid={`button-edit-question-${question.id}`}
+                        >
+                          <Edit className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => handleDeleteClick(question)}
+                          data-testid={`button-delete-question-${question.id}`}
+                        >
+                          <Trash2 className="h-4 w-4 text-red-600" />
+                        </Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
         )}
       </CardContent>
 
@@ -871,43 +875,45 @@ function AuditLogsTab() {
           </div>
         ) : (
           <>
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Timestamp</TableHead>
-                  <TableHead>Admin</TableHead>
-                  <TableHead>Action</TableHead>
-                  <TableHead>Target Type</TableHead>
-                  <TableHead>Target Name</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {paginatedLogs.map((log) => (
-                  <TableRow key={log.id} data-testid={`row-log-${log.id}`}>
-                    <TableCell data-testid={`text-timestamp-${log.id}`}>
-                      {format(new Date(log.timestamp), 'PPpp')}
-                    </TableCell>
-                    <TableCell>{log.adminUsername}</TableCell>
-                    <TableCell>
-                      <Badge data-testid={`badge-action-${log.id}`}>{log.action}</Badge>
-                    </TableCell>
-                    <TableCell>{log.targetType}</TableCell>
-                    <TableCell>{log.targetName || 'N/A'}</TableCell>
-                    <TableCell className="text-right">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => handleViewChanges(log)}
-                        data-testid={`button-view-changes-${log.id}`}
-                      >
-                        <Eye className="h-4 w-4" />
-                      </Button>
-                    </TableCell>
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Timestamp</TableHead>
+                    <TableHead>Admin</TableHead>
+                    <TableHead>Action</TableHead>
+                    <TableHead>Target Type</TableHead>
+                    <TableHead>Target Name</TableHead>
+                    <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+                </TableHeader>
+                <TableBody>
+                  {paginatedLogs.map((log) => (
+                    <TableRow key={log.id} data-testid={`row-log-${log.id}`}>
+                      <TableCell data-testid={`text-timestamp-${log.id}`}>
+                        {format(new Date(log.timestamp), 'PPpp')}
+                      </TableCell>
+                      <TableCell>{log.adminUsername}</TableCell>
+                      <TableCell>
+                        <Badge data-testid={`badge-action-${log.id}`}>{log.action}</Badge>
+                      </TableCell>
+                      <TableCell>{log.targetType}</TableCell>
+                      <TableCell>{log.targetName || 'N/A'}</TableCell>
+                      <TableCell className="text-right">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => handleViewChanges(log)}
+                          data-testid={`button-view-changes-${log.id}`}
+                        >
+                          <Eye className="h-4 w-4" />
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
 
             {totalPages > 1 && (
               <div className="flex justify-center items-center gap-2 mt-6" data-testid="pagination">

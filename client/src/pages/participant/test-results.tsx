@@ -28,7 +28,7 @@ export default function TestResultsPage() {
   if (isLoading) {
     return (
       <ParticipantLayout>
-        <div className="p-8">
+        <div className="p-4 md:p-8">
           <div className="text-center py-12" data-testid="loading-results">Loading results...</div>
         </div>
       </ParticipantLayout>
@@ -38,7 +38,7 @@ export default function TestResultsPage() {
   if (!attempt) {
     return (
       <ParticipantLayout>
-        <div className="p-8">
+        <div className="p-4 md:p-8">
           <div className="text-center py-12">Test results not found</div>
         </div>
       </ParticipantLayout>
@@ -52,7 +52,7 @@ export default function TestResultsPage() {
   if (!eventEnded) {
     return (
       <ParticipantLayout>
-        <div className="p-8 max-w-3xl mx-auto">
+        <div className="p-4 md:p-8 max-w-3xl mx-auto">
           <Card className="border-2 border-green-200 bg-green-50">
             <CardHeader>
               <div className="text-center">
@@ -114,7 +114,7 @@ export default function TestResultsPage() {
 
   return (
     <ParticipantLayout>
-      <div className="p-8 max-w-5xl mx-auto">
+      <div className="p-4 md:p-8 max-w-5xl mx-auto">
         <div className="mb-6">
           <Button
             variant="ghost"
@@ -148,7 +148,7 @@ export default function TestResultsPage() {
         </Card>
 
         {/* Statistics Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
           <Card>
             <CardHeader className="pb-2">
               <CardDescription>Total Questions</CardDescription>

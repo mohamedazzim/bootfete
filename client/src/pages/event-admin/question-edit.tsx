@@ -17,11 +17,11 @@ import type { Question } from '@shared/schema';
 import { z } from 'zod';
 import { ArrowLeft, Plus, X, Loader2 } from 'lucide-react';
 
-const formSchema = insertQuestionSchema.omit({ 
-  options: true, 
+const formSchema = insertQuestionSchema.omit({
+  options: true,
   correctAnswer: true,
   expectedOutput: true,
-  testCases: true 
+  testCases: true
 }).extend({
   questionType: z.enum(['mcq', 'true_false', 'short_answer', 'coding']),
 });
@@ -63,11 +63,11 @@ export default function QuestionEditPage() {
         points: question.points,
       });
       setQuestionType(question.questionType);
-      
+
       if (question.options && Array.isArray(question.options)) {
         setMcqOptions(question.options as string[]);
       }
-      
+
       if (question.correctAnswer) {
         setCorrectAnswer(question.correctAnswer);
       } else if (question.expectedOutput) {
@@ -183,7 +183,7 @@ export default function QuestionEditPage() {
 
   return (
     <EventAdminLayout>
-      <div className="p-8">
+      <div className="p-4 md:p-8">
         <div className="mb-6">
           <Button
             variant="ghost"
@@ -211,11 +211,11 @@ export default function QuestionEditPage() {
                   render={({ field }) => (
                     <FormItem>
                       <FormLabel>Question Type</FormLabel>
-                      <Select 
+                      <Select
                         onValueChange={(value) => {
                           field.onChange(value);
                           setQuestionType(value);
-                        }} 
+                        }}
                         value={field.value}
                       >
                         <FormControl>
@@ -235,7 +235,7 @@ export default function QuestionEditPage() {
                   )}
                 />
 
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <FormField
                     control={form.control}
                     name="questionNumber"

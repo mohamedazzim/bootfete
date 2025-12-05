@@ -26,7 +26,7 @@ export default function QuestionsBulkUploadPage() {
   const { roundId } = useParams();
   const [, setLocation] = useLocation();
   const { toast } = useToast();
-  
+
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [parsedQuestions, setParsedQuestions] = useState<ParsedQuestion[]>([]);
   const [parseErrors, setParseErrors] = useState<string[]>([]);
@@ -105,7 +105,7 @@ export default function QuestionsBulkUploadPage() {
         });
       } else if (fileName.endsWith('.csv')) {
         const lines = content.split('\n').filter(line => line.trim());
-        
+
         if (lines.length === 0) {
           errors.push('CSV file is empty');
           setParseErrors(errors);
@@ -113,13 +113,13 @@ export default function QuestionsBulkUploadPage() {
         }
 
         const headers = lines[0].toLowerCase().split(',').map(h => h.trim());
-        
+
         for (let i = 1; i < lines.length; i++) {
           const line = lines[i].trim();
           if (!line) continue;
 
           const values = line.split(',').map(v => v.trim());
-          
+
           if (values.length < 3) {
             errors.push(`Line ${i + 1}: Insufficient columns`);
             continue;
@@ -128,7 +128,7 @@ export default function QuestionsBulkUploadPage() {
           const questionNumber = parseInt(values[0]);
           const questionText = values[1];
           const points = parseInt(values[2]) || 1;
-          
+
           if (isNaN(questionNumber) || !questionText) {
             errors.push(`Line ${i + 1}: Invalid questionNumber or questionText`);
             continue;
@@ -177,7 +177,7 @@ export default function QuestionsBulkUploadPage() {
 
   return (
     <EventAdminLayout>
-      <div className="p-8">
+      <div className="p-4 md:p-8">
         <div className="mb-6">
           <Button
             variant="ghost"
@@ -219,7 +219,7 @@ export default function QuestionsBulkUploadPage() {
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="p-4 border rounded-lg">
                   <div className="flex items-center gap-2 mb-2">
                     <FileText className="h-5 w-5 text-green-600" />
@@ -242,7 +242,7 @@ export default function QuestionsBulkUploadPage() {
                     Array of question objects
                   </p>
                   <pre className="text-xs text-gray-500 bg-gray-50 p-2 rounded">
-{`[{
+                    {`[{
   "questionNumber": 1,
   "questionText": "What is 2+2?",
   "points": 1,

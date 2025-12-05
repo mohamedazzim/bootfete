@@ -25,23 +25,27 @@ export default function ParticipantLayout({ children }: ParticipantLayoutProps) 
   return (
     <div className="min-h-screen bg-gray-50">
       <header className="bg-white border-b border-gray-200 sticky top-0 z-10">
-        <div className="px-6 py-4 flex justify-between items-center">
+        <div className="px-4 md:px-6 py-3 md:py-4 flex justify-between items-center">
           <div className="flex items-center gap-2">
             <h1 className="text-lg font-semibold text-gray-900" data-testid="heading-symposium">
-              BootFeet 2K26
+              BootFeet <span className="hidden sm:inline">2K26</span>
             </h1>
-            <span className="text-gray-400">|</span>
-            <span className="text-sm text-gray-700" data-testid="text-event-name">
-              {eventName}
-            </span>
-            <span className="text-gray-400">|</span>
-            <span className="text-sm text-gray-700" data-testid="text-participant-name">
-              {participantName}
-            </span>
+
+            <div className="hidden md:flex items-center gap-2">
+              <span className="text-gray-400">|</span>
+              <span className="text-sm text-gray-700" data-testid="text-event-name">
+                {eventName}
+              </span>
+              <span className="text-gray-400">|</span>
+              <span className="text-sm text-gray-700" data-testid="text-participant-name">
+                {participantName}
+              </span>
+            </div>
+
             {isConnected && (
               <Badge variant="outline" className="ml-2" data-testid="badge-websocket-connected">
                 <Circle className="w-2 h-2 mr-1 fill-green-500 text-green-500" />
-                Live
+                <span className="hidden sm:inline">Live</span>
               </Badge>
             )}
           </div>
@@ -57,7 +61,7 @@ export default function ParticipantLayout({ children }: ParticipantLayoutProps) 
         </div>
       </header>
 
-      <main className="flex-1">
+      <main className="flex-1 p-4 md:p-6">
         {children}
       </main>
     </div>

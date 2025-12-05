@@ -35,9 +35,9 @@ export default function EventAdminsPage() {
   async function handleDeleteAdmin(adminId: string) {
     try {
       await apiRequest('DELETE', `/api/users/${adminId}`, {});
-      
+
       queryClient.invalidateQueries({ queryKey: ['/api/users'] });
-      
+
       toast({
         title: 'Admin deleted',
         description: 'The admin account has been deleted successfully',
@@ -61,8 +61,8 @@ export default function EventAdminsPage() {
 
   return (
     <AdminLayout>
-      <div className="p-8">
-        <div className="flex justify-between items-center mb-6">
+      <div className="p-4 md:p-8">
+        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
           <div>
             <h1 className="text-3xl font-bold text-gray-900" data-testid="heading-event-admins">Event Admins</h1>
             <p className="text-gray-600 mt-1">Manage event administrator accounts</p>
@@ -96,70 +96,72 @@ export default function EventAdminsPage() {
                 {searchTerm ? 'No event admins found matching your search' : 'No event admins created yet'}
               </div>
             ) : (
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Name</TableHead>
-                    <TableHead>Username</TableHead>
-                    <TableHead>Email</TableHead>
-                    <TableHead>Created At</TableHead>
-                    <TableHead>Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {filteredAdmins.map((admin) => (
-                    <TableRow key={admin.id} data-testid={`row-admin-${admin.id}`}>
-                      <TableCell className="font-medium" data-testid={`text-admin-name-${admin.id}`}>
-                        {admin.fullName}
-                      </TableCell>
-                      <TableCell>{admin.username}</TableCell>
-                      <TableCell>{admin.email}</TableCell>
-                      <TableCell>{new Date(admin.createdAt).toLocaleDateString()}</TableCell>
-                      <TableCell>
-                        <div className="flex gap-2">
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => setLocation(`/admin/event-admins/${admin.id}/edit`)}
-                            data-testid={`button-edit-${admin.id}`}
-                          >
-                            <Pencil className="h-4 w-4" />
-                          </Button>
-                          
-                          <AlertDialog>
-                            <AlertDialogTrigger asChild>
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                data-testid={`button-delete-${admin.id}`}
-                              >
-                                <Trash2 className="h-4 w-4 text-destructive" />
-                              </Button>
-                            </AlertDialogTrigger>
-                            <AlertDialogContent>
-                              <AlertDialogHeader>
-                                <AlertDialogTitle>Delete Admin?</AlertDialogTitle>
-                                <AlertDialogDescription>
-                                  Are you sure you want to delete {admin.fullName}? This will remove their account and all associated event assignments. This action cannot be undone.
-                                </AlertDialogDescription>
-                              </AlertDialogHeader>
-                              <AlertDialogFooter>
-                                <AlertDialogCancel>Cancel</AlertDialogCancel>
-                                <AlertDialogAction
-                                  onClick={() => handleDeleteAdmin(admin.id)}
-                                  className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                                >
-                                  Delete
-                                </AlertDialogAction>
-                              </AlertDialogFooter>
-                            </AlertDialogContent>
-                          </AlertDialog>
-                        </div>
-                      </TableCell>
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Name</TableHead>
+                      <TableHead>Username</TableHead>
+                      <TableHead>Email</TableHead>
+                      <TableHead>Created At</TableHead>
+                      <TableHead>Actions</TableHead>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+                  </TableHeader>
+                  <TableBody>
+                    {filteredAdmins.map((admin) => (
+                      <TableRow key={admin.id} data-testid={`row-admin-${admin.id}`}>
+                        <TableCell className="font-medium" data-testid={`text-admin-name-${admin.id}`}>
+                          {admin.fullName}
+                        </TableCell>
+                        <TableCell>{admin.username}</TableCell>
+                        <TableCell>{admin.email}</TableCell>
+                        <TableCell>{new Date(admin.createdAt).toLocaleDateString()}</TableCell>
+                        <TableCell>
+                          <div className="flex gap-2">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => setLocation(`/admin/event-admins/${admin.id}/edit`)}
+                              data-testid={`button-edit-${admin.id}`}
+                            >
+                              <Pencil className="h-4 w-4" />
+                            </Button>
+
+                            <AlertDialog>
+                              <AlertDialogTrigger asChild>
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  data-testid={`button-delete-${admin.id}`}
+                                >
+                                  <Trash2 className="h-4 w-4 text-destructive" />
+                                </Button>
+                              </AlertDialogTrigger>
+                              <AlertDialogContent>
+                                <AlertDialogHeader>
+                                  <AlertDialogTitle>Delete Admin?</AlertDialogTitle>
+                                  <AlertDialogDescription>
+                                    Are you sure you want to delete {admin.fullName}? This will remove their account and all associated event assignments. This action cannot be undone.
+                                  </AlertDialogDescription>
+                                </AlertDialogHeader>
+                                <AlertDialogFooter>
+                                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                                  <AlertDialogAction
+                                    onClick={() => handleDeleteAdmin(admin.id)}
+                                    className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                                  >
+                                    Delete
+                                  </AlertDialogAction>
+                                </AlertDialogFooter>
+                              </AlertDialogContent>
+                            </AlertDialog>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
             )}
           </CardContent>
         </Card>

@@ -627,6 +627,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
             category: event.category,
             startDate: event.startDate,
             endDate: event.endDate,
+            minMembers: event.minMembers,
+            maxMembers: event.maxMembers,
             rounds: rounds.map((r) => ({
               id: r.id,
               name: r.name,
@@ -661,6 +663,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
             name: event.name,
             description: event.description,
             category: event.category,
+            minMembers: event.minMembers,
+            maxMembers: event.maxMembers,
             rounds: rounds.map((r) => ({
               id: r.id,
               name: r.name,
@@ -720,7 +724,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Create event
   app.post("/api/events", requireAuth, requireSuperAdmin, async (req: AuthRequest, res: Response) => {
     try {
-      const { name, description, type, category, startDate, endDate, status } = req.body // added category
+      const { name, description, type, category, startDate, endDate, status, minMembers, maxMembers } = req.body
 
       // Dev log: incoming payload category
       try { console.log(`Create event payload category: ${category}`) } catch (e) { }
@@ -750,6 +754,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
 
+      // Team size validation
+      if (minMembers !== undefined && maxMembers !== undefined) {
+        if (minMembers > maxMembers) {
+          return res.status(400).json({ message: "Minimum members cannot be greater than maximum members" })
+        }
+        if (minMembers < 1) {
+          return res.status(400).json({ message: "Minimum members must be at least 1" })
+        }
+      }
+
       const event = await storage.createEvent({
         name,
         description,
@@ -758,6 +772,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         startDate: startDate ? new Date(startDate) : null,
         endDate: endDate ? new Date(endDate) : null,
         status: status || "draft",
+        minMembers: minMembers || 1,
+        maxMembers: maxMembers || 1,
         createdBy: req.user!.id,
       })
 
@@ -787,7 +803,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.patch("/api/events/:id", requireAuth, requireSuperAdmin, async (req: AuthRequest, res: Response) => {
     try {
-      const { name, description, type, category, startDate, endDate, status } = req.body
+      const { name, description, type, category, startDate, endDate, status, minMembers, maxMembers } = req.body
 
       try { console.log(`Update event payload for id=${req.params.id} incoming category: ${category}`) } catch (e) { }
 
@@ -811,6 +827,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
 
+      // Team size validation
+      if (minMembers !== undefined && maxMembers !== undefined) {
+        if (minMembers > maxMembers) {
+          return res.status(400).json({ message: "Minimum members cannot be greater than maximum members" })
+        }
+        if (minMembers < 1) {
+          return res.status(400).json({ message: "Minimum members must be at least 1" })
+        }
+      }
+
       const updateData: any = {}
       if (name !== undefined) updateData.name = name
       if (description !== undefined) updateData.description = description
@@ -819,6 +845,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (startDate !== undefined) updateData.startDate = new Date(startDate)
       if (endDate !== undefined) updateData.endDate = new Date(endDate)
       if (status !== undefined) updateData.status = status
+      if (minMembers !== undefined) updateData.minMembers = minMembers
+      if (maxMembers !== undefined) updateData.maxMembers = maxMembers
 
       const event = await storage.updateEvent(req.params.id, updateData)
       try { console.log(`Event updated: id=${event?.id} category=${event?.category} name=${event?.name}`) } catch (e) { }
@@ -851,13 +879,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "Event not found" })
       }
 
-      // Check if event has active test attempts (ongoing tests)
-      const rounds = await storage.getRoundsByEvent(req.params.id)
-      const hasActiveAttempts = false // This would need additional storage method to check
+      // Handle optional admin deletion
+      if (req.query.deleteAdmins === 'true') {
+        const eventAdmins = await storage.getEventAdminsByEvent(req.params.id);
+        for (const admin of eventAdmins) {
+          // Check if admin is assigned to other events
+          const adminEvents = await storage.getEventsByAdmin(admin.id);
+          // If only assigned to this event (length 1 and it's this event), delete user
+          if (adminEvents.length === 1 && adminEvents[0].id === req.params.id) {
+            await storage.deleteUser(admin.id);
+          }
+        }
+      }
+
+      // Cleanup registrations (remove event ID from selected_events JSON array)
+      await storage.removeEventFromRegistrations(req.params.id);
 
       // CASCADE DELETE BEHAVIOR: Deleting an event automatically deletes eventAdmins (assignments),
       // eventRules, rounds, roundRules, questions, testAttempts, answers, participants, and reports.
-      // Admin user accounts persist and can be reassigned to other events.
       await storage.deleteEvent(req.params.id)
 
       // Invalidate cache
@@ -2423,6 +2462,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   })
 
+  app.delete("/api/registration-forms/:id", requireAuth, requireSuperAdmin, async (req: AuthRequest, res: Response) => {
+    try {
+      const form = await storage.getRegistrationFormById(req.params.id)
+      if (!form) {
+        return res.status(404).json({ message: "Form not found" })
+      }
+
+      if (form.isActive) {
+        return res.status(400).json({ message: "Cannot delete an active form. Please deactivate it first." })
+      }
+
+      await storage.deleteRegistrationForm(req.params.id)
+      res.json({ message: "Registration form deleted successfully" })
+    } catch (error: any) {
+      console.error("Delete registration form error:", error)
+      res.status(500).json({ message: error.message || "Internal server error" })
+    }
+  })
+
   app.get("/api/registration-forms/all", requireAuth, requireSuperAdmin, async (req: AuthRequest, res: Response) => {
     try {
       const forms = await storage.getAllRegistrationForms()
@@ -2459,51 +2517,300 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   })
 
+  // OLD FORM-BASED REGISTRATION - DEPRECATED
+  // This route is disabled in favor of the new team-based registration system
+  // Use POST /api/register for new team-based registrations
   app.post("/api/registration-forms/:slug/submit", async (req: Request, res: Response) => {
+    res.status(410).json({
+      message: "This registration form is no longer active. Please use the new team-based registration system."
+    })
+  })
+
+  // ============ NEW TEAM-BASED REGISTRATION ENDPOINTS ============
+
+  // Validate a roll number for registration
+  app.post("/api/validate-rollno", async (req: Request, res: Response) => {
     try {
-      const form = await storage.getRegistrationFormBySlug(req.params.slug)
-      if (!form) {
-        return res.status(404).json({ message: "Form not found" })
+      const { rollNo, eventId } = req.body
+
+      if (!rollNo || !eventId) {
+        return res.status(400).json({ message: "rollNo and eventId are required" })
       }
 
-      if (!form.isActive) {
-        return res.status(400).json({ message: "This form is no longer accepting submissions" })
+      const event = await storage.getEventById(eventId)
+      if (!event) {
+        return res.status(404).json({ message: "Event not found" })
       }
 
-      const { submittedData, selectedEvents } = req.body
+      // Check if this roll number is already registered for an event in the same category
+      const categoryCheck = await storage.checkRollNoCategoryRegistration(rollNo, event.category as 'technical' | 'non_technical')
 
-      if (!submittedData || !selectedEvents || !Array.isArray(selectedEvents)) {
-        return res.status(400).json({ message: "submittedData and selectedEvents are required" })
-      }
-
-      const events = await storage.getEventsByIds(selectedEvents)
-      const invalidEvents = events.filter((event) => !form.allowedCategories.includes(event.category))
-
-      if (invalidEvents.length > 0) {
-        return res.status(400).json({
-          message: `The following events are not allowed by this form: ${invalidEvents.map((e) => e.name).join(", ")}`,
+      if (categoryCheck.isRegistered) {
+        return res.json({
+          valid: false,
+          blocked: true,
+          reason: `Already registered for ${categoryCheck.event?.name || 'another event'} in ${event.category} category`,
+          existingEvent: categoryCheck.event?.name,
+          role: categoryCheck.role,
+          category: event.category
         })
       }
 
-      const validation = await validateEventSelection(selectedEvents)
-      if (!validation.valid) {
-        return res.status(400).json({ message: validation.error })
-      }
-
-      const registration = await storage.createRegistration(form.id, submittedData, selectedEvents)
-
-      // Notify via WebSocket for each event
-      for (const eventId of selectedEvents) {
-        const event = await storage.getEventById(eventId)
-        WebSocketService.notifyRegistrationUpdate(eventId, {
-          ...registration,
-          eventName: event?.name || "Unknown Event",
-        })
-      }
-
-      res.status(201).json(registration)
+      res.json({
+        valid: true,
+        blocked: false,
+        category: event.category
+      })
     } catch (error) {
-      console.error("Submit registration error:", error)
+      console.error("Validate roll number error:", error)
+      res.status(500).json({ message: "Internal server error" })
+    }
+  })
+
+  // Check registration status for a student  
+  app.post("/api/check-registration-status", async (req: Request, res: Response) => {
+    try {
+      const { rollNo, eventId } = req.body
+
+      if (!rollNo) {
+        return res.status(400).json({ message: "rollNo is required" })
+      }
+
+      // Get all registrations for this roll number
+      const registrations = await storage.getRegistrationsByRollNo(rollNo)
+
+      // If a specific event is provided, check if they can register for it
+      if (eventId) {
+        const event = await storage.getEventById(eventId)
+        if (!event) {
+          return res.status(404).json({ message: "Event not found" })
+        }
+
+        const categoryCheck = await storage.checkRollNoCategoryRegistration(rollNo, event.category as 'technical' | 'non_technical')
+
+        return res.json({
+          rollNo,
+          registrations: registrations.map(r => ({
+            eventId: r.eventId,
+            eventName: r.event?.name,
+            category: r.event?.category,
+            role: r.role,
+            status: r.status,
+            teamSize: 1 + (r.teamMembers?.length || 0)
+          })),
+          canRegisterForEvent: !categoryCheck.isRegistered,
+          blockedReason: categoryCheck.isRegistered
+            ? `Already registered for ${categoryCheck.event?.name} in ${event.category} category`
+            : null
+        })
+      }
+
+      res.json({
+        rollNo,
+        registrations: registrations.map(r => ({
+          eventId: r.eventId,
+          eventName: r.event?.name,
+          category: r.event?.category,
+          role: r.role,
+          status: r.status,
+          teamSize: 1 + (r.teamMembers?.length || 0)
+        })),
+        technicalRegistered: registrations.some(r => r.event?.category === 'technical'),
+        nonTechnicalRegistered: registrations.some(r => r.event?.category === 'non_technical')
+      })
+    } catch (error) {
+      console.error("Check registration status error:", error)
+      res.status(500).json({ message: "Internal server error" })
+    }
+  })
+
+  // Get all registrations (Admin)
+  app.get("/api/registrations", requireAuth, requireSuperAdmin, async (req: AuthRequest, res: Response) => {
+    try {
+      const registrations = await storage.getRegistrations()
+      res.json(registrations)
+    } catch (error) {
+      console.error("Get registrations error:", error)
+      res.status(500).json({ message: "Internal server error" })
+    }
+  })
+
+  // Create a new team-based registration
+  app.post("/api/register", async (req: Request, res: Response) => {
+    try {
+      const {
+        eventId,
+        organizerRollNo,
+        organizerName,
+        organizerEmail,
+        organizerDept,
+        organizerPhone,
+        teamMembers
+      } = req.body
+
+      // Validate required fields
+      if (!eventId || !organizerRollNo || !organizerName || !organizerEmail || !organizerDept) {
+        return res.status(400).json({
+          message: "eventId, organizerRollNo, organizerName, organizerEmail, and organizerDept are required"
+        })
+      }
+
+      // Get event details
+      const event = await storage.getEventById(eventId)
+      if (!event) {
+        return res.status(404).json({ message: "Event not found" })
+      }
+
+      // Calculate team size (1 for organizer + team members)
+      const totalMembers = 1 + (teamMembers?.length || 0)
+      const registrationType = totalMembers > 1 ? 'team' : 'solo'
+
+      // Validate team size
+      const minMembers = event.minMembers || 1
+      const maxMembers = event.maxMembers || 1
+
+      if (totalMembers < minMembers) {
+        return res.status(400).json({
+          message: `Team must have at least ${minMembers} member(s). You have ${totalMembers}.`,
+          minMembers,
+          maxMembers,
+          currentSize: totalMembers
+        })
+      }
+
+      if (totalMembers > maxMembers) {
+        return res.status(400).json({
+          message: `Team can have at most ${maxMembers} member(s). You have ${totalMembers}.`,
+          minMembers,
+          maxMembers,
+          currentSize: totalMembers
+        })
+      }
+
+      // Check if organizer is already registered for this category
+      const organizerCheck = await storage.checkRollNoCategoryRegistration(
+        organizerRollNo,
+        event.category as 'technical' | 'non_technical'
+      )
+
+      if (organizerCheck.isRegistered) {
+        return res.status(409).json({
+          message: `${organizerRollNo} is already registered for ${organizerCheck.event?.name} in ${event.category} category`,
+          conflictingEvent: organizerCheck.event?.name,
+          role: organizerCheck.role
+        })
+      }
+
+      // Validate each team member
+      const invalidMembers: Array<{ rollNo: string; reason: string }> = []
+      const allRollNos = [organizerRollNo]
+
+      if (teamMembers && teamMembers.length > 0) {
+        for (const member of teamMembers) {
+          if (!member.memberRollNo || !member.memberName || !member.memberEmail || !member.memberDept) {
+            invalidMembers.push({
+              rollNo: member.memberRollNo || 'unknown',
+              reason: 'Missing required fields (rollNo, name, email, dept)'
+            })
+            continue
+          }
+
+          // Check for duplicate roll numbers in the team
+          if (allRollNos.includes(member.memberRollNo)) {
+            invalidMembers.push({
+              rollNo: member.memberRollNo,
+              reason: 'Duplicate roll number in team'
+            })
+            continue
+          }
+          allRollNos.push(member.memberRollNo)
+
+          // Check if member is already registered for this category
+          const memberCheck = await storage.checkRollNoCategoryRegistration(
+            member.memberRollNo,
+            event.category as 'technical' | 'non_technical'
+          )
+
+          if (memberCheck.isRegistered) {
+            invalidMembers.push({
+              rollNo: member.memberRollNo,
+              reason: `Already registered for ${memberCheck.event?.name} in ${event.category} category`
+            })
+          }
+        }
+      }
+
+      if (invalidMembers.length > 0) {
+        return res.status(409).json({
+          message: 'Some team members cannot be registered',
+          invalidMembers
+        })
+      }
+
+      // Create the registration
+      const registration = await storage.createTeamRegistration({
+        eventId,
+        organizerRollNo,
+        organizerName,
+        organizerEmail,
+        organizerDept,
+        organizerPhone,
+        registrationType: registrationType as 'solo' | 'team',
+        teamMembers: teamMembers || []
+      })
+
+      // Notify via WebSocket
+      WebSocketService.notifyRegistrationUpdate(eventId, {
+        ...registration,
+        eventName: event.name,
+        teamSize: totalMembers
+      })
+
+      res.status(201).json({
+        message: 'Registration submitted successfully',
+        registration: {
+          id: registration.id,
+          eventId: registration.eventId,
+          eventName: event.name,
+          organizerRollNo: registration.organizerRollNo,
+          organizerName: registration.organizerName,
+          registrationType: registration.registrationType,
+          teamSize: totalMembers,
+          status: registration.status,
+          createdAt: registration.createdAt
+        }
+      })
+    } catch (error) {
+      console.error("Create registration error:", error)
+      res.status(500).json({ message: "Internal server error" })
+    }
+  })
+
+  // Get registrations by roll number
+  app.get("/api/student-registrations/:rollNo", async (req: Request, res: Response) => {
+    try {
+      const { rollNo } = req.params
+
+      const registrations = await storage.getRegistrationsByRollNo(rollNo)
+
+      res.json({
+        rollNo,
+        registrations: registrations.map(r => ({
+          id: r.id,
+          eventId: r.eventId,
+          eventName: r.event?.name,
+          eventCategory: r.event?.category,
+          role: r.role,
+          status: r.status,
+          registrationType: r.registrationType,
+          teamSize: 1 + (r.teamMembers?.length || 0),
+          createdAt: r.createdAt
+        })),
+        technicalEvent: registrations.find(r => r.event?.category === 'technical')?.event?.name || null,
+        nonTechnicalEvent: registrations.find(r => r.event?.category === 'non_technical')?.event?.name || null
+      })
+    } catch (error) {
+      console.error("Get student registrations error:", error)
       res.status(500).json({ message: "Internal server error" })
     }
   })
@@ -2523,7 +2830,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   })
 
-  app.patch("/api/registrations/:id/approve", requireAuth, async (req: AuthRequest, res: Response) => {
+  // NEW: Confirm team-based registration
+  app.patch("/api/registrations/:id/confirm", requireAuth, async (req: AuthRequest, res: Response) => {
     try {
       const user = req.user!
       if (user.role !== "super_admin" && user.role !== "registration_committee") {
@@ -2535,153 +2843,132 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "Registration not found" })
       }
 
-      if (registration.paymentStatus !== "pending") {
+      if (registration.status !== "pending") {
         return res.status(400).json({ message: "Registration has already been processed" })
       }
 
-      const userData = registration.submittedData
+      const event = await storage.getEventById(registration.eventId)
+      if (!event) {
+        return res.status(404).json({ message: "Event not found" })
+      }
 
-      const extractEmail = (data: Record<string, string>): string => {
-        for (const value of Object.values(data)) {
-          if (value && typeof value === "string" && value.includes("@") && value.includes(".")) {
-            return value
-          }
+      const eventCredentialsList: Array<{
+        eventId: string;
+        eventName: string;
+        eventUsername: string;
+        eventPassword: string;
+        participantName: string;
+        participantEmail: string;
+        participantRollNo: string;
+      }> = []
+
+      // Process organizer
+      const processParticipant = async (name: string, email: string, rollNo: string, dept: string) => {
+        // Check if user exists
+        let participantUser = await storage.getUserByEmail(email)
+        let password = ""
+
+        if (!participantUser) {
+          password = generateSecurePassword()
+          const hashedPassword = await bcrypt.hash(password, 10)
+          const username = `${email.split('@')[0]}_${nanoid(6)}`.toLowerCase()
+          participantUser = await storage.createUser({
+            username: username,
+            password: hashedPassword,
+            email: email,
+            fullName: name,
+            role: "participant",
+          } as any)
         }
-        throw new Error("Email not found in registration data")
-      }
 
-      const extractFullName = (data: Record<string, string>): string => {
-        for (const value of Object.values(data)) {
-          if (value && typeof value === "string" && value.includes(" ") && !value.includes("@")) {
-            return value
-          }
-        }
-        return "Participant"
-      }
-
-      const email = extractEmail(userData)
-      const fullName = extractFullName(userData)
-
-      const existingUser = await storage.getUserByEmail(email)
-      let targetUser = existingUser
-      let password = ""
-      let isExistingUser = false
-
-      if (existingUser) {
-        isExistingUser = true
-        targetUser = existingUser
-      } else {
-        password = generateSecurePassword()
-        const hashedPassword = await bcrypt.hash(password, 10)
-        const username = `${email.split('@')[0]}_${nanoid(6)}`.toLowerCase()
-        targetUser = await storage.createUser({
-          username: username,
-          password: hashedPassword,
-          email: email,
-          fullName: fullName,
-          role: "participant",
-        } as any)
-      }
-
-      const eventCredentialsList = []
-      const skippedEvents = []
-      const existingCredentialsList = []
-
-      for (const eventId of registration.selectedEvents) {
-        const event = await storage.getEventById(eventId)
-        if (!event) continue
-
-        const existingParticipant = await storage.getParticipantByUserAndEvent(targetUser!.id, eventId)
-
+        // Create participant record
+        const existingParticipant = await storage.getParticipantByUserAndEvent(participantUser.id, registration.eventId)
         if (!existingParticipant) {
-          await storage.createParticipant(targetUser!.id, eventId)
+          await storage.createParticipant(participantUser.id, registration.eventId)
         }
 
-        const existingCredential = await storage.getEventCredentialByUserAndEvent(targetUser!.id, eventId)
+        // Create or get event credentials
+        const existingCredential = await storage.getEventCredentialByUserAndEvent(participantUser.id, registration.eventId)
 
-        if (existingCredential) {
-          existingCredentialsList.push({
-            eventId,
+        if (!existingCredential) {
+          const count = await storage.getEventCredentialCountForEvent(registration.eventId)
+          const counter = count + 1
+          const { username: eventUsername, password: eventPassword } = await generateUniqueEventCredentials(
+            name,
+            event.name,
+            counter,
+          )
+
+          await storage.createEventCredential(participantUser.id, registration.eventId, eventUsername, eventPassword)
+
+          eventCredentialsList.push({
+            eventId: registration.eventId,
+            eventName: event.name,
+            eventUsername,
+            eventPassword,
+            participantName: name,
+            participantEmail: email,
+            participantRollNo: rollNo,
+          })
+
+          // Queue email
+          queueService.addEmailJob(
+            email,
+            `Registration Confirmed - ${event.name}`,
+            'registration_approved',
+            {
+              name: name,
+              eventName: event.name,
+              username: eventUsername,
+              password: eventPassword
+            },
+            name
+          ).catch(err => {
+            console.error(`Failed to queue approval email for ${email}:`, err)
+          })
+        } else {
+          eventCredentialsList.push({
+            eventId: registration.eventId,
             eventName: event.name,
             eventUsername: existingCredential.eventUsername,
             eventPassword: existingCredential.eventPassword,
+            participantName: name,
+            participantEmail: email,
+            participantRollNo: rollNo,
           })
-          if (existingParticipant) {
-            skippedEvents.push(event.name)
-          }
-          continue
         }
-
-        const count = await storage.getEventCredentialCountForEvent(eventId)
-        const counter = count + 1
-        const { username: eventUsername, password: eventPassword } = await generateUniqueEventCredentials(
-          fullName,
-          event.name,
-          counter,
-        )
-
-        await storage.createEventCredential(targetUser!.id, eventId, eventUsername, eventPassword)
-
-        eventCredentialsList.push({
-          eventId,
-          eventName: event.name,
-          eventUsername,
-          eventPassword,
-        })
       }
 
-      const updated = await storage.updateRegistrationStatus(req.params.id, "paid", targetUser!.id, user.id)
+      // Process organizer
+      await processParticipant(
+        registration.organizerName,
+        registration.organizerEmail,
+        registration.organizerRollNo,
+        registration.organizerDept
+      )
 
-      for (const eventCred of eventCredentialsList) {
-        queueService.addEmailJob(
-          email,
-          `Registration Approved - ${eventCred.eventName}`,
-          'registration_approved',
-          {
-            name: fullName,
-            eventName: eventCred.eventName,
-            username: eventCred.eventUsername,
-            password: eventCred.eventPassword
-          },
-          fullName
-        ).catch(err => {
-          console.error(`Failed to queue approval email for event ${eventCred.eventName}:`, err)
-        })
+      // Process team members
+      if (registration.teamMembers && registration.teamMembers.length > 0) {
+        for (const member of registration.teamMembers) {
+          await processParticipant(
+            member.memberName,
+            member.memberEmail,
+            member.memberRollNo,
+            member.memberDept
+          )
+        }
       }
 
-      const allCredentials = [...eventCredentialsList, ...existingCredentialsList]
+      // Update registration status
+      const updated = await storage.confirmRegistration(req.params.id, user.id)
 
-      const response: any = {
+      res.json({
         registration: updated,
-        eventCredentials: allCredentials,
-        newCredentials: eventCredentialsList,
-        isExistingUser,
-      }
-
-      if (isExistingUser) {
-        response.mainCredentials = {
-          username: targetUser!.username,
-          email: targetUser!.email,
-          note: "User already exists. They can use their existing login credentials.",
-        }
-        if (existingCredentialsList.length > 0) {
-          response.existingCredentials = existingCredentialsList
-        }
-        if (skippedEvents.length > 0) {
-          response.skippedEvents = skippedEvents
-          response.note = `User was already registered for: ${skippedEvents.join(", ")}`
-        }
-      } else {
-        response.mainCredentials = {
-          username: targetUser!.username,
-          password: password,
-          email: targetUser!.email,
-        }
-      }
-
-      res.json(response)
+        eventCredentials: eventCredentialsList,
+        message: `Successfully confirmed registration for ${eventCredentialsList.length} participant(s)`
+      })
     } catch (error) {
-      console.error("Approve registration error:", error)
+      console.error("Confirm registration error:", error)
       res.status(500).json({ message: "Internal server error" })
     }
   })
@@ -3131,8 +3418,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Forbidden" })
       }
 
-      const registration = await storage.getRegistrationByUserId(participant.id)
-      const paymentStatus = registration?.paymentStatus || "pending"
+      // Registration status - since we're generating ID pass, assume confirmed
+      const registrationStatus = "confirmed"
 
       const doc = new PDFDocument({
         size: [400, 600],
@@ -3194,10 +3481,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       doc.text("Status", 40, yPos)
       yPos += 25
 
-      const statusColor = paymentStatus === "paid" ? "#10B981" : paymentStatus === "pending" ? "#F59E0B" : "#EF4444"
+      const statusColor = registrationStatus === "confirmed" ? "#10B981" : registrationStatus === "pending" ? "#F59E0B" : "#EF4444"
       doc.fontSize(11).font("Helvetica")
-      doc.fillColor("#4A5568").text("Payment:", 40, yPos, { continued: true })
-      doc.fillColor(statusColor).font("Helvetica-Bold").text(` ${paymentStatus.toUpperCase()}`, { continued: false })
+      doc.fillColor("#4A5568").text("Registration:", 40, yPos, { continued: true })
+      doc.fillColor(statusColor).font("Helvetica-Bold").text(` ${registrationStatus.toUpperCase()}`, { continued: false })
       yPos += 25
 
       doc.fillColor("#4A5568").font("Helvetica").text("Participant ID:", 40, yPos, { continued: true })
@@ -3209,7 +3496,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         eventId: event.id,
         credentialId: credential.id,
         username: credential.eventUsername,
-        status: paymentStatus
+        status: registrationStatus
       })
 
       try {

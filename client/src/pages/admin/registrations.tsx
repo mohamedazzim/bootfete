@@ -1,4 +1,7 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { apiRequest } from "@/lib/queryClient";
+import { Button } from "@/components/ui/button";
+import { useToast } from "@/hooks/use-toast";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -8,6 +11,30 @@ import type { Registration, Event } from "@shared/schema";
 export default function AdminRegistrationsPage() {
   const { data: registrations, isLoading } = useQuery<Registration[]>({
     queryKey: ['/api/registrations'],
+  });
+
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+
+  const confirmMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await apiRequest("PATCH", `/api/registrations/${id}/confirm`);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/registrations'] });
+      toast({
+        title: "Success",
+        description: "Registration confirmed and credentials generated",
+      });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Error",
+        description: error.message || "Failed to confirm registration",
+        variant: "destructive",
+      });
+    },
   });
 
   const { data: events } = useQuery<Event[]>({
@@ -34,7 +61,7 @@ export default function AdminRegistrationsPage() {
 
   return (
     <AdminLayout>
-      <div className="container mx-auto p-6 max-w-7xl" data-testid="page-admin-registrations">
+      <div className="container mx-auto p-4 md:p-6 max-w-7xl" data-testid="page-admin-registrations">
         <div className="mb-6">
           <h1 className="text-3xl font-bold" data-testid="heading-registrations">All Registrations</h1>
           <p className="text-muted-foreground">View and manage event registrations</p>
@@ -49,50 +76,66 @@ export default function AdminRegistrationsPage() {
             {isLoading ? (
               <div data-testid="loading-registrations">Loading registrations...</div>
             ) : registrations && registrations.length > 0 ? (
-              <Table data-testid="table-registrations">
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Name</TableHead>
-                    <TableHead>Email</TableHead>
-                    <TableHead>Selected Events</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Submitted</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {registrations.map((registration: any) => (
-                    <TableRow key={registration.id} data-testid={`row-registration-${registration.id}`}>
-                      <TableCell data-testid={`text-name-${registration.id}`}>
-                        {registration.participantName || 'N/A'}
-                      </TableCell>
-                      <TableCell data-testid={`text-email-${registration.id}`}>
-                        {registration.participantEmail || 'N/A'}
-                      </TableCell>
-                      <TableCell data-testid={`text-events-${registration.id}`}>
-                        <div className="flex flex-wrap gap-1">
-                          {registration.selectedEvents && registration.selectedEvents.length > 0 ? (
-                            registration.selectedEvents.map((eventId: string) => (
-                              <Badge key={eventId} variant="outline" className="text-xs">
-                                {getEventName(eventId)}
-                              </Badge>
-                            ))
-                          ) : (
-                            <span className="text-muted-foreground text-sm">No events</span>
-                          )}
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <Badge variant={getStatusColor(registration.paymentStatus)} data-testid={`badge-status-${registration.id}`}>
-                          {registration.paymentStatus}
-                        </Badge>
-                      </TableCell>
-                      <TableCell data-testid={`text-submitted-${registration.id}`}>
-                        {new Date(registration.submittedAt).toLocaleDateString()}
-                      </TableCell>
+              <div className="overflow-x-auto">
+                <Table data-testid="table-registrations">
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Roll No</TableHead>
+                      <TableHead>Name</TableHead>
+                      <TableHead>Email</TableHead>
+                      <TableHead>Selected Events</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Submitted</TableHead>
+                      <TableHead>Actions</TableHead>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+                  </TableHeader>
+                  <TableBody>
+                    {registrations.map((registration: any) => (
+                      <TableRow key={registration.id} data-testid={`row-registration-${registration.id}`}>
+                        <TableCell>
+                          {registration.organizerRollNo || 'N/A'}
+                        </TableCell>
+                        <TableCell data-testid={`text-name-${registration.id}`}>
+                          {registration.organizerName || 'N/A'}
+                        </TableCell>
+                        <TableCell data-testid={`text-email-${registration.id}`}>
+                          {registration.organizerEmail || 'N/A'}
+                        </TableCell>
+                        <TableCell data-testid={`text-events-${registration.id}`}>
+                          <div className="flex flex-wrap gap-1">
+                            {registration.event ? (
+                              <Badge variant="outline" className="text-xs">
+                                {registration.event.name}
+                              </Badge>
+                            ) : (
+                              <span className="text-muted-foreground text-sm">No events</span>
+                            )}
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant={getStatusColor(registration.status)} data-testid={`badge-status-${registration.id}`}>
+                            {registration.status}
+                          </Badge>
+                        </TableCell>
+                        <TableCell data-testid={`text-submitted-${registration.id}`}>
+                          {new Date(registration.createdAt).toLocaleDateString()}
+                        </TableCell>
+                        <TableCell>
+                          {registration.status === 'pending' && (
+                            <Button
+                              size="sm"
+                              onClick={() => confirmMutation.mutate(registration.id)}
+                              disabled={confirmMutation.isPending}
+                            >
+                              {confirmMutation.isPending ? "Confirming..." : "Confirm"}
+                            </Button>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
             ) : (
               <div className="text-center py-8 text-muted-foreground" data-testid="text-no-registrations">
                 No registrations yet

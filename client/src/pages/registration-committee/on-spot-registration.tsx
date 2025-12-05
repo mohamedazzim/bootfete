@@ -145,10 +145,10 @@ export default function OnSpotRegistrationPage() {
   const nonTechnicalEvents = availableEvents.filter(e => e.category === 'non_technical');
 
   const selectedEvents = form.watch('selectedEvents');
-  const selectedTechnicalCount = selectedEvents?.filter(id => 
+  const selectedTechnicalCount = selectedEvents?.filter(id =>
     technicalEvents.some(e => e.id === id)
   ).length || 0;
-  const selectedNonTechnicalCount = selectedEvents?.filter(id => 
+  const selectedNonTechnicalCount = selectedEvents?.filter(id =>
     nonTechnicalEvents.some(e => e.id === id)
   ).length || 0;
 
@@ -156,9 +156,9 @@ export default function OnSpotRegistrationPage() {
   const hasStartTimeConflict = (eventId: string): { hasConflict: boolean; conflictingEvent?: string } => {
     const eventToCheck = availableEvents.find(e => e.id === eventId);
     if (!eventToCheck || !eventToCheck.startDate) return { hasConflict: false };
-    
+
     const eventStartTime = new Date(eventToCheck.startDate).getTime();
-    
+
     for (const selectedId of selectedEvents || []) {
       if (selectedId === eventId) continue;
       const selectedEvent = availableEvents.find(e => e.id === selectedId);
@@ -181,14 +181,14 @@ export default function OnSpotRegistrationPage() {
   const copyAllCredentials = () => {
     if (credentials) {
       let text = `Main Account Credentials:\nUsername: ${credentials.mainCredentials.username}\nPassword: ${credentials.mainCredentials.password}\nEmail: ${credentials.mainCredentials.email}\n\n`;
-      
+
       if (credentials.eventCredentials && credentials.eventCredentials.length > 0) {
         text += `Event-Specific Credentials:\n`;
         credentials.eventCredentials.forEach((event) => {
           text += `\n${event.eventName}:\nEvent Username: ${event.eventUsername}\nEvent Password: ${event.eventPassword}\n`;
         });
       }
-      
+
       navigator.clipboard.writeText(text);
       toast({
         title: "Copied",
@@ -233,11 +233,11 @@ export default function OnSpotRegistrationPage() {
           'Authorization': `Bearer ${token}`
         }
       });
-      
+
       if (!response.ok) {
         throw new Error('Failed to export CSV');
       }
-      
+
       const blob = await response.blob();
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -245,7 +245,7 @@ export default function OnSpotRegistrationPage() {
       a.download = 'participants-credentials.csv';
       a.click();
       window.URL.revokeObjectURL(url);
-      
+
       toast({
         title: "Success",
         description: "CSV exported successfully",
@@ -270,11 +270,11 @@ export default function OnSpotRegistrationPage() {
           'Authorization': `Bearer ${token}`
         }
       });
-      
+
       if (!response.ok) {
         throw new Error('Failed to export PDF');
       }
-      
+
       const blob = await response.blob();
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -282,7 +282,7 @@ export default function OnSpotRegistrationPage() {
       a.download = 'participants-credentials.pdf';
       a.click();
       window.URL.revokeObjectURL(url);
-      
+
       toast({
         title: "Success",
         description: "PDF exported successfully",
@@ -300,7 +300,7 @@ export default function OnSpotRegistrationPage() {
 
   return (
     <RegistrationCommitteeLayout>
-      <div className="container mx-auto p-6 max-w-7xl" data-testid="page-on-spot-registration">
+      <div className="container mx-auto p-4 md:p-6 max-w-7xl" data-testid="page-on-spot-registration">
         <div className="mb-6">
           <h1 className="text-3xl font-bold" data-testid="heading-on-spot-registration">On-Spot Registration</h1>
           <p className="text-muted-foreground">Register participants directly and manage on-spot registrations</p>
@@ -383,7 +383,7 @@ export default function OnSpotRegistrationPage() {
                                     control={form.control}
                                     name="selectedEvents"
                                     render={({ field }) => {
-                                      const isDisabled = !field.value?.includes(event.id) && 
+                                      const isDisabled = !field.value?.includes(event.id) &&
                                         (selectedTechnicalCount >= 1 || isEventDisabledByConflict(event.id));
                                       return (
                                         <FormItem
@@ -398,8 +398,8 @@ export default function OnSpotRegistrationPage() {
                                                 return checked
                                                   ? field.onChange([...field.value, event.id])
                                                   : field.onChange(
-                                                      field.value?.filter((value) => value !== event.id)
-                                                    );
+                                                    field.value?.filter((value) => value !== event.id)
+                                                  );
                                               }}
                                               data-testid={`checkbox-event-${event.id}`}
                                             />
@@ -433,7 +433,7 @@ export default function OnSpotRegistrationPage() {
                                     control={form.control}
                                     name="selectedEvents"
                                     render={({ field }) => {
-                                      const isDisabled = !field.value?.includes(event.id) && 
+                                      const isDisabled = !field.value?.includes(event.id) &&
                                         (selectedNonTechnicalCount >= 1 || isEventDisabledByConflict(event.id));
                                       return (
                                         <FormItem
@@ -448,8 +448,8 @@ export default function OnSpotRegistrationPage() {
                                                 return checked
                                                   ? field.onChange([...field.value, event.id])
                                                   : field.onChange(
-                                                      field.value?.filter((value) => value !== event.id)
-                                                    );
+                                                    field.value?.filter((value) => value !== event.id)
+                                                  );
                                               }}
                                               data-testid={`checkbox-event-${event.id}`}
                                             />
@@ -478,8 +478,8 @@ export default function OnSpotRegistrationPage() {
                     )}
                   />
 
-                  <Button 
-                    type="submit" 
+                  <Button
+                    type="submit"
                     disabled={createMutation.isPending}
                     data-testid="button-submit"
                   >
@@ -522,69 +522,71 @@ export default function OnSpotRegistrationPage() {
               {isLoading ? (
                 <div data-testid="loading-participants">Loading participants...</div>
               ) : participants && participants.length > 0 ? (
-                <Table data-testid="table-participants">
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Name</TableHead>
-                      <TableHead>Email</TableHead>
-                      <TableHead>Phone</TableHead>
-                      <TableHead>Events</TableHead>
-                      <TableHead>Registered</TableHead>
-                      <TableHead>Actions</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {participants.map((participant) => (
-                      <TableRow key={participant.id} data-testid={`row-participant-${participant.id}`}>
-                        <TableCell data-testid={`text-name-${participant.id}`}>
-                          {participant.fullName}
-                        </TableCell>
-                        <TableCell data-testid={`text-email-${participant.id}`}>
-                          {participant.email}
-                        </TableCell>
-                        <TableCell data-testid={`text-phone-${participant.id}`}>
-                          {participant.phone || 'N/A'}
-                        </TableCell>
-                        <TableCell data-testid={`text-events-${participant.id}`}>
-                          <div className="flex flex-wrap gap-1">
-                            {participant.eventCredentials && participant.eventCredentials.length > 0 ? (
-                              participant.eventCredentials.map((cred: EventCredential & { event: Event }) => (
-                                <Badge key={cred.id} variant="outline" className="text-xs">
-                                  {cred.event.name}
-                                </Badge>
-                              ))
-                            ) : (
-                              <span className="text-muted-foreground text-sm">No events</span>
-                            )}
-                          </div>
-                        </TableCell>
-                        <TableCell data-testid={`text-created-${participant.id}`}>
-                          {new Date(participant.createdAt).toLocaleDateString()}
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex gap-2">
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => handleEdit(participant)}
-                              data-testid={`button-edit-${participant.id}`}
-                            >
-                              <Pencil className="h-4 w-4" />
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="destructive"
-                              onClick={() => setDeletingParticipant(participant)}
-                              data-testid={`button-delete-${participant.id}`}
-                            >
-                              <Trash2 className="h-4 w-4" />
-                            </Button>
-                          </div>
-                        </TableCell>
+                <div className="overflow-x-auto">
+                  <Table data-testid="table-participants">
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Name</TableHead>
+                        <TableHead>Email</TableHead>
+                        <TableHead>Phone</TableHead>
+                        <TableHead>Events</TableHead>
+                        <TableHead>Registered</TableHead>
+                        <TableHead>Actions</TableHead>
                       </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+                    </TableHeader>
+                    <TableBody>
+                      {participants.map((participant) => (
+                        <TableRow key={participant.id} data-testid={`row-participant-${participant.id}`}>
+                          <TableCell data-testid={`text-name-${participant.id}`}>
+                            {participant.fullName}
+                          </TableCell>
+                          <TableCell data-testid={`text-email-${participant.id}`}>
+                            {participant.email}
+                          </TableCell>
+                          <TableCell data-testid={`text-phone-${participant.id}`}>
+                            {participant.phone || 'N/A'}
+                          </TableCell>
+                          <TableCell data-testid={`text-events-${participant.id}`}>
+                            <div className="flex flex-wrap gap-1">
+                              {participant.eventCredentials && participant.eventCredentials.length > 0 ? (
+                                participant.eventCredentials.map((cred: EventCredential & { event: Event }) => (
+                                  <Badge key={cred.id} variant="outline" className="text-xs">
+                                    {cred.event.name}
+                                  </Badge>
+                                ))
+                              ) : (
+                                <span className="text-muted-foreground text-sm">No events</span>
+                              )}
+                            </div>
+                          </TableCell>
+                          <TableCell data-testid={`text-created-${participant.id}`}>
+                            {new Date(participant.createdAt).toLocaleDateString()}
+                          </TableCell>
+                          <TableCell>
+                            <div className="flex gap-2">
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => handleEdit(participant)}
+                                data-testid={`button-edit-${participant.id}`}
+                              >
+                                <Pencil className="h-4 w-4" />
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="destructive"
+                                onClick={() => setDeletingParticipant(participant)}
+                                data-testid={`button-delete-${participant.id}`}
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
               ) : (
                 <div className="text-center py-8 text-muted-foreground" data-testid="text-no-participants">
                   No on-spot registered participants yet

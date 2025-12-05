@@ -56,8 +56,8 @@ export default function EventAdminDashboard() {
         <div className="max-w-5xl mx-auto">
           {/* Header Section */}
           <div className="text-center mb-12">
-            <h1 
-              className="text-5xl font-bold text-gray-900 mb-4"
+            <h1
+              className="text-3xl md:text-5xl font-bold text-gray-900 mb-4"
               data-testid="text-event-name"
             >
               {event.name}
@@ -82,7 +82,7 @@ export default function EventAdminDashboard() {
             </CardHeader>
             <CardContent className="py-8">
               <div className="text-center">
-                <div 
+                <div
                   className="text-6xl font-bold text-indigo-600 mb-2"
                   data-testid="text-participant-count"
                 >
@@ -96,7 +96,7 @@ export default function EventAdminDashboard() {
           {/* Action Buttons */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             {/* Manage Settings Button */}
-            <Card 
+            <Card
               className="cursor-pointer hover:shadow-2xl transition-all duration-300 transform hover:-translate-y-1 border-2 hover:border-indigo-400"
               onClick={() => setLocation(`/event-admin/events/${event.id}`)}
             >
@@ -111,7 +111,7 @@ export default function EventAdminDashboard() {
                   <p className="text-gray-600 mb-6">
                     Configure event details, rules, and participant management
                   </p>
-                  <Button 
+                  <Button
                     className="w-full bg-indigo-600 hover:bg-indigo-700 text-white py-6 text-lg font-semibold"
                     data-testid="button-manage-settings"
                   >
@@ -122,7 +122,7 @@ export default function EventAdminDashboard() {
             </Card>
 
             {/* Test Control Button */}
-            <Card 
+            <Card
               className="cursor-pointer hover:shadow-2xl transition-all duration-300 transform hover:-translate-y-1 border-2 hover:border-purple-400"
               onClick={() => setLocation(`/event-admin/events/${event.id}/rounds`)}
             >
@@ -137,7 +137,7 @@ export default function EventAdminDashboard() {
                   <p className="text-gray-600 mb-6">
                     Manage rounds, questions, and monitor test progress
                   </p>
-                  <Button 
+                  <Button
                     className="w-full bg-purple-600 hover:bg-purple-700 text-white py-6 text-lg font-semibold"
                     data-testid="button-test-control"
                   >

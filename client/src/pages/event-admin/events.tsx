@@ -35,7 +35,7 @@ export default function EventAdminEventsPage() {
 
   return (
     <EventAdminLayout>
-      <div className="p-8">
+      <div className="p-4 md:p-8">
         <div className="mb-6">
           <h1 className="text-3xl font-bold text-gray-900" data-testid="heading-my-events">My Events</h1>
           <p className="text-gray-600 mt-1">Manage your assigned events</p>
@@ -53,71 +53,73 @@ export default function EventAdminEventsPage() {
                 No events assigned to you yet
               </div>
             ) : (
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Event Name</TableHead>
-                    <TableHead>Type</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Start Date</TableHead>
-                    <TableHead className="text-right">Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {myEvents.map((event) => (
-                    <TableRow key={event.id} data-testid={`row-event-${event.id}`}>
-                      <TableCell className="font-medium" data-testid={`text-event-name-${event.id}`}>
-                        {event.name}
-                      </TableCell>
-                      <TableCell className="capitalize">{event.type}</TableCell>
-                      <TableCell>{getStatusBadge(event.status)}</TableCell>
-                      <TableCell>
-                        {event.startDate ? new Date(event.startDate).toLocaleDateString() : '-'}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <div className="flex justify-end gap-2">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => setLocation(`/event-admin/events/${event.id}`)}
-                            data-testid={`button-view-${event.id}`}
-                            title="View Details"
-                          >
-                            <Eye className="h-4 w-4" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => setLocation(`/event-admin/events/${event.id}/rules`)}
-                            data-testid={`button-rules-${event.id}`}
-                            title="Configure Rules"
-                          >
-                            <Settings className="h-4 w-4" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => setLocation(`/event-admin/events/${event.id}/rounds`)}
-                            data-testid={`button-rounds-${event.id}`}
-                            title="Manage Rounds"
-                          >
-                            <FileQuestion className="h-4 w-4" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => setLocation(`/event-admin/events/${event.id}/participants`)}
-                            data-testid={`button-participants-${event.id}`}
-                            title="View Participants"
-                          >
-                            <Users className="h-4 w-4" />
-                          </Button>
-                        </div>
-                      </TableCell>
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Event Name</TableHead>
+                      <TableHead>Type</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Start Date</TableHead>
+                      <TableHead className="text-right">Actions</TableHead>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+                  </TableHeader>
+                  <TableBody>
+                    {myEvents.map((event) => (
+                      <TableRow key={event.id} data-testid={`row-event-${event.id}`}>
+                        <TableCell className="font-medium" data-testid={`text-event-name-${event.id}`}>
+                          {event.name}
+                        </TableCell>
+                        <TableCell className="capitalize">{event.type}</TableCell>
+                        <TableCell>{getStatusBadge(event.status)}</TableCell>
+                        <TableCell>
+                          {event.startDate ? new Date(event.startDate).toLocaleDateString() : '-'}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <div className="flex justify-end gap-2">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => setLocation(`/event-admin/events/${event.id}`)}
+                              data-testid={`button-view-${event.id}`}
+                              title="View Details"
+                            >
+                              <Eye className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => setLocation(`/event-admin/events/${event.id}/rules`)}
+                              data-testid={`button-rules-${event.id}`}
+                              title="Configure Rules"
+                            >
+                              <Settings className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => setLocation(`/event-admin/events/${event.id}/rounds`)}
+                              data-testid={`button-rounds-${event.id}`}
+                              title="Manage Rounds"
+                            >
+                              <FileQuestion className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => setLocation(`/event-admin/events/${event.id}/participants`)}
+                              data-testid={`button-participants-${event.id}`}
+                              title="View Participants"
+                            >
+                              <Users className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
             )}
           </CardContent>
         </Card>

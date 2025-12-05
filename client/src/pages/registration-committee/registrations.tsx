@@ -7,28 +7,31 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
-import { Copy, CheckCircle, Search, Filter, X } from "lucide-react";
+import { Copy, CheckCircle, Search, Filter, X, Users } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import RegistrationCommitteeLayout from "@/components/layouts/RegistrationCommitteeLayout";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import type { Registration, Event } from "@shared/schema";
+import type { Registration, Event, TeamMember } from "@shared/schema";
+
+interface RegistrationWithDetails extends Registration {
+  event?: Event;
+  teamMembers?: TeamMember[];
+}
 
 export default function RegistrationCommitteeRegistrationsPage() {
   const { toast } = useToast();
-  const [selectedRegistration, setSelectedRegistration] = useState<Registration | null>(null);
-  const [credentials, setCredentials] = useState<{
-    main: { username: string; password: string; email: string };
-    events: Array<{ eventId: string; eventName: string; eventUsername: string; eventPassword: string }>;
-  } | null>(null);
+  const [selectedRegistration, setSelectedRegistration] = useState<RegistrationWithDetails | null>(null);
   const [showCredentials, setShowCredentials] = useState(false);
-  
+  const [credentials, setCredentials] = useState<{
+    eventCredentials: Array<{ eventId: string; eventName: string; eventUsername: string; eventPassword: string }>;
+  } | null>(null);
+
   const [searchQuery, setSearchQuery] = useState("");
   const [filterEvent, setFilterEvent] = useState<string>("all");
-  const [filterCollege, setFilterCollege] = useState<string>("all");
   const [filterStatus, setFilterStatus] = useState<string>("all");
   const [groupBy, setGroupBy] = useState<string>("none");
 
-  const { data: registrations, isLoading } = useQuery<Registration[]>({
+  const { data: registrations, isLoading } = useQuery<RegistrationWithDetails[]>({
     queryKey: ['/api/registrations'],
   });
 
@@ -36,23 +39,22 @@ export default function RegistrationCommitteeRegistrationsPage() {
     queryKey: ['/api/events'],
   });
 
-  const approveMutation = useMutation({
+  const confirmMutation = useMutation({
     mutationFn: async (registrationId: string) => {
-      const response = await apiRequest('PATCH', `/api/registrations/${registrationId}/approve`);
+      const response = await apiRequest('PATCH', `/api/registrations/${registrationId}/confirm`);
       const result = await response.json();
       return result;
     },
     onSuccess: (data) => {
-      setCredentials({
-        main: data.mainCredentials,
-        events: data.eventCredentials || [],
-      });
-      setShowCredentials(true);
+      if (data.eventCredentials) {
+        setCredentials({ eventCredentials: data.eventCredentials });
+        setShowCredentials(true);
+      }
       setSelectedRegistration(null);
       queryClient.invalidateQueries({ queryKey: ['/api/registrations'] });
       toast({
         title: "Success",
-        description: "Registration approved successfully",
+        description: "Registration confirmed successfully",
       });
     },
     onError: (error: Error) => {
@@ -69,123 +71,61 @@ export default function RegistrationCommitteeRegistrationsPage() {
     return event?.name || eventId;
   };
 
-  const extractParticipantInfo = (submittedData: Record<string, string>) => {
-    const entries = Object.entries(submittedData);
-    let name = 'N/A';
-    let email = 'N/A';
-    let phone = 'N/A';
-    let college = 'N/A';
-    
-    for (const [key, value] of entries) {
-      if (!value || typeof value !== 'string') continue;
-      const lowerKey = key.toLowerCase();
-      const trimmedValue = value.trim();
-      
-      if (lowerKey.includes('email') || trimmedValue.includes('@')) {
-        email = trimmedValue;
-      } else if (lowerKey.includes('phone') || lowerKey.includes('mobile') || lowerKey.includes('contact')) {
-        phone = trimmedValue;
-      } else if (lowerKey.includes('college') || lowerKey.includes('institution') || lowerKey.includes('school') || lowerKey.includes('university')) {
-        college = trimmedValue;
-      } else if (lowerKey.includes('name') && !lowerKey.includes('college') && !lowerKey.includes('institution')) {
-        name = trimmedValue;
-      }
-    }
-    
-    if (name === 'N/A') {
-      const nameEntry = entries.find(([k, v]) => {
-        if (!v || typeof v !== 'string') return false;
-        const lowerK = k.toLowerCase();
-        return !lowerK.includes('college') && !lowerK.includes('institution') && 
-               !lowerK.includes('school') && !lowerK.includes('university') &&
-               !v.includes('@') && v.includes(' ') && v.length < 50;
-      });
-      if (nameEntry) name = nameEntry[1];
-    }
-    
-    return { name, email, phone, college };
-  };
-
-  const uniqueColleges = useMemo(() => {
-    if (!registrations) return [];
-    const colleges = new Set<string>();
-    registrations.forEach(reg => {
-      const info = extractParticipantInfo(reg.submittedData);
-      if (info.college && info.college !== 'N/A') {
-        colleges.add(info.college);
-      }
-    });
-    return Array.from(colleges).sort();
-  }, [registrations]);
-
   const filteredRegistrations = useMemo(() => {
     if (!registrations) return [];
-    
+
     return registrations.filter(reg => {
-      const info = extractParticipantInfo(reg.submittedData);
       const searchLower = searchQuery.toLowerCase();
-      
-      const matchesSearch = !searchQuery || 
-        info.name.toLowerCase().includes(searchLower) ||
-        info.email.toLowerCase().includes(searchLower) ||
-        info.phone.toLowerCase().includes(searchLower) ||
-        info.college.toLowerCase().includes(searchLower);
-      
-      const matchesEvent = filterEvent === "all" || 
-        (reg.selectedEvents && reg.selectedEvents.includes(filterEvent));
-      
-      const matchesCollege = filterCollege === "all" || 
-        info.college === filterCollege;
-      
-      const matchesStatus = filterStatus === "all" || 
-        reg.paymentStatus === filterStatus;
-      
-      return matchesSearch && matchesEvent && matchesCollege && matchesStatus;
+
+      const matchesSearch = !searchQuery ||
+        reg.organizerName.toLowerCase().includes(searchLower) ||
+        reg.organizerEmail.toLowerCase().includes(searchLower) ||
+        reg.organizerRollNo.toLowerCase().includes(searchLower) ||
+        reg.organizerDept.toLowerCase().includes(searchLower) ||
+        reg.teamMembers?.some(m =>
+          m.memberName.toLowerCase().includes(searchLower) ||
+          m.memberRollNo.toLowerCase().includes(searchLower)
+        );
+
+      const matchesEvent = filterEvent === "all" || reg.eventId === filterEvent;
+      const matchesStatus = filterStatus === "all" || reg.status === filterStatus;
+
+      return matchesSearch && matchesEvent && matchesStatus;
     });
-  }, [registrations, searchQuery, filterEvent, filterCollege, filterStatus]);
+  }, [registrations, searchQuery, filterEvent, filterStatus]);
 
   const groupedRegistrations = useMemo(() => {
     if (groupBy === "none") {
       return { "All Registrations": filteredRegistrations };
     }
-    
+
     const groups: Record<string, typeof filteredRegistrations> = {};
-    
+
     filteredRegistrations.forEach(reg => {
       let groupKey = "Other";
-      
-      if (groupBy === "college") {
-        const info = extractParticipantInfo(reg.submittedData);
-        groupKey = info.college !== 'N/A' ? info.college : "Unknown College";
-      } else if (groupBy === "event") {
-        if (reg.selectedEvents && reg.selectedEvents.length > 0) {
-          reg.selectedEvents.forEach(eventId => {
-            const eventName = getEventName(eventId);
-            if (!groups[eventName]) groups[eventName] = [];
-            groups[eventName].push(reg);
-          });
-          return;
-        } else {
-          groupKey = "No Events Selected";
-        }
+
+      if (groupBy === "event") {
+        groupKey = reg.event?.name || getEventName(reg.eventId);
       } else if (groupBy === "status") {
-        groupKey = reg.paymentStatus.charAt(0).toUpperCase() + reg.paymentStatus.slice(1);
+        groupKey = reg.status.charAt(0).toUpperCase() + reg.status.slice(1);
+      } else if (groupBy === "dept") {
+        groupKey = reg.organizerDept || "Unknown";
       }
-      
+
       if (!groups[groupKey]) groups[groupKey] = [];
       groups[groupKey].push(reg);
     });
-    
+
     return groups;
   }, [filteredRegistrations, groupBy, events]);
 
   const getStatusColor = (status: string) => {
     switch (status) {
-      case 'paid':
+      case 'confirmed':
         return 'default';
       case 'pending':
         return 'secondary';
-      case 'declined':
+      case 'cancelled':
         return 'destructive';
       default:
         return 'outline';
@@ -195,38 +135,37 @@ export default function RegistrationCommitteeRegistrationsPage() {
   const clearFilters = () => {
     setSearchQuery("");
     setFilterEvent("all");
-    setFilterCollege("all");
     setFilterStatus("all");
     setGroupBy("none");
   };
 
-  const copyAllCredentials = () => {
+  const copyCredentials = () => {
     if (credentials) {
-      let text = `Main Account Credentials:\nUsername: ${credentials.main.username}\nPassword: ${credentials.main.password}\nEmail: ${credentials.main.email}\n\n`;
-      
-      if (credentials.events && credentials.events.length > 0) {
-        text += `Event-Specific Credentials:\n`;
-        credentials.events.forEach((event) => {
-          text += `\n${event.eventName}:\nEvent Username: ${event.eventUsername}\nEvent Password: ${event.eventPassword}\n`;
-        });
-      }
-      
+      let text = `Event Credentials:\n`;
+      credentials.eventCredentials.forEach((event) => {
+        text += `\n${event.eventName}:\nUsername: ${event.eventUsername}\nPassword: ${event.eventPassword}\n`;
+      });
+
       navigator.clipboard.writeText(text);
       toast({
         title: "Copied",
-        description: "All credentials copied to clipboard",
+        description: "Credentials copied to clipboard",
       });
     }
   };
 
-  const hasActiveFilters = searchQuery || filterEvent !== "all" || filterCollege !== "all" || filterStatus !== "all" || groupBy !== "none";
+  const hasActiveFilters = searchQuery || filterEvent !== "all" || filterStatus !== "all" || groupBy !== "none";
+
+  const getTotalMembers = (reg: RegistrationWithDetails) => {
+    return 1 + (reg.teamMembers?.length || 0); // 1 for organizer + team members
+  };
 
   return (
     <RegistrationCommitteeLayout>
-      <div className="container mx-auto p-6 max-w-7xl" data-testid="page-reg-committee-registrations">
+      <div className="container mx-auto p-4 md:p-6 max-w-7xl" data-testid="page-reg-committee-registrations">
         <div className="mb-6">
           <h1 className="text-3xl font-bold" data-testid="heading-registrations">Registrations</h1>
-          <p className="text-muted-foreground">Review and approve participant registrations</p>
+          <p className="text-muted-foreground">Review and confirm participant registrations</p>
         </div>
 
         <Card className="mb-6">
@@ -237,7 +176,7 @@ export default function RegistrationCommitteeRegistrationsPage() {
                   <Filter className="h-5 w-5" />
                   Search & Filter
                 </CardTitle>
-                <CardDescription>Find registrations by name, phone, college, or event</CardDescription>
+                <CardDescription>Find registrations by name, roll number, or event</CardDescription>
               </div>
               {hasActiveFilters && (
                 <Button variant="outline" size="sm" onClick={clearFilters} data-testid="button-clear-filters">
@@ -248,12 +187,12 @@ export default function RegistrationCommitteeRegistrationsPage() {
             </div>
           </CardHeader>
           <CardContent>
-            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-5">
+            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
               <div className="lg:col-span-2">
                 <div className="relative">
                   <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                   <Input
-                    placeholder="Search by name, phone, email, college..."
+                    placeholder="Search by name, roll number, email..."
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
                     className="pl-10"
@@ -261,7 +200,7 @@ export default function RegistrationCommitteeRegistrationsPage() {
                   />
                 </div>
               </div>
-              
+
               <Select value={filterEvent} onValueChange={setFilterEvent}>
                 <SelectTrigger data-testid="select-event-filter">
                   <SelectValue placeholder="Filter by Event" />
@@ -273,19 +212,7 @@ export default function RegistrationCommitteeRegistrationsPage() {
                   ))}
                 </SelectContent>
               </Select>
-              
-              <Select value={filterCollege} onValueChange={setFilterCollege}>
-                <SelectTrigger data-testid="select-college-filter">
-                  <SelectValue placeholder="Filter by College" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Colleges</SelectItem>
-                  {uniqueColleges.map(college => (
-                    <SelectItem key={college} value={college}>{college}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              
+
               <Select value={filterStatus} onValueChange={setFilterStatus}>
                 <SelectTrigger data-testid="select-status-filter">
                   <SelectValue placeholder="Filter by Status" />
@@ -293,46 +220,46 @@ export default function RegistrationCommitteeRegistrationsPage() {
                 <SelectContent>
                   <SelectItem value="all">All Statuses</SelectItem>
                   <SelectItem value="pending">Pending</SelectItem>
-                  <SelectItem value="paid">Approved</SelectItem>
-                  <SelectItem value="declined">Declined</SelectItem>
+                  <SelectItem value="confirmed">Confirmed</SelectItem>
+                  <SelectItem value="cancelled">Cancelled</SelectItem>
                 </SelectContent>
               </Select>
             </div>
-            
+
             <div className="mt-4 flex items-center gap-2 flex-wrap">
               <span className="text-sm text-muted-foreground">Group by:</span>
               <div className="flex gap-2 flex-wrap">
-                <Button 
-                  variant={groupBy === "none" ? "default" : "outline"} 
+                <Button
+                  variant={groupBy === "none" ? "default" : "outline"}
                   size="sm"
                   onClick={() => setGroupBy("none")}
                   data-testid="button-group-none"
                 >
                   None
                 </Button>
-                <Button 
-                  variant={groupBy === "college" ? "default" : "outline"} 
-                  size="sm"
-                  onClick={() => setGroupBy("college")}
-                  data-testid="button-group-college"
-                >
-                  College
-                </Button>
-                <Button 
-                  variant={groupBy === "event" ? "default" : "outline"} 
+                <Button
+                  variant={groupBy === "event" ? "default" : "outline"}
                   size="sm"
                   onClick={() => setGroupBy("event")}
                   data-testid="button-group-event"
                 >
                   Event
                 </Button>
-                <Button 
-                  variant={groupBy === "status" ? "default" : "outline"} 
+                <Button
+                  variant={groupBy === "status" ? "default" : "outline"}
                   size="sm"
                   onClick={() => setGroupBy("status")}
                   data-testid="button-group-status"
                 >
                   Status
+                </Button>
+                <Button
+                  variant={groupBy === "dept" ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setGroupBy("dept")}
+                  data-testid="button-group-dept"
+                >
+                  Department
                 </Button>
               </div>
               <span className="ml-auto text-sm text-muted-foreground">
@@ -352,69 +279,72 @@ export default function RegistrationCommitteeRegistrationsPage() {
             </CardHeader>
             <CardContent>
               {groupRegs.length > 0 ? (
-                <Table data-testid={`table-registrations-${groupName}`}>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Name</TableHead>
-                      <TableHead>Phone</TableHead>
-                      <TableHead>Registered Events</TableHead>
-                      <TableHead>College Name</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead>Submitted</TableHead>
-                      <TableHead>Actions</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {groupRegs.map((registration: any) => {
-                      const info = extractParticipantInfo(registration.submittedData);
-                      return (
+                <div className="overflow-x-auto">
+                  <Table data-testid={`table-registrations-${groupName}`}>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Organizer</TableHead>
+                        <TableHead>Roll No</TableHead>
+                        <TableHead>Event</TableHead>
+                        <TableHead>Team Size</TableHead>
+                        <TableHead>Type</TableHead>
+                        <TableHead>Status</TableHead>
+                        <TableHead>Date</TableHead>
+                        <TableHead>Actions</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {groupRegs.map((registration: RegistrationWithDetails) => (
                         <TableRow key={registration.id} data-testid={`row-registration-${registration.id}`}>
-                          <TableCell data-testid={`text-name-${registration.id}`}>
-                            {info.name}
-                          </TableCell>
-                          <TableCell data-testid={`text-phone-${registration.id}`}>
-                            {info.phone}
-                          </TableCell>
-                          <TableCell data-testid={`text-events-${registration.id}`}>
-                            <div className="flex flex-wrap gap-1">
-                              {registration.selectedEvents && registration.selectedEvents.length > 0 ? (
-                                registration.selectedEvents.map((eventId: string) => (
-                                  <Badge key={eventId} variant="outline" className="text-xs">
-                                    {getEventName(eventId)}
-                                  </Badge>
-                                ))
-                              ) : (
-                                <span className="text-muted-foreground text-sm">No events</span>
-                              )}
+                          <TableCell>
+                            <div>
+                              <p className="font-medium">{registration.organizerName}</p>
+                              <p className="text-sm text-muted-foreground">{registration.organizerEmail}</p>
                             </div>
                           </TableCell>
-                          <TableCell data-testid={`text-college-${registration.id}`}>
-                            {info.college}
+                          <TableCell>
+                            <code className="text-sm">{registration.organizerRollNo}</code>
                           </TableCell>
                           <TableCell>
-                            <Badge variant={getStatusColor(registration.paymentStatus)} data-testid={`badge-status-${registration.id}`}>
-                              {registration.paymentStatus}
+                            <Badge variant="outline">
+                              {registration.event?.name || getEventName(registration.eventId)}
                             </Badge>
                           </TableCell>
-                          <TableCell data-testid={`text-submitted-${registration.id}`}>
-                            {new Date(registration.submittedAt).toLocaleDateString()}
+                          <TableCell>
+                            <div className="flex items-center gap-1">
+                              <Users className="h-4 w-4 text-muted-foreground" />
+                              <span>{getTotalMembers(registration)}</span>
+                            </div>
                           </TableCell>
                           <TableCell>
-                            {registration.paymentStatus === 'pending' && (
+                            <Badge variant="secondary">
+                              {registration.registrationType}
+                            </Badge>
+                          </TableCell>
+                          <TableCell>
+                            <Badge variant={getStatusColor(registration.status)}>
+                              {registration.status}
+                            </Badge>
+                          </TableCell>
+                          <TableCell>
+                            {new Date(registration.createdAt).toLocaleDateString()}
+                          </TableCell>
+                          <TableCell>
+                            {registration.status === 'pending' && (
                               <Button
                                 size="sm"
                                 onClick={() => setSelectedRegistration(registration)}
-                                data-testid={`button-approve-${registration.id}`}
+                                data-testid={`button-confirm-${registration.id}`}
                               >
-                                Approve
+                                Confirm
                               </Button>
                             )}
                           </TableCell>
                         </TableRow>
-                      );
-                    })}
-                  </TableBody>
-                </Table>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
               ) : (
                 <div className="text-center py-8 text-muted-foreground" data-testid="text-no-registrations">
                   No registrations match your filters
@@ -434,44 +364,68 @@ export default function RegistrationCommitteeRegistrationsPage() {
           </Card>
         )}
 
+        {/* Confirm Registration Dialog */}
         <Dialog open={!!selectedRegistration} onOpenChange={(open) => !open && setSelectedRegistration(null)}>
-          <DialogContent data-testid="dialog-approve">
+          <DialogContent className="max-w-2xl" data-testid="dialog-confirm">
             <DialogHeader>
-              <DialogTitle data-testid="dialog-title">Approve Registration</DialogTitle>
+              <DialogTitle data-testid="dialog-title">Confirm Registration</DialogTitle>
               <DialogDescription data-testid="dialog-description">
-                Review the registration details and mark as paid to create participant credentials
+                Review the registration details and confirm to create participant credentials
               </DialogDescription>
             </DialogHeader>
             {selectedRegistration && (
-              <div className="space-y-3" data-testid="registration-details">
-                <div className="space-y-2">
-                  <h3 className="font-semibold text-base">Submitted Information:</h3>
-                  {Object.entries(selectedRegistration.submittedData).map(([key, value]) => (
-                    <div key={key} className="text-sm">
-                      <span className="font-medium">{value}</span>
-                    </div>
-                  ))}
-                </div>
-                <div>
-                  <span className="font-medium">Selected Events: </span>
-                  <div className="flex flex-wrap gap-1 mt-1">
-                    {selectedRegistration.selectedEvents && selectedRegistration.selectedEvents.length > 0 ? (
-                      selectedRegistration.selectedEvents.map((eventId) => (
-                        <Badge key={eventId} variant="secondary">
-                          {getEventName(eventId)}
-                        </Badge>
-                      ))
-                    ) : (
-                      <span className="text-muted-foreground text-sm">No events selected</span>
-                    )}
+              <div className="space-y-4" data-testid="registration-details">
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <p className="text-sm text-muted-foreground">Organizer</p>
+                    <p className="font-medium">{selectedRegistration.organizerName}</p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-muted-foreground">Roll No</p>
+                    <p className="font-medium">{selectedRegistration.organizerRollNo}</p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-muted-foreground">Email</p>
+                    <p className="font-medium">{selectedRegistration.organizerEmail}</p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-muted-foreground">Department</p>
+                    <p className="font-medium">{selectedRegistration.organizerDept}</p>
                   </div>
                 </div>
+
+                <div>
+                  <p className="text-sm text-muted-foreground mb-2">Event</p>
+                  <Badge variant="outline" className="text-base py-1 px-3">
+                    {selectedRegistration.event?.name || getEventName(selectedRegistration.eventId)}
+                  </Badge>
+                </div>
+
+                {selectedRegistration.teamMembers && selectedRegistration.teamMembers.length > 0 && (
+                  <div>
+                    <p className="text-sm text-muted-foreground mb-2">
+                      Team Members ({selectedRegistration.teamMembers.length})
+                    </p>
+                    <div className="space-y-2">
+                      {selectedRegistration.teamMembers.map((member) => (
+                        <div key={member.id} className="flex items-center justify-between p-2 bg-muted rounded">
+                          <div>
+                            <p className="font-medium">{member.memberName}</p>
+                            <p className="text-sm text-muted-foreground">{member.memberEmail}</p>
+                          </div>
+                          <code className="text-sm">{member.memberRollNo}</code>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 <div className="bg-muted/50 p-3 rounded-md text-sm">
                   <p className="font-medium mb-1">What will happen:</p>
                   <ul className="space-y-1 text-muted-foreground">
-                    <li>Participant account will be created</li>
-                    <li>User will be registered for all {selectedRegistration.selectedEvents?.length || 0} selected event(s)</li>
-                    <li>Login credentials will be generated</li>
+                    <li>• Event credentials will be created for all team members</li>
+                    <li>• Total {getTotalMembers(selectedRegistration)} participant(s) will be registered</li>
+                    <li>• Credentials will be shown for distribution</li>
                   </ul>
                 </div>
               </div>
@@ -481,84 +435,57 @@ export default function RegistrationCommitteeRegistrationsPage() {
                 Cancel
               </Button>
               <Button
-                onClick={() => selectedRegistration && approveMutation.mutate(selectedRegistration.id)}
-                disabled={approveMutation.isPending}
+                onClick={() => selectedRegistration && confirmMutation.mutate(selectedRegistration.id)}
+                disabled={confirmMutation.isPending}
                 data-testid="button-confirm-approve"
               >
-                {approveMutation.isPending ? 'Approving...' : 'Mark as Paid & Create Account'}
+                {confirmMutation.isPending ? 'Confirming...' : 'Confirm & Create Credentials'}
               </Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>
 
+        {/* Credentials Dialog */}
         <Dialog open={showCredentials} onOpenChange={setShowCredentials}>
-          <DialogContent className="max-w-3xl" data-testid="dialog-credentials">
+          <DialogContent className="max-w-2xl" data-testid="dialog-credentials">
             <DialogHeader>
               <DialogTitle data-testid="credentials-title">
                 <CheckCircle className="h-6 w-6 text-green-600 inline mr-2" />
-                Registration Approved
+                Registration Confirmed
               </DialogTitle>
               <DialogDescription data-testid="credentials-description">
-                Participant account created successfully. Share these credentials with the participant.
+                Share these credentials with the participants.
               </DialogDescription>
             </DialogHeader>
             {credentials && (
               <div className="space-y-4" data-testid="credentials-info">
-                <div className="p-4 bg-gray-50 dark:bg-gray-900 rounded-md">
-                  <h3 className="font-semibold mb-2">Main Account Credentials</h3>
-                  <div className="space-y-1 text-sm">
-                    <div>
-                      <span className="font-medium">Username: </span>
-                      <code data-testid="text-main-username">{credentials.main.username}</code>
-                    </div>
-                    <div>
-                      <span className="font-medium">Password: </span>
-                      <code data-testid="text-main-password">{credentials.main.password}</code>
-                    </div>
-                    <div>
-                      <span className="font-medium">Email: </span>
-                      <code data-testid="text-main-email">{credentials.main.email}</code>
+                {credentials.eventCredentials.map((event) => (
+                  <div key={event.eventId} className="p-4 bg-blue-50 dark:bg-blue-950 rounded-md">
+                    <p className="font-semibold text-blue-900 dark:text-blue-100 mb-2">{event.eventName}</p>
+                    <div className="grid grid-cols-2 gap-4 text-sm">
+                      <div>
+                        <span className="text-muted-foreground">Username:</span>
+                        <code className="ml-2 font-mono">{event.eventUsername}</code>
+                      </div>
+                      <div>
+                        <span className="text-muted-foreground">Password:</span>
+                        <code className="ml-2 font-mono">{event.eventPassword}</code>
+                      </div>
                     </div>
                   </div>
-                </div>
-
-                {credentials.events && credentials.events.length > 0 && (
-                  <div>
-                    <h3 className="font-semibold mb-2">Event-Specific Credentials</h3>
-                    <p className="text-sm text-muted-foreground mb-2">
-                      These credentials will be visible to event admins for their respective events.
-                    </p>
-                    <div className="space-y-2">
-                      {credentials.events.map((event) => (
-                        <div key={event.eventId} className="p-3 bg-blue-50 dark:bg-blue-950 rounded-md" data-testid={`event-cred-${event.eventId}`}>
-                          <p className="font-semibold text-blue-900 dark:text-blue-100 mb-1">{event.eventName}</p>
-                          <div className="text-sm space-y-0.5">
-                            <div>
-                              <span className="font-medium">Event Username: </span>
-                              <code className="text-xs">{event.eventUsername}</code>
-                            </div>
-                            <div>
-                              <span className="font-medium">Event Password: </span>
-                              <code className="text-xs">{event.eventPassword}</code>
-                            </div>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
+                ))}
 
                 <div className="p-3 bg-yellow-50 dark:bg-yellow-950 border border-yellow-200 dark:border-yellow-800 rounded-md">
                   <p className="text-sm text-yellow-800 dark:text-yellow-200">
-                    Important: These credentials will only be shown once. Make sure to save and share them with the participant.
+                    Important: Make sure to save and share these credentials with the participants.
                   </p>
                 </div>
               </div>
             )}
             <DialogFooter>
-              <Button onClick={copyAllCredentials} variant="outline" data-testid="button-copy-credentials">
+              <Button onClick={copyCredentials} variant="outline" data-testid="button-copy-credentials">
                 <Copy className="h-4 w-4 mr-2" />
-                Copy All Credentials
+                Copy Credentials
               </Button>
               <Button onClick={() => {
                 setShowCredentials(false);

@@ -539,7 +539,7 @@ export default function TakeTestPage() {
   if (!hasStarted) {
     return (
       <ParticipantLayout>
-        <div className="p-8 max-w-3xl mx-auto">
+        <div className="p-4 md:p-8 max-w-3xl mx-auto">
           <Card>
             <CardHeader className="text-center">
               <CardTitle className="text-2xl">Ready to Start Test?</CardTitle>
@@ -664,7 +664,7 @@ export default function TakeTestPage() {
         </div>
       )}
 
-      <div className="p-8 max-w-5xl mx-auto">
+      <div className="p-4 md:p-8 max-w-5xl mx-auto">
         {/* Header with timer and progress */}
         <div className="mb-6 flex justify-between items-center">
           <div>

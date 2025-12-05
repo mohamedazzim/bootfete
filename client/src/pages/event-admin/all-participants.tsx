@@ -38,7 +38,7 @@ export default function AllParticipantsPage() {
     if (!participants) return [];
 
     return participants.filter(participant => {
-      const matchesSearch = 
+      const matchesSearch =
         participant.user.fullName.toLowerCase().includes(searchTerm.toLowerCase()) ||
         participant.user.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
         participant.event.name.toLowerCase().includes(searchTerm.toLowerCase());
@@ -97,7 +97,7 @@ export default function AllParticipantsPage() {
 
   return (
     <EventAdminLayout>
-      <div className="p-8">
+      <div className="p-4 md:p-8">
         <div className="mb-6">
           <div className="flex items-start justify-between">
             <div>
@@ -204,12 +204,12 @@ export default function AllParticipantsPage() {
                           </TableCell>
                           <TableCell>{getStatusBadge(participant.status)}</TableCell>
                           <TableCell data-testid={`text-registration-date-${participant.id}`}>
-                            {participant.registeredAt 
+                            {participant.registeredAt
                               ? new Date(participant.registeredAt).toLocaleDateString('en-US', {
-                                  year: 'numeric',
-                                  month: 'short',
-                                  day: 'numeric'
-                                })
+                                year: 'numeric',
+                                month: 'short',
+                                day: 'numeric'
+                              })
                               : '-'}
                           </TableCell>
                         </TableRow>
@@ -262,8 +262,8 @@ export default function AllParticipantsPage() {
                       <p className="text-sm text-gray-500">No events with participants</p>
                     ) : (
                       statisticsByEvent.map((stat) => (
-                        <div 
-                          key={stat.eventId} 
+                        <div
+                          key={stat.eventId}
                           className="flex justify-between items-center text-sm"
                           data-testid={`stat-event-${stat.eventId}`}
                         >

@@ -33,7 +33,7 @@ export default function AdminDashboard() {
 
   return (
     <AdminLayout>
-      <div className="p-8">
+      <div className="p-4 md:p-8">
         <div className="mb-8">
           <h1 className="text-3xl font-bold text-gray-900">Dashboard</h1>
           <p className="text-gray-600 mt-2">Welcome back, {user.fullName}</p>
@@ -119,20 +119,20 @@ export default function AdminDashboard() {
             <Button className="w-full" variant="outline" onClick={() => setLocation('/admin/event-admins/create')} data-testid="button-create-admin">
               Create Event Admin Account
             </Button>
-            <Button 
-              className="w-full" 
-              variant="outline" 
-              onClick={() => setLocation('/admin/registration-forms/create')} 
+            <Button
+              className="w-full"
+              variant="outline"
+              onClick={() => setLocation('/admin/registration-forms/create')}
               data-testid="button-create-registration-form"
               disabled={events.length === 0}
               title={events.length === 0 ? "Create at least one event first" : "Create registration form"}
             >
               Create Registration Form
             </Button>
-            <Button 
-              className="w-full" 
-              variant="outline" 
-              onClick={() => setLocation('/admin/registration-committee/create')} 
+            <Button
+              className="w-full"
+              variant="outline"
+              onClick={() => setLocation('/admin/registration-committee/create')}
               data-testid="button-create-registration-committee"
             >
               Create Registration Committee Account

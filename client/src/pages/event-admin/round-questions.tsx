@@ -68,7 +68,7 @@ export default function RoundQuestionsPage() {
   if (isLoading) {
     return (
       <EventAdminLayout>
-        <div className="p-8">
+        <div className="p-4 md:p-8">
           <div className="text-center py-12" data-testid="loading-questions">Loading questions...</div>
         </div>
       </EventAdminLayout>
@@ -77,7 +77,7 @@ export default function RoundQuestionsPage() {
 
   return (
     <EventAdminLayout>
-      <div className="p-8">
+      <div className="p-4 md:p-8">
         <div className="mb-6">
           <Button
             variant="ghost"
@@ -88,16 +88,17 @@ export default function RoundQuestionsPage() {
             <ArrowLeft className="mr-2 h-4 w-4" />
             Back to Rounds
           </Button>
-          <div className="flex justify-between items-start">
+          <div className="flex flex-col md:flex-row justify-between items-start gap-4">
             <div>
               <h1 className="text-3xl font-bold text-gray-900" data-testid="heading-questions">Questions Management</h1>
               <p className="text-gray-600 mt-1">Manage questions for this round</p>
             </div>
-            <div className="flex gap-2">
+            <div className="flex gap-2 w-full md:w-auto">
               <Button
                 variant="outline"
                 onClick={() => setLocation(`/event-admin/rounds/${roundId}/questions/bulk-upload`)}
                 data-testid="button-bulk-upload"
+                className="flex-1 md:flex-none"
               >
                 <FileQuestion className="mr-2 h-4 w-4" />
                 Bulk Upload
@@ -105,6 +106,7 @@ export default function RoundQuestionsPage() {
               <Button
                 onClick={() => setLocation(`/event-admin/rounds/${roundId}/questions/new`)}
                 data-testid="button-create-question"
+                className="flex-1 md:flex-none"
               >
                 <Plus className="mr-2 h-4 w-4" />
                 Add Question
@@ -137,54 +139,56 @@ export default function RoundQuestionsPage() {
                 </Button>
               </div>
             ) : (
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Q#</TableHead>
-                    <TableHead>Type</TableHead>
-                    <TableHead>Question</TableHead>
-                    <TableHead>Points</TableHead>
-                    <TableHead className="text-right">Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {questions.map((question) => (
-                    <TableRow key={question.id} data-testid={`row-question-${question.id}`}>
-                      <TableCell className="font-medium" data-testid={`text-question-number-${question.id}`}>
-                        {question.questionNumber}
-                      </TableCell>
-                      <TableCell>{getQuestionTypeBadge(question.questionType)}</TableCell>
-                      <TableCell className="max-w-md truncate">
-                        {question.questionText}
-                      </TableCell>
-                      <TableCell>{question.points}</TableCell>
-                      <TableCell className="text-right">
-                        <div className="flex justify-end gap-2">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => setLocation(`/event-admin/rounds/${roundId}/questions/${question.id}/edit`)}
-                            data-testid={`button-edit-${question.id}`}
-                            title="Edit Question"
-                          >
-                            <Edit className="h-4 w-4" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => setQuestionToDelete(question)}
-                            data-testid={`button-delete-${question.id}`}
-                            title="Delete Question"
-                            className="text-destructive hover:text-destructive"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
-                        </div>
-                      </TableCell>
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Q#</TableHead>
+                      <TableHead>Type</TableHead>
+                      <TableHead>Question</TableHead>
+                      <TableHead>Points</TableHead>
+                      <TableHead className="text-right">Actions</TableHead>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+                  </TableHeader>
+                  <TableBody>
+                    {questions.map((question) => (
+                      <TableRow key={question.id} data-testid={`row-question-${question.id}`}>
+                        <TableCell className="font-medium" data-testid={`text-question-number-${question.id}`}>
+                          {question.questionNumber}
+                        </TableCell>
+                        <TableCell>{getQuestionTypeBadge(question.questionType)}</TableCell>
+                        <TableCell className="max-w-md truncate">
+                          {question.questionText}
+                        </TableCell>
+                        <TableCell>{question.points}</TableCell>
+                        <TableCell className="text-right">
+                          <div className="flex justify-end gap-2">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => setLocation(`/event-admin/rounds/${roundId}/questions/${question.id}/edit`)}
+                              data-testid={`button-edit-${question.id}`}
+                              title="Edit Question"
+                            >
+                              <Edit className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => setQuestionToDelete(question)}
+                              data-testid={`button-delete-${question.id}`}
+                              title="Delete Question"
+                              className="text-destructive hover:text-destructive"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
             )}
           </CardContent>
         </Card>

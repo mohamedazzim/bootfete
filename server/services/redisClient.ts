@@ -1,5 +1,6 @@
 import Redis from 'ioredis';
 import "dotenv/config";
+import { metricsService } from './metricsService';
 
 class RedisClient {
   private static instance: RedisClient;
@@ -40,16 +41,19 @@ class RedisClient {
         console.log('Redis client connected');
         this.isConnected = true;
         this.connectionRetries = 0;
+        metricsService.setRedisConnected(true);
       });
 
       this.client.on('error', (err) => {
         console.error('Redis client error:', err);
         this.isConnected = false;
+        metricsService.setRedisConnected(false);
       });
 
       this.client.on('close', () => {
         console.warn('Redis connection closed');
         this.isConnected = false;
+        metricsService.setRedisConnected(false);
       });
 
     } catch (error) {

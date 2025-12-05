@@ -27,7 +27,7 @@ export default function RegistrationFormEditPage() {
   const [, setLocation] = useLocation();
   const [, params] = useRoute('/admin/registration-forms/:id/edit');
   const formId = params?.id;
-  
+
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [headerImage, setHeaderImage] = useState<string | null>(null);
@@ -54,11 +54,11 @@ export default function RegistrationFormEditPage() {
 
   const updateFormMutation = useMutation({
     mutationFn: async () => {
-      const response = await apiRequest('PATCH', `/api/registration-forms/${formId}`, { 
-        title, 
-        description, 
+      const response = await apiRequest('PATCH', `/api/registration-forms/${formId}`, {
+        title,
+        description,
         headerImage,
-        formFields 
+        formFields
       });
       return response.json();
     },
@@ -91,7 +91,7 @@ export default function RegistrationFormEditPage() {
         });
         return;
       }
-      
+
       const reader = new FileReader();
       reader.onloadend = () => {
         setHeaderImage(reader.result as string);
@@ -122,7 +122,7 @@ export default function RegistrationFormEditPage() {
   };
 
   const updateField = (id: string, updates: Partial<FormField>) => {
-    setFormFields(formFields.map(f => 
+    setFormFields(formFields.map(f =>
       f.id === id ? { ...f, ...updates } : f
     ));
   };
@@ -181,7 +181,7 @@ export default function RegistrationFormEditPage() {
 
   return (
     <AdminLayout>
-      <div className="container mx-auto p-6 max-w-6xl" data-testid="page-edit-form">
+      <div className="container mx-auto p-4 md:p-6 max-w-6xl" data-testid="page-edit-form">
         <div className="mb-6">
           <Button
             variant="ghost"
@@ -238,9 +238,9 @@ export default function RegistrationFormEditPage() {
                   />
                   {headerImage ? (
                     <div className="relative">
-                      <img 
-                        src={headerImage} 
-                        alt="Header preview" 
+                      <img
+                        src={headerImage}
+                        alt="Header preview"
                         className="w-full max-h-48 object-cover rounded-md border"
                         data-testid="preview-header-image"
                       />
@@ -291,11 +291,11 @@ export default function RegistrationFormEditPage() {
                             />
                           </div>
 
-                          <div className="grid grid-cols-2 gap-3">
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                             <div>
                               <label className="text-xs font-medium text-muted-foreground">Field Type</label>
-                              <Select 
-                                value={field.type} 
+                              <Select
+                                value={field.type}
                                 onValueChange={(value: any) => updateField(field.id, { type: value })}
                               >
                                 <SelectTrigger data-testid={`select-type-${field.id}`}>
@@ -328,7 +328,7 @@ export default function RegistrationFormEditPage() {
                               onCheckedChange={(checked) => updateField(field.id, { required: !!checked })}
                               data-testid={`checkbox-required-${field.id}`}
                             />
-                            <label 
+                            <label
                               htmlFor={`required-${field.id}`}
                               className="text-sm font-medium cursor-pointer"
                             >
@@ -395,9 +395,9 @@ export default function RegistrationFormEditPage() {
                 <CardContent className="space-y-4 pt-6 min-h-[400px]">
                   {headerImage && (
                     <div className="mb-4 -mx-6 -mt-6">
-                      <img 
-                        src={headerImage} 
-                        alt="Header" 
+                      <img
+                        src={headerImage}
+                        alt="Header"
                         className="w-full h-32 object-cover"
                         data-testid="preview-header"
                       />
