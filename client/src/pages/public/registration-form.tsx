@@ -217,12 +217,12 @@ export default function PublicRegistrationFormPage() {
     );
 
     return (
-        <div className="min-h-screen bg-muted/30 p-4 py-8">
+        <div className="min-h-screen bg-muted/30 p-2 py-4 md:p-4 md:py-8">
             <div className="w-full max-w-4xl mx-auto space-y-6">
                 <Card className="border-2 overflow-hidden">
-                    {form.headerImage && <img src={form.headerImage} alt="Header" className="w-full h-48 object-cover" />}
+                    {form.headerImage && <img src={form.headerImage} alt="Header" className="w-full h-auto object-contain" />}
                     <CardHeader>
-                        <CardTitle className="text-3xl">{form.title}</CardTitle>
+                        <CardTitle className="text-2xl md:text-3xl">{form.title}</CardTitle>
                         {form.description && <CardDescription className="text-base">{form.description}</CardDescription>}
                     </CardHeader>
                 </Card>
@@ -275,13 +275,23 @@ export default function PublicRegistrationFormPage() {
                                                 {section.events.map((event) => (
                                                     <div key={event.id} className={`border rounded-lg p-4 transition-colors ${section.selected === event.id ? 'border-primary bg-primary/5' : 'border-border'}`}>
                                                         <div className="flex items-start gap-3">
-                                                            <RadioGroupItem value={event.id} id={`${section.type}-${event.id}`} className="mt-1" />
+                                                            <RadioGroupItem
+                                                                value={event.id}
+                                                                id={`${section.type}-${event.id}`}
+                                                                className="mt-1"
+                                                                onClick={(e) => {
+                                                                    if (section.selected === event.id) {
+                                                                        e.preventDefault();
+                                                                        section.setSelected(null);
+                                                                    }
+                                                                }}
+                                                            />
                                                             <div className="flex-1">
                                                                 <Label htmlFor={`${section.type}-${event.id}`} className="font-semibold text-base cursor-pointer">
                                                                     {event.name}
                                                                 </Label>
-                                                                <p className="text-sm text-muted-foreground mt-1">{event.description}</p>
-                                                                <div className="flex gap-4 mt-2 text-xs text-muted-foreground">
+                                                                <p className="text-sm text-muted-foreground mt-1 whitespace-pre-wrap">{event.description}</p>
+                                                                <div className="flex flex-wrap gap-2 md:gap-4 mt-2 text-xs text-muted-foreground">
                                                                     <span>📅 {formatEventTime(event)}</span>
                                                                     <span className="font-medium text-primary">
                                                                         👥 Team Size: {event.minMembers} - {event.maxMembers}
