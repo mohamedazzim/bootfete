@@ -12,7 +12,8 @@ export default function MyTestsPage() {
   const [, setLocation] = useLocation();
 
   const { data: attempts, isLoading } = useQuery<(TestAttempt & {
-    round: { name: string; event: { name: string } }
+    round: { name: string; event: { name: string } };
+    canViewResults?: boolean;
   })[]>({
     queryKey: ['/api/participants/my-attempts'],
   });
@@ -113,7 +114,9 @@ export default function MyTestsPage() {
                               variant="ghost"
                               size="sm"
                               onClick={() => setLocation(`/participant/results/${attempt.id}`)}
+                              disabled={attempt.canViewResults === false}
                               data-testid={`button-results-${attempt.id}`}
+                              title={attempt.canViewResults === false ? "Results will be available after admin publishes them" : "View your test results"}
                             >
                               <Trophy className="h-4 w-4 mr-1" />
                               View Results

@@ -170,7 +170,15 @@ class CacheService {
                 await this.set(`event:${event.id}`, event, 1800);
             }
 
-            console.log(`Cache warming complete. Cached ${recentEvents.length} events.`);
+            // Cache registrations (frequently accessed)
+            const registrations = await storage.getRegistrations();
+            await this.set('registrations:all', registrations, 300);
+
+            // Cache unique colleges
+            const colleges = await storage.getUniqueColleges();
+            await this.set('registrations:colleges', colleges, 600);
+
+            console.log(`Cache warming complete. Cached ${recentEvents.length} events, ${registrations.length} registrations, ${colleges.length} colleges.`);
         } catch (error) {
             console.error('Cache warming failed:', error);
         }

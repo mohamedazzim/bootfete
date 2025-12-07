@@ -1,0 +1,24 @@
+// Patch for registration-form.tsx
+// Apply these changes manually or using this reference
+
+// CHANGE 1: Around line 127, after the organizerDept line, ADD:
+const organizerCollege = getMappedField('college') || getMappedField('institution');
+
+// CHANGE 2: Around line 176, in the apiRequest call, ADD organizerCollege to the object:
+await apiRequest('POST', '/api/register', {
+    eventId,
+    organizerRollNo,
+    organizerName,
+    organizerEmail,
+    organizerDept,
+    organizerCollege,  // <-- ADD THIS LINE
+    organizerPhone,
+    registrationType,
+    teamMembers: members.map(m => ({
+        memberRollNo: m.rollNo,
+        memberName: m.name,
+        memberEmail: m.email,
+        memberDept: m.dept,
+        memberPhone: m.phone
+    }))
+});

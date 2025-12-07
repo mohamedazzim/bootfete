@@ -532,6 +532,38 @@ export default function TakeTestPage() {
     );
   }
 
+  // Check if there are no questions in the test
+  if (!attempt.questions || attempt.questions.length === 0) {
+    return (
+      <ParticipantLayout>
+        <div className="p-8">
+          <Card className="max-w-2xl mx-auto">
+            <CardHeader className="text-center">
+              <div className="mx-auto mb-4 h-16 w-16 rounded-full bg-yellow-100 flex items-center justify-center">
+                <AlertTriangle className="h-8 w-8 text-yellow-600" />
+              </div>
+              <CardTitle className="text-2xl">No Questions Available</CardTitle>
+              <CardDescription className="text-base mt-2">
+                This test does not have any questions yet
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <p className="text-center text-gray-600">
+                The event organizer has not added questions to this test yet.
+                Please contact the event administrators or try again later.
+              </p>
+              <div className="text-center">
+                <Button onClick={() => setLocation('/participant/dashboard')} data-testid="button-back-dashboard">
+                  Back to Dashboard
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      </ParticipantLayout>
+    );
+  }
+
   const currentQuestion = attempt.questions[currentQuestionIndex];
   const progress = ((currentQuestionIndex + 1) / attempt.questions.length) * 100;
 

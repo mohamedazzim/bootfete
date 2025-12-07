@@ -459,7 +459,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
   })
 
   app.get("/api/auth/me", requireAuth, async (req: AuthRequest, res: Response) => {
-    res.json(req.user)
+    try {
+      const user = req.user!;
+
+      // Check cache first (60 second cache for user data)
+      const cacheKey = `auth:me:${user.id}`;
+      const cachedUser = await cacheService.get(
+        cacheKey,
+        async () => user,
+        60
+      );
+
+      res.json(cachedUser);
+    } catch (error) {
+      console.error("Get auth/me error:", error);
+      res.status(500).json({ message: "Internal server error" });
+    }
   })
 
   app.get(
@@ -468,76 +483,85 @@ export async function registerRoutes(app: Express): Promise<Server> {
     requireParticipant,
     async (req: AuthRequest, res: Response) => {
       try {
-        const user = req.user!
+        const user = req.user!;
+        let eventId = user.eventId;
 
-        let data
-
-        if (user.eventId) {
-          data = await storage.getParticipantCredentialWithDetails(user.id, user.eventId)
-        } else {
-          const credentials = await storage.getEventCredentialsByParticipant(user.id)
+        // Determine which event to use
+        if (!eventId) {
+          const credentials = await storage.getEventCredentialsByParticipant(user.id);
           if (credentials.length === 0) {
-            return res.status(400).json({ message: "No event associated with this user" })
+            return res.status(400).json({ message: "No event associated with this user" });
           }
-          const firstCredential = credentials[0]
-          data = await storage.getParticipantCredentialWithDetails(user.id, firstCredential.eventId)
+          eventId = credentials[0].eventId;
         }
 
-        if (!data) {
-          return res.status(404).json({ message: "Event credential not found" })
-        }
+        // Check cache first (5 minute cache)
+        const cacheKey = `participant:credential:${user.id}:${eventId}`;
+        const response = await cacheService.get(
+          cacheKey,
+          async () => {
+            const data = await storage.getParticipantCredentialWithDetails(user.id, eventId);
 
-        const { credential, event, rounds, eventRules, activeRoundRules } = data
-
-        res.json({
-          credential: {
-            id: credential.id,
-            eventUsername: credential.eventUsername,
-            testEnabled: credential.testEnabled,
-            enabledAt: credential.enabledAt,
-          },
-          event: {
-            id: event.id,
-            name: event.name,
-            description: event.description,
-            type: event.type,
-            category: event.category,
-          },
-          rounds: rounds.map((round: any) => ({
-            id: round.id,
-            name: round.name,
-            duration: round.duration,
-            startTime: round.startTime,
-            endTime: round.endTime,
-            status: round.status,
-          })),
-          eventRules: {
-            noRefresh: eventRules?.noRefresh,
-            noTabSwitch: eventRules?.noTabSwitch,
-            forceFullscreen: eventRules?.forceFullscreen,
-            disableShortcuts: eventRules?.disableShortcuts,
-            autoSubmitOnViolation: eventRules?.autoSubmitOnViolation,
-            maxTabSwitchWarnings: eventRules?.maxTabSwitchWarnings,
-            additionalRules: eventRules?.additionalRules,
-          },
-          roundRules: activeRoundRules
-            ? {
-              noRefresh: activeRoundRules.noRefresh,
-              noTabSwitch: activeRoundRules.noTabSwitch,
-              forceFullscreen: activeRoundRules.forceFullscreen,
-              disableShortcuts: activeRoundRules.disableShortcuts,
-              autoSubmitOnViolation: activeRoundRules.autoSubmitOnViolation,
-              maxTabSwitchWarnings: activeRoundRules.maxTabSwitchWarnings,
-              additionalRules: activeRoundRules.additionalRules,
+            if (!data) {
+              throw new Error("Event credential not found");
             }
-            : null,
-        })
+
+            const { credential, event, rounds, eventRules, activeRoundRules } = data;
+
+            return {
+              credential: {
+                id: credential.id,
+                eventUsername: credential.eventUsername,
+                testEnabled: credential.testEnabled,
+                enabledAt: credential.enabledAt,
+              },
+              event: {
+                id: event.id,
+                name: event.name,
+                description: event.description,
+                type: event.type,
+                category: event.category,
+              },
+              rounds: rounds.map((round: any) => ({
+                id: round.id,
+                name: round.name,
+                duration: round.duration,
+                startTime: round.startTime,
+                endTime: round.endTime,
+                status: round.status,
+              })),
+              eventRules: {
+                noRefresh: eventRules?.noRefresh,
+                noTabSwitch: eventRules?.noTabSwitch,
+                forceFullscreen: eventRules?.forceFullscreen,
+                disableShortcuts: eventRules?.disableShortcuts,
+                autoSubmitOnViolation: eventRules?.autoSubmitOnViolation,
+                maxTabSwitchWarnings: eventRules?.maxTabSwitchWarnings,
+                additionalRules: eventRules?.additionalRules,
+              },
+              roundRules: activeRoundRules
+                ? {
+                  noRefresh: activeRoundRules.noRefresh,
+                  noTabSwitch: activeRoundRules.noTabSwitch,
+                  forceFullscreen: activeRoundRules.forceFullscreen,
+                  disableShortcuts: activeRoundRules.disableShortcuts,
+                  autoSubmitOnViolation: activeRoundRules.autoSubmitOnViolation,
+                  maxTabSwitchWarnings: activeRoundRules.maxTabSwitchWarnings,
+                  additionalRules: activeRoundRules.additionalRules,
+                }
+                : null,
+            };
+          },
+          300
+        );
+
+        res.json(response);
       } catch (error) {
-        console.error("Get participant credential error:", error)
-        res.status(500).json({ message: "Internal server error" })
+        console.error("Get participant credential error:", error);
+        res.status(500).json({ message: "Internal server error" });
       }
     },
-  )
+  );
 
   app.patch("/api/participants/:participantId/disqualify", requireAuth, async (req: AuthRequest, res: Response) => {
     try {
@@ -1307,6 +1331,37 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Notify via WebSocket
         WebSocketService.notifyRoundStatus(round.eventId, req.params.roundId, round.status, updatedRound)
 
+        // Send result published emails to all participants who completed the test
+        const event = await storage.getEventById(round.eventId)
+        if (event) {
+          const attempts = await storage.getTestAttemptsByRound(req.params.roundId)
+          const completedAttempts = attempts.filter(a => a.status === 'completed')
+          const leaderboard = await storage.getRoundLeaderboard(req.params.roundId)
+
+          for (const attempt of completedAttempts) {
+            const user = await storage.getUser(attempt.userId)
+            if (user && user.email && user.fullName) {
+              const participantRank = leaderboard.findIndex(entry => entry.userId === attempt.userId) + 1
+
+              // Queue result published email (non-blocking)
+              queueService.addEmailJob(
+                user.email,
+                `Results Published - ${event.name}`,
+                'result_published',
+                {
+                  name: user.fullName,
+                  eventName: event.name,
+                  score: attempt.totalScore || 0,
+                  rank: participantRank || 0
+                },
+                user.fullName
+              ).catch(err => {
+                console.error(`Error queuing result published email for ${user.email}:`, err)
+              })
+            }
+          }
+        }
+
         res.json({
           message: "Results published successfully",
           round: updatedRound,
@@ -1855,6 +1910,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
         // Get questions to calculate max score
         const questions = await storage.getQuestionsByRound(roundId)
+
+        // Validate that questions exist
+        if (questions.length === 0) {
+          return res.status(400).json({
+            message: "Cannot start test - no questions have been added to this round yet"
+          })
+        }
+
         const maxScore = questions.reduce((sum, q) => sum + q.points, 0)
 
         const attempt = await storage.createTestAttempt({
@@ -2155,39 +2218,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Invalidate leaderboards
         await cacheService.deletePattern('leaderboard:*');
 
-        // Notify participant via WebSocket
-        const round = await storage.getRound(attempt.roundId)
-        if (round) {
-          WebSocketService.notifyResultPublished(attempt.userId, round.eventId, updatedAttempt)
-        }
-
-        // Send result published email to participant
-        if (round && req.user?.email && req.user?.fullName) {
-          const event = await storage.getEventById(round.eventId)
-
-          if (event) {
-            // Get participant's rank from leaderboard
-            const leaderboard = await storage.getRoundLeaderboard(attempt.roundId)
-            const participantRank = leaderboard.findIndex(entry => entry.userId === attempt.userId) + 1
-
-            // Queue result published email (non-blocking)
-            queueService.addEmailJob(
-              req.user.email,
-              `Results Published - ${event.name}`,
-              'result_published',
-              {
-                name: req.user.fullName,
-                eventName: event.name,
-                score: totalScore,
-                rank: participantRank || 0
-              },
-              req.user.fullName
-            ).catch(err => {
-              console.error('Error queuing result published email:', err)
-            })
-          }
-        }
-
         res.json(updatedAttempt)
       } catch (error) {
         console.error("Submit test error:", error)
@@ -2216,11 +2246,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
               ...attempt,
               totalScore: null,
               maxScore: null,
-              round
+              round,
+              canViewResults: false
             }
           }
 
-          return { ...attempt, round }
+          return { ...attempt, round, canViewResults }
         })
       )
 
@@ -2625,9 +2656,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
   })
 
   // Get all registrations (Admin)
-  app.get("/api/registrations", requireAuth, requireSuperAdmin, async (req: AuthRequest, res: Response) => {
+  app.get("/api/registrations", requireAuth, async (req: AuthRequest, res: Response) => {
     try {
-      const registrations = await storage.getRegistrations()
+      const user = req.user!
+      if (user.role !== "super_admin" && user.role !== "registration_committee") {
+        return res.status(403).json({ message: "Forbidden" })
+      }
+
+      const registrations = await cacheService.get(
+        'registrations:all',
+        () => storage.getRegistrations(),
+        300 // 5 minutes TTL - registrations change frequently
+      )
       res.json(registrations)
     } catch (error) {
       console.error("Get registrations error:", error)
@@ -2644,6 +2684,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         organizerName,
         organizerEmail,
         organizerDept,
+        organizerCollege,
         organizerPhone,
         teamMembers
       } = req.body
@@ -2754,6 +2795,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         organizerName,
         organizerEmail,
         organizerDept,
+        organizerCollege,
         organizerPhone,
         registrationType: registrationType as 'solo' | 'team',
         teamMembers: teamMembers || []
@@ -2765,6 +2807,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         eventName: event.name,
         teamSize: totalMembers
       })
+
+      // Invalidate registration caches
+      await cacheService.deletePattern('registrations:*')
+
 
       res.status(201).json({
         message: 'Registration submitted successfully',
@@ -2830,6 +2876,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   })
 
+  // Get unique colleges for filtering
+  app.get("/api/registrations/colleges", requireAuth, async (req: AuthRequest, res: Response) => {
+    try {
+      const user = req.user!
+      if (user.role !== "super_admin" && user.role !== "registration_committee") {
+        return res.status(403).json({ message: "Forbidden" })
+      }
+
+      const colleges = await cacheService.get(
+        'registrations:colleges',
+        () => storage.getUniqueColleges(),
+        600 // 10 minutes TTL - colleges rarely change
+      )
+      res.json(colleges)
+    } catch (error) {
+      console.error("Get colleges error:", error)
+      res.status(500).json({ message: "Internal server error" })
+    }
+  })
+
+
   // NEW: Confirm team-based registration
   app.patch("/api/registrations/:id/confirm", requireAuth, async (req: AuthRequest, res: Response) => {
     try {
@@ -2863,7 +2930,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }> = []
 
       // Process organizer
-      const processParticipant = async (name: string, email: string, rollNo: string, dept: string) => {
+      // Function to create user account and participant record (for all team members)
+      const processUserAndParticipant = async (name: string, email: string, rollNo: string, dept: string) => {
         // Check if user exists
         let participantUser = await storage.getUserByEmail(email)
         let password = ""
@@ -2887,8 +2955,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
           await storage.createParticipant(participantUser.id, registration.eventId)
         }
 
-        // Create or get event credentials
-        const existingCredential = await storage.getEventCredentialByUserAndEvent(participantUser.id, registration.eventId)
+        return participantUser.id
+      }
+
+      // Function to create event credentials (for organizer only)
+      const processCredentials = async (userId: string, name: string, email: string, rollNo: string) => {
+        // Check if credentials already exist
+        const existingCredential = await storage.getEventCredentialByUserAndEvent(userId, registration.eventId)
 
         if (!existingCredential) {
           const count = await storage.getEventCredentialCountForEvent(registration.eventId)
@@ -2899,7 +2972,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             counter,
           )
 
-          await storage.createEventCredential(participantUser.id, registration.eventId, eventUsername, eventPassword)
+          await storage.createEventCredential(userId, registration.eventId, eventUsername, eventPassword)
 
           eventCredentialsList.push({
             eventId: registration.eventId,
@@ -2911,7 +2984,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             participantRollNo: rollNo,
           })
 
-          // Queue email
+          // Queue email to organizer only
           queueService.addEmailJob(
             email,
             `Registration Confirmed - ${event.name}`,
@@ -2939,28 +3012,38 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
 
-      // Process organizer
-      await processParticipant(
+      // Process organizer: create user, participant record, AND credentials
+      const organizerUserId = await processUserAndParticipant(
         registration.organizerName,
         registration.organizerEmail,
         registration.organizerRollNo,
         registration.organizerDept
       )
+      await processCredentials(
+        organizerUserId,
+        registration.organizerName,
+        registration.organizerEmail,
+        registration.organizerRollNo
+      )
 
-      // Process team members
+      // Process team members: create user and participant record ONLY (no credentials)
       if (registration.teamMembers && registration.teamMembers.length > 0) {
         for (const member of registration.teamMembers) {
-          await processParticipant(
+          await processUserAndParticipant(
             member.memberName,
             member.memberEmail,
             member.memberRollNo,
             member.memberDept
           )
+          // Note: No credentials created for team members - they share organizer's credentials
         }
       }
 
       // Update registration status
       const updated = await storage.confirmRegistration(req.params.id, user.id)
+
+      // Invalidate registration caches
+      await cacheService.deletePattern('registrations:*')
 
       res.json({
         registration: updated,
@@ -3591,6 +3674,88 @@ export async function registerRoutes(app: Express): Promise<Server> {
         res.json(updatedCredential)
       } catch (error) {
         console.error("Disable test access error:", error)
+        res.status(500).json({ message: "Internal server error" })
+      }
+    },
+  )
+
+  // Bulk enable test access for all event credentials
+  app.patch(
+    "/api/events/:eventId/credentials/enable-all-tests",
+    requireAuth,
+    async (req: AuthRequest, res: Response) => {
+      try {
+        const user = req.user!
+        const { eventId } = req.params
+
+        if (user.role === "event_admin") {
+          const isEventAdmin = await storage.isUserEventAdmin(user.id, eventId)
+          if (!isEventAdmin) {
+            return res.status(403).json({ message: "Not authorized for this event" })
+          }
+        } else if (user.role !== "super_admin") {
+          return res.status(403).json({ message: "Forbidden" })
+        }
+
+        const credentials = await storage.getEventCredentialsByEvent(eventId)
+        let updatedCount = 0
+
+        for (const credential of credentials) {
+          if (!credential.testEnabled) {
+            await storage.updateEventCredentialTestStatus(credential.id, true, user.id)
+            updatedCount++
+          }
+        }
+
+        res.json({
+          success: true,
+          message: `Test access enabled for ${updatedCount} participant(s)`,
+          updatedCount,
+          totalCount: credentials.length
+        })
+      } catch (error) {
+        console.error("Bulk enable test access error:", error)
+        res.status(500).json({ message: "Internal server error" })
+      }
+    },
+  )
+
+  // Bulk disable test access for all event credentials
+  app.patch(
+    "/api/events/:eventId/credentials/disable-all-tests",
+    requireAuth,
+    async (req: AuthRequest, res: Response) => {
+      try {
+        const user = req.user!
+        const { eventId } = req.params
+
+        if (user.role === "event_admin") {
+          const isEventAdmin = await storage.isUserEventAdmin(user.id, eventId)
+          if (!isEventAdmin) {
+            return res.status(403).json({ message: "Not authorized for this event" })
+          }
+        } else if (user.role !== "super_admin") {
+          return res.status(403).json({ message: "Forbidden" })
+        }
+
+        const credentials = await storage.getEventCredentialsByEvent(eventId)
+        let updatedCount = 0
+
+        for (const credential of credentials) {
+          if (credential.testEnabled) {
+            await storage.updateEventCredentialTestStatus(credential.id, false, user.id)
+            updatedCount++
+          }
+        }
+
+        res.json({
+          success: true,
+          message: `Test access disabled for ${updatedCount} participant(s)`,
+          updatedCount,
+          totalCount: credentials.length
+        })
+      } catch (error) {
+        console.error("Bulk disable test access error:", error)
         res.status(500).json({ message: "Internal server error" })
       }
     },
@@ -4348,6 +4513,48 @@ export async function registerRoutes(app: Express): Promise<Server> {
     },
   )
 
+  // ==================== Additional Data Fetching Routes ====================
+
+  // GET /api/events/:eventId/rounds - Get all rounds for a specific event
+  app.get("/api/events/:eventId/rounds", requireAuth, async (req: AuthRequest, res: Response) => {
+    try {
+      const { eventId } = req.params;
+
+      // Check cache first
+      const cacheKey = `rounds:${eventId}`;
+      const rounds = await cacheService.get(
+        cacheKey,
+        async () => storage.getRoundsByEvent(eventId),
+        300
+      );
+
+      res.json(rounds);
+    } catch (error) {
+      console.error("Get rounds by event error:", error);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  // GET /api/rounds/:roundId/questions - Get all questions for a specific round
+  app.get("/api/rounds/:roundId/questions", requireAuth, async (req: AuthRequest, res: Response) => {
+    try {
+      const { roundId } = req.params;
+
+      // Check cache first
+      const cacheKey = `questions:${roundId}`;
+      const questions = await cacheService.get(
+        cacheKey,
+        async () => storage.getQuestionsByRound(roundId),
+        300
+      );
+
+      res.json(questions);
+    } catch (error) {
+      console.error("Get questions by round error:", error);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
   // ==================== Super Admin Override Routes ====================
 
   // PUT /api/super-admin/events/:eventId/override - Update any event
@@ -4845,7 +5052,62 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       res.status(500).json({ message: "Failed to retry job" });
     }
-  });
+  })
+
+  // Get all participants for event admin (grouped by teams)
+  app.get("/api/event-admin/participants", requireAuth, async (req: AuthRequest, res: Response) => {
+    try {
+      const user = req.user!
+
+      // Only event admins can use this endpoint
+      if (user.role !== "event_admin") {
+        return res.status(403).json({ message: "Forbidden - Event admin only" })
+      }
+
+      // Get all events this user is admin of
+      const adminEvents = await storage.getEventsByAdmin(user.id)
+      const eventIds = adminEvents.map(e => e.id)
+
+      if (eventIds.length === 0) {
+        return res.json([])
+      }
+
+      // Get all registrations for these events
+      const allRegistrations = await storage.getRegistrations()
+      const relevantRegistrations = allRegistrations.filter(r => eventIds.includes(r.eventId))
+
+      // Group by teams and format response
+      const groupedParticipants = relevantRegistrations.map(registration => {
+        const teamSize = 1 + (registration.teamMembers?.length || 0)
+        const registrationType = teamSize > 1 ? 'team' : 'solo'
+        const displayName = registrationType === 'team'
+          ? `${registration.organizerName}'s Team`
+          : registration.organizerName
+
+        return {
+          id: registration.id,
+          displayName,
+          teamSize,
+          registrationType,
+          eventId: registration.eventId,
+          eventName: registration.event?.name || 'Unknown Event',
+          status: registration.status,
+          registeredAt: registration.createdAt,
+          // Include user details for search/filter
+          user: {
+            fullName: registration.organizerName,
+            email: registration.organizerEmail,
+          },
+          event: registration.event,
+        }
+      })
+
+      res.json(groupedParticipants)
+    } catch (error) {
+      console.error("Get event admin participants error:", error)
+      res.status(500).json({ message: "Internal server error" })
+    }
+  })
 
   return httpServer
 }

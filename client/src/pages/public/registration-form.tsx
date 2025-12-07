@@ -125,6 +125,7 @@ export default function PublicRegistrationFormPage() {
         const organizerEmail = getMappedField('email');
         const organizerDept = getMappedField('dept') || getMappedField('department');
         const organizerPhone = getMappedField('phone') || getMappedField('mobile');
+        const organizerCollege = getMappedField('college') || getMappedField('institution');
 
         if (!organizerRollNo || !organizerName || !organizerEmail || !organizerDept || !organizerPhone) {
             errors.push("Could not identify required student details (Name, Roll No, Email, Dept, Phone) from the form. Please ensure these fields are filled.");
@@ -173,6 +174,7 @@ export default function PublicRegistrationFormPage() {
                     organizerName,
                     organizerEmail,
                     organizerDept,
+                    organizerCollege,
                     organizerPhone,
                     registrationType,
                     teamMembers: members.map(m => ({

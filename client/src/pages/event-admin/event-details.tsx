@@ -6,7 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { ArrowLeft, Edit, FileQuestion, CheckCircle, XCircle } from 'lucide-react';
+import { ArrowLeft, Edit, FileQuestion, CheckCircle, XCircle, PlayCircle, StopCircle } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { apiRequest, queryClient } from '@/lib/queryClient';
 import type { Event, Round } from '@shared/schema';
@@ -84,6 +84,48 @@ export default function EventDetailsPage() {
       toast({
         title: 'Error',
         description: 'Failed to disable test access',
+        variant: 'destructive',
+      });
+    },
+  });
+
+  const bulkEnableMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest('PATCH', `/api/events/${eventId}/credentials/enable-all-tests`);
+      return res.json();
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: [`/api/events/${eventId}/event-credentials`] });
+      toast({
+        title: 'Success',
+        description: data.message || 'Test access enabled for all participants',
+      });
+    },
+    onError: (error: any) => {
+      toast({
+        title: 'Error',
+        description: error.message || 'Failed to enable test access',
+        variant: 'destructive',
+      });
+    },
+  });
+
+  const bulkDisableMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest('PATCH', `/api/events/${eventId}/credentials/disable-all-tests`);
+      return res.json();
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: [`/api/events/${eventId}/event-credentials`] });
+      toast({
+        title: 'Success',
+        description: data.message || 'Test access disabled for all participants',
+      });
+    },
+    onError: (error: any) => {
+      toast({
+        title: 'Error',
+        description: error.message || 'Failed to disable test access',
         variant: 'destructive',
       });
     },
@@ -286,7 +328,29 @@ export default function EventDetailsPage() {
           <TabsContent value="participants">
             <Card>
               <CardHeader>
-                <CardTitle>Registered Participants</CardTitle>
+                <div className="flex flex-wrap justify-between items-center gap-4">
+                  <CardTitle>Registered Participants</CardTitle>
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      onClick={() => bulkEnableMutation.mutate()}
+                      variant="default"
+                      size="sm"
+                      disabled={credentials.length === 0 || bulkEnableMutation.isPending}
+                    >
+                      <PlayCircle className="h-4 w-4 mr-2" />
+                      {bulkEnableMutation.isPending ? 'Enabling...' : 'Enable All'}
+                    </Button>
+                    <Button
+                      onClick={() => bulkDisableMutation.mutate()}
+                      variant="destructive"
+                      size="sm"
+                      disabled={credentials.length === 0 || bulkDisableMutation.isPending}
+                    >
+                      <StopCircle className="h-4 w-4 mr-2" />
+                      {bulkDisableMutation.isPending ? 'Disabling...' : 'Disable All'}
+                    </Button>
+                  </div>
+                </div>
               </CardHeader>
               <CardContent>
                 {credentials.length === 0 ? (

@@ -31,7 +31,7 @@ export default function EventAdminCreatePage() {
   const [showPassword, setShowPassword] = useState(false);
 
   const { data: events, isLoading: eventsLoading } = useQuery<Event[]>({
-    queryKey: ['/api/events/unassigned'],
+    queryKey: ['/api/events'],
   });
 
   const form = useForm<FormData>({

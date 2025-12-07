@@ -1,10 +1,12 @@
 import { useParams, useLocation } from 'wouter';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { apiRequest } from '@/lib/queryClient';
+import { useToast } from '@/hooks/use-toast';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
-import { Download, Printer, ArrowLeft, FileDown } from 'lucide-react';
+import { Download, Printer, ArrowLeft, FileDown, PlayCircle, StopCircle } from 'lucide-react';
 import EventAdminLayout from '@/components/layouts/EventAdminLayout';
 import type { Event } from '@shared/schema';
 
@@ -28,6 +30,8 @@ interface EventCredentialWithDetails {
 export default function EventParticipantsPage() {
   const { eventId } = useParams();
   const [, setLocation] = useLocation();
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
 
   const { data: event } = useQuery<Event>({
     queryKey: ['/api/events', eventId],
@@ -37,6 +41,48 @@ export default function EventParticipantsPage() {
   const { data: credentials = [], isLoading } = useQuery<EventCredentialWithDetails[]>({
     queryKey: [`/api/events/${eventId}/event-credentials`],
     enabled: !!eventId,
+  });
+
+  const bulkEnableMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest('PATCH', `/api/events/${eventId}/credentials/enable-all-tests`);
+      return res.json();
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: [`/api/events/${eventId}/event-credentials`] });
+      toast({
+        title: 'Success',
+        description: data.message || 'Test access enabled for all participants',
+      });
+    },
+    onError: (error: any) => {
+      toast({
+        title: 'Error',
+        description: error.message || 'Failed to enable test access',
+        variant: 'destructive',
+      });
+    },
+  });
+
+  const bulkDisableMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest('PATCH', `/api/events/${eventId}/credentials/disable-all-tests`);
+      return res.json();
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: [`/api/events/${eventId}/event-credentials`] });
+      toast({
+        title: 'Success',
+        description: data.message || 'Test access disabled for all participants',
+      });
+    },
+    onError: (error: any) => {
+      toast({
+        title: 'Error',
+        description: error.message || 'Failed to disable test access',
+        variant: 'destructive',
+      });
+    },
   });
 
   const handleDownloadIdPass = (credentialId: string) => {
@@ -145,7 +191,27 @@ export default function EventParticipantsPage() {
             <h1 className="text-3xl font-bold" data-testid="heading-participants">Event Participants</h1>
             <p className="text-muted-foreground mt-2">{event?.name}</p>
           </div>
-          <div className="flex gap-2 w-full md:w-auto">
+          <div className="flex flex-wrap gap-2 w-full md:w-auto">
+            <Button
+              onClick={() => bulkEnableMutation.mutate()}
+              variant="default"
+              data-testid="button-enable-all"
+              disabled={credentials.length === 0 || bulkEnableMutation.isPending}
+              className="flex-1 md:flex-none"
+            >
+              <PlayCircle className="h-4 w-4 mr-2" />
+              {bulkEnableMutation.isPending ? 'Enabling...' : 'Enable Test for All'}
+            </Button>
+            <Button
+              onClick={() => bulkDisableMutation.mutate()}
+              variant="destructive"
+              data-testid="button-disable-all"
+              disabled={credentials.length === 0 || bulkDisableMutation.isPending}
+              className="flex-1 md:flex-none"
+            >
+              <StopCircle className="h-4 w-4 mr-2" />
+              {bulkDisableMutation.isPending ? 'Disabling...' : 'Disable Test for All'}
+            </Button>
             <Button
               onClick={handleExport}
               variant="outline"

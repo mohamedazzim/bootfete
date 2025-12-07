@@ -399,12 +399,12 @@ function QuestionsTab() {
   });
 
   const { data: rounds, isLoading: roundsLoading } = useQuery<Round[]>({
-    queryKey: ['/api/events', selectedEventId, 'rounds'],
+    queryKey: [`/api/events/${selectedEventId}/rounds`],
     enabled: !!selectedEventId,
   });
 
   const { data: questions, isLoading: questionsLoading } = useQuery<Question[]>({
-    queryKey: ['/api/rounds', selectedRoundId, 'questions'],
+    queryKey: [`/api/rounds/${selectedRoundId}/questions`],
     enabled: !!selectedRoundId,
   });
 
@@ -805,14 +805,13 @@ function AuditLogsTab() {
           <div>
             <Label htmlFor="filter-admin">Admin</Label>
             <Select
-              value={filters.adminId}
+              value={filters.adminId || undefined}
               onValueChange={(value) => setFilters({ ...filters, adminId: value })}
             >
               <SelectTrigger id="filter-admin" data-testid="select-filter-admin">
                 <SelectValue placeholder="All admins" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="">All admins</SelectItem>
                 {superAdmins.map((admin) => (
                   <SelectItem key={admin.id} value={admin.id}>
                     {admin.username}
@@ -825,14 +824,13 @@ function AuditLogsTab() {
           <div>
             <Label htmlFor="filter-target-type">Target Type</Label>
             <Select
-              value={filters.targetType}
+              value={filters.targetType || undefined}
               onValueChange={(value) => setFilters({ ...filters, targetType: value })}
             >
               <SelectTrigger id="filter-target-type" data-testid="select-filter-target-type">
                 <SelectValue placeholder="All types" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="">All types</SelectItem>
                 <SelectItem value="event">Event</SelectItem>
                 <SelectItem value="question">Question</SelectItem>
                 <SelectItem value="round">Round</SelectItem>

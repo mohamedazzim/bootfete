@@ -59,6 +59,7 @@ export interface IStorage {
   getTestAttempt(id: string): Promise<TestAttempt | undefined>;
   getTestAttemptByUserAndRound(userId: string, roundId: string): Promise<TestAttempt | undefined>;
   getTestAttemptsByUser(userId: string): Promise<TestAttempt[]>;
+  getTestAttemptsByRound(roundId: string): Promise<TestAttempt[]>;
   createTestAttempt(attempt: InsertTestAttempt): Promise<TestAttempt>;
   updateTestAttempt(id: string, attempt: Partial<InsertTestAttempt>): Promise<TestAttempt | undefined>;
   deleteTestAttemptsByRound(roundId: string): Promise<void>;
@@ -478,6 +479,10 @@ export class DatabaseStorage implements IStorage {
     return await db.select().from(testAttempts).where(eq(testAttempts.userId, userId));
   }
 
+  async getTestAttemptsByRound(roundId: string): Promise<TestAttempt[]> {
+    return await db.select().from(testAttempts).where(eq(testAttempts.roundId, roundId));
+  }
+
   async createTestAttempt(insertAttempt: InsertTestAttempt): Promise<TestAttempt> {
     const [attempt] = await db.insert(testAttempts).values(insertAttempt).returning();
     return attempt;
@@ -889,6 +894,7 @@ export class DatabaseStorage implements IStorage {
     organizerName: string;
     organizerEmail: string;
     organizerDept: string;
+    organizerCollege?: string;
     organizerPhone?: string;
     registrationType: 'solo' | 'team';
     teamMembers?: Array<{
@@ -906,6 +912,7 @@ export class DatabaseStorage implements IStorage {
       organizerName: data.organizerName,
       organizerEmail: data.organizerEmail,
       organizerDept: data.organizerDept,
+      organizerCollege: data.organizerCollege || null,
       organizerPhone: data.organizerPhone || null,
       registrationType: data.registrationType,
       status: 'pending',
@@ -1126,6 +1133,16 @@ export class DatabaseStorage implements IStorage {
     return await db.select().from(teamMembers)
       .where(eq(teamMembers.registrationId, registrationId));
   }
+
+  async getUniqueColleges(): Promise<string[]> {
+    const result = await db.selectDistinct({ college: registrations.organizerCollege })
+      .from(registrations)
+      .where(sql`${registrations.organizerCollege} IS NOT NULL AND ${registrations.organizerCollege} != ''`)
+      .orderBy(asc(registrations.organizerCollege));
+
+    return result.map(r => r.college).filter((c): c is string => c !== null);
+  }
+
 
   async getEventsByIds(eventIds: string[]): Promise<Event[]> {
     if (eventIds.length === 0) return [];

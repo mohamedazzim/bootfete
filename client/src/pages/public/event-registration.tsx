@@ -40,6 +40,7 @@ export default function EventRegistrationPage() {
     const [organizerName, setOrganizerName] = useState("");
     const [organizerEmail, setOrganizerEmail] = useState("");
     const [organizerDept, setOrganizerDept] = useState("");
+    const [organizerCollege, setOrganizerCollege] = useState("");
     const [organizerPhone, setOrganizerPhone] = useState("");
     const [organizerValidation, setOrganizerValidation] = useState<ValidationResult | null>(null);
     const [isValidatingOrganizer, setIsValidatingOrganizer] = useState(false);
@@ -108,6 +109,7 @@ export default function EventRegistrationPage() {
                 organizerName,
                 organizerEmail,
                 organizerDept,
+                organizerCollege,
                 organizerPhone,
                 teamMembers: teamMembers.map(m => ({
                     memberRollNo: m.memberRollNo,
@@ -351,6 +353,16 @@ export default function EventRegistrationPage() {
                                         onChange={(e) => setOrganizerDept(e.target.value)}
                                         placeholder="e.g., Computer Science"
                                         required
+                                    />
+                                </div>
+
+                                <div className="space-y-2">
+                                    <Label htmlFor="college">College/Institution</Label>
+                                    <Input
+                                        id="college"
+                                        value={organizerCollege}
+                                        onChange={(e) => setOrganizerCollege(e.target.value)}
+                                        placeholder="e.g., ABC College"
                                     />
                                 </div>
 

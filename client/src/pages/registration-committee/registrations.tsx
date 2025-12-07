@@ -29,6 +29,7 @@ export default function RegistrationCommitteeRegistrationsPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [filterEvent, setFilterEvent] = useState<string>("all");
   const [filterStatus, setFilterStatus] = useState<string>("all");
+  const [filterCollege, setFilterCollege] = useState<string>("all");
   const [groupBy, setGroupBy] = useState<string>("none");
 
   const { data: registrations, isLoading } = useQuery<RegistrationWithDetails[]>({
@@ -37,6 +38,10 @@ export default function RegistrationCommitteeRegistrationsPage() {
 
   const { data: events } = useQuery<Event[]>({
     queryKey: ['/api/events'],
+  });
+
+  const { data: colleges } = useQuery<string[]>({
+    queryKey: ['/api/registrations/colleges'],
   });
 
   const confirmMutation = useMutation({
@@ -89,10 +94,11 @@ export default function RegistrationCommitteeRegistrationsPage() {
 
       const matchesEvent = filterEvent === "all" || reg.eventId === filterEvent;
       const matchesStatus = filterStatus === "all" || reg.status === filterStatus;
+      const matchesCollege = filterCollege === "all" || reg.organizerCollege === filterCollege;
 
-      return matchesSearch && matchesEvent && matchesStatus;
+      return matchesSearch && matchesEvent && matchesStatus && matchesCollege;
     });
-  }, [registrations, searchQuery, filterEvent, filterStatus]);
+  }, [registrations, searchQuery, filterEvent, filterStatus, filterCollege]);
 
   const groupedRegistrations = useMemo(() => {
     if (groupBy === "none") {
@@ -110,6 +116,8 @@ export default function RegistrationCommitteeRegistrationsPage() {
         groupKey = reg.status.charAt(0).toUpperCase() + reg.status.slice(1);
       } else if (groupBy === "dept") {
         groupKey = reg.organizerDept || "Unknown";
+      } else if (groupBy === "college") {
+        groupKey = reg.organizerCollege || "Unknown";
       }
 
       if (!groups[groupKey]) groups[groupKey] = [];
@@ -136,6 +144,7 @@ export default function RegistrationCommitteeRegistrationsPage() {
     setSearchQuery("");
     setFilterEvent("all");
     setFilterStatus("all");
+    setFilterCollege("all");
     setGroupBy("none");
   };
 
@@ -154,7 +163,7 @@ export default function RegistrationCommitteeRegistrationsPage() {
     }
   };
 
-  const hasActiveFilters = searchQuery || filterEvent !== "all" || filterStatus !== "all" || groupBy !== "none";
+  const hasActiveFilters = searchQuery || filterEvent !== "all" || filterStatus !== "all" || filterCollege !== "all" || groupBy !== "none";
 
   const getTotalMembers = (reg: RegistrationWithDetails) => {
     return 1 + (reg.teamMembers?.length || 0); // 1 for organizer + team members
@@ -226,6 +235,20 @@ export default function RegistrationCommitteeRegistrationsPage() {
               </Select>
             </div>
 
+            <div className="mt-4">
+              <Select value={filterCollege} onValueChange={setFilterCollege}>
+                <SelectTrigger data-testid="select-college-filter">
+                  <SelectValue placeholder="Filter by College" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Colleges</SelectItem>
+                  {colleges?.map(college => (
+                    <SelectItem key={college} value={college}>{college}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
             <div className="mt-4 flex items-center gap-2 flex-wrap">
               <span className="text-sm text-muted-foreground">Group by:</span>
               <div className="flex gap-2 flex-wrap">
@@ -261,6 +284,14 @@ export default function RegistrationCommitteeRegistrationsPage() {
                 >
                   Department
                 </Button>
+                <Button
+                  variant={groupBy === "college" ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setGroupBy("college")}
+                  data-testid="button-group-college"
+                >
+                  College
+                </Button>
               </div>
               <span className="ml-auto text-sm text-muted-foreground">
                 Showing {filteredRegistrations.length} of {registrations?.length || 0} registrations
@@ -285,6 +316,8 @@ export default function RegistrationCommitteeRegistrationsPage() {
                       <TableRow>
                         <TableHead>Organizer</TableHead>
                         <TableHead>Roll No</TableHead>
+                        <TableHead>Dept</TableHead>
+                        <TableHead>College</TableHead>
                         <TableHead>Event</TableHead>
                         <TableHead>Team Size</TableHead>
                         <TableHead>Type</TableHead>
@@ -304,6 +337,14 @@ export default function RegistrationCommitteeRegistrationsPage() {
                           </TableCell>
                           <TableCell>
                             <code className="text-sm">{registration.organizerRollNo}</code>
+                          </TableCell>
+                          <TableCell>
+                            <span className="text-sm">{registration.organizerDept}</span>
+                          </TableCell>
+                          <TableCell>
+                            <span className="text-sm text-muted-foreground">
+                              {registration.organizerCollege || '-'}
+                            </span>
                           </TableCell>
                           <TableCell>
                             <Badge variant="outline">
@@ -392,6 +433,12 @@ export default function RegistrationCommitteeRegistrationsPage() {
                     <p className="text-sm text-muted-foreground">Department</p>
                     <p className="font-medium">{selectedRegistration.organizerDept}</p>
                   </div>
+                  {selectedRegistration.organizerCollege && (
+                    <div>
+                      <p className="text-sm text-muted-foreground">College</p>
+                      <p className="font-medium">{selectedRegistration.organizerCollege}</p>
+                    </div>
+                  )}
                 </div>
 
                 <div>
@@ -497,6 +544,6 @@ export default function RegistrationCommitteeRegistrationsPage() {
           </DialogContent>
         </Dialog>
       </div>
-    </RegistrationCommitteeLayout>
+    </RegistrationCommitteeLayout >
   );
 }

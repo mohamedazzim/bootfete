@@ -9,8 +9,19 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Users, Search, Filter } from 'lucide-react';
 import type { Participant, Event, User } from '@shared/schema';
 
-interface ParticipantWithDetails extends Participant {
-  user: User;
+interface TeamGroupedParticipant {
+  id: string;
+  displayName: string;
+  teamSize: number;
+  registrationType: 'team' | 'solo';
+  eventId: string;
+  eventName: string;
+  status: string;
+  registeredAt: Date;
+  user: {
+    fullName: string;
+    email: string;
+  };
   event: Event;
 }
 
@@ -19,7 +30,7 @@ export default function AllParticipantsPage() {
   const [selectedEvent, setSelectedEvent] = useState<string>('all');
   const [selectedStatus, setSelectedStatus] = useState<string>('all');
 
-  const { data: participants, isLoading } = useQuery<ParticipantWithDetails[]>({
+  const { data: participants, isLoading } = useQuery<TeamGroupedParticipant[]>({
     queryKey: ['/api/event-admin/participants'],
   });
 
@@ -27,7 +38,7 @@ export default function AllParticipantsPage() {
     if (!participants) return [];
     const eventMap = new Map();
     participants.forEach(p => {
-      if (!eventMap.has(p.event.id)) {
+      if (p.event && !eventMap.has(p.event.id)) {
         eventMap.set(p.event.id, p.event);
       }
     });
@@ -39,9 +50,9 @@ export default function AllParticipantsPage() {
 
     return participants.filter(participant => {
       const matchesSearch =
-        participant.user.fullName.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        participant.displayName.toLowerCase().includes(searchTerm.toLowerCase()) ||
         participant.user.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        participant.event.name.toLowerCase().includes(searchTerm.toLowerCase());
+        participant.eventName.toLowerCase().includes(searchTerm.toLowerCase());
 
       const matchesEvent = selectedEvent === 'all' || participant.eventId === selectedEvent;
       const matchesStatus = selectedStatus === 'all' || participant.status === selectedStatus;
@@ -61,7 +72,7 @@ export default function AllParticipantsPage() {
         existing.count++;
       } else {
         eventStats.set(participant.eventId, {
-          eventName: participant.event.name,
+          eventName: participant.eventName,
           count: 1,
           eventId: participant.eventId
         });
@@ -182,10 +193,10 @@ export default function AllParticipantsPage() {
                   <Table>
                     <TableHeader>
                       <TableRow>
-                        <TableHead>Participant Name</TableHead>
+                        <TableHead>Participant/Team</TableHead>
                         <TableHead>Event Name</TableHead>
+                        <TableHead>Type</TableHead>
                         <TableHead>Status</TableHead>
-                        <TableHead>Registration Date</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -194,24 +205,25 @@ export default function AllParticipantsPage() {
                           <TableCell>
                             <div>
                               <div className="font-medium" data-testid={`text-participant-name-${participant.id}`}>
-                                {participant.user.fullName}
+                                {participant.displayName}
                               </div>
                               <div className="text-sm text-gray-500">{participant.user.email}</div>
                             </div>
                           </TableCell>
                           <TableCell data-testid={`text-event-name-${participant.id}`}>
-                            {participant.event.name}
+                            {participant.eventName}
+                          </TableCell>
+                          <TableCell>
+                            {participant.registrationType === 'team' ? (
+                              <Badge variant="default" className="gap-1">
+                                <Users className="h-3 w-3" />
+                                {participant.teamSize}
+                              </Badge>
+                            ) : (
+                              <Badge variant="secondary">Solo</Badge>
+                            )}
                           </TableCell>
                           <TableCell>{getStatusBadge(participant.status)}</TableCell>
-                          <TableCell data-testid={`text-registration-date-${participant.id}`}>
-                            {participant.registeredAt
-                              ? new Date(participant.registeredAt).toLocaleDateString('en-US', {
-                                year: 'numeric',
-                                month: 'short',
-                                day: 'numeric'
-                              })
-                              : '-'}
-                          </TableCell>
                         </TableRow>
                       ))}
                     </TableBody>

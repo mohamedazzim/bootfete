@@ -188,6 +188,7 @@ export const registrations = pgTable("registrations", {
   organizerName: text("organizer_name").notNull(),
   organizerEmail: text("organizer_email").notNull(),
   organizerDept: text("organizer_dept").notNull(),
+  organizerCollege: text("organizer_college"),
   organizerPhone: text("organizer_phone"),
   registrationType: varchar("registration_type", { enum: ['solo', 'team'] }).notNull().default('solo'),
   status: varchar("status", { enum: ['pending', 'confirmed', 'cancelled'] }).notNull().default('pending'),
