@@ -33,6 +33,7 @@ import QuestionEditPage from "@/pages/event-admin/question-edit";
 import QuestionsBulkUploadPage from "@/pages/event-admin/questions-bulk-upload";
 import EventParticipantsPage from "@/pages/event-admin/event-participants";
 import AllParticipantsPage from "@/pages/event-admin/all-participants";
+import RoundMonitorPage from "@/pages/event-admin/round-monitor";
 import ParticipantDashboard from "@/pages/participant/dashboard";
 import ParticipantEventsPage from "@/pages/participant/events";
 import ParticipantEventDetailsPage from "@/pages/participant/event-details";
@@ -40,6 +41,7 @@ import TakeTestPage from "@/pages/participant/take-test";
 import TestResultsPage from "@/pages/participant/test-results";
 import MyTestsPage from "@/pages/participant/my-tests";
 import LeaderboardPage from "@/pages/participant/leaderboard";
+import EventAdminLeaderboardPage from "@/pages/event-admin/leaderboard";
 import RegistrationFormsPage from "@/pages/admin/registration-forms";
 import RegistrationFormCreatePage from "@/pages/admin/registration-form-create";
 import RegistrationFormEditPage from "@/pages/admin/registration-form-edit";
@@ -220,6 +222,9 @@ function Router() {
       <Route path="/event-admin/rounds/:roundId/rules">
         <ProtectedRoute component={RoundRulesPage} allowedRoles={['event_admin']} />
       </Route>
+      <Route path="/event-admin/rounds/:roundId/monitor">
+        <ProtectedRoute component={RoundMonitorPage} allowedRoles={['event_admin']} />
+      </Route>
       <Route path="/event-admin/events/:eventId/participants">
         <ProtectedRoute component={EventParticipantsPage} allowedRoles={['event_admin']} />
       </Route>
@@ -228,6 +233,12 @@ function Router() {
       </Route>
       <Route path="/event-admin/participants">
         <ProtectedRoute component={AllParticipantsPage} allowedRoles={['event_admin']} />
+      </Route>
+      <Route path="/event-admin/rounds/:roundId/leaderboard">
+        <ProtectedRoute component={EventAdminLeaderboardPage} allowedRoles={['event_admin']} />
+      </Route>
+      <Route path="/event-admin/events/:eventId/leaderboard">
+        <ProtectedRoute component={EventAdminLeaderboardPage} allowedRoles={['event_admin']} />
       </Route>
 
       <Route path="/reports">

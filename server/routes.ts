@@ -3045,6 +3045,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Invalidate registration caches
       await cacheService.deletePattern('registrations:*')
 
+      // Notify via WebSocket for instant UI update
+      WebSocketService.notifyRegistrationConfirmed({
+        ...updated,
+        organizerName: updated.organizerName,
+        eventId: updated.eventId
+      })
+
       res.json({
         registration: updated,
         eventCredentials: eventCredentialsList,
@@ -5108,6 +5115,163 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(500).json({ message: "Internal server error" })
     }
   })
+
+  // Get round statistics for live monitoring
+  app.get("/api/rounds/:roundId/statistics", requireEventAdminOrSuperAdmin, async (req: AuthRequest, res: Response) => {
+    try {
+      const { roundId } = req.params;
+
+      // Get round details
+      const round = await storage.getRound(roundId);
+      if (!round) {
+        return res.status(404).json({ message: "Round not found" });
+      }
+
+      // Get all participants for this round's event
+      const participants = await storage.getParticipantsByEventId(round.eventId);
+      const totalParticipants = participants.length;
+
+      // Get all test attempts for this round
+      const attempts = await storage.getTestAttemptsByRound(roundId);
+
+      // Calculate statistics
+      const completedParticipants = attempts.filter(a => a.submittedAt !== null).length;
+      const activeParticipants = attempts.filter(a => a.startedAt !== null && a.submittedAt === null).length;
+      const pendingParticipants = totalParticipants - (completedParticipants + activeParticipants);
+
+      // Check if round is complete
+      const canShareResults = completedParticipants === totalParticipants ||
+        (round.status === 'completed');
+
+      res.json({
+        roundId: round.id,
+        roundName: round.name,
+        status: round.status,
+        totalParticipants,
+        activeParticipants,
+        completedParticipants,
+        pendingParticipants,
+        testDuration: round.duration || 60,
+        startedAt: round.startedAt,
+        endsAt: round.endTime,
+        canShareResults
+      });
+    } catch (error) {
+      console.error("Get round statistics error:", error);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  // Get leaderboard for a round
+  app.get("/api/rounds/:roundId/leaderboard", requireEventAdminOrSuperAdmin, async (req: AuthRequest, res: Response) => {
+    try {
+      const { roundId } = req.params;
+
+      // Get all completed test attempts for this round
+      const attempts = await storage.getTestAttemptsByRound(roundId);
+      const completedAttempts = attempts.filter(a => a.submittedAt !== null);
+
+      if (completedAttempts.length === 0) {
+        return res.json([]);
+      }
+
+      // Sort by score (desc) then by submission time (asc)
+      completedAttempts.sort((a, b) => {
+        if (b.totalScore !== a.totalScore) {
+          return (b.totalScore || 0) - (a.totalScore || 0);
+        }
+        return new Date(a.submittedAt!).getTime() - new Date(b.submittedAt!).getTime();
+      });
+
+      // Build leaderboard with ranks
+      const leaderboard = await Promise.all(
+        completedAttempts.map(async (attempt, index) => {
+          const user = await storage.getUser(attempt.userId);
+          return {
+            rank: index + 1,
+            userId: attempt.userId,
+            userName: user?.fullName || 'Unknown',
+            totalScore: attempt.totalScore || 0,
+            maxScore: attempt.maxScore,
+            submittedAt: attempt.submittedAt
+          };
+        })
+      );
+
+      res.json(leaderboard);
+    } catch (error) {
+      console.error("Get leaderboard error:", error);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  // Get event leaderboard (aggregated across all rounds)
+  app.get("/api/events/:eventId/leaderboard", requireEventAdminOrSuperAdmin, async (req: AuthRequest, res: Response) => {
+    try {
+      const { eventId } = req.params;
+
+      // Get all rounds for this event
+      const rounds = await storage.getRoundsByEvent(eventId);
+
+      // Get all attempts across all rounds
+      const allAttempts: any[] = [];
+      for (const round of rounds) {
+        const attempts = await storage.getTestAttemptsByRound(round.id);
+        allAttempts.push(...attempts.filter((a: any) => a.submittedAt !== null));
+      }
+
+      if (allAttempts.length === 0) {
+        return res.json([]);
+      }
+
+      // Aggregate scores by user
+      const userScores = new Map<string, { totalScore: number; maxScore: number; lastSubmission: Date }>();
+
+      for (const attempt of allAttempts) {
+        const current = userScores.get(attempt.userId) || { totalScore: 0, maxScore: 0, lastSubmission: attempt.submittedAt! };
+        userScores.set(attempt.userId, {
+          totalScore: current.totalScore + (attempt.score || 0),
+          maxScore: current.maxScore + (attempt.maxScore || 0),
+          lastSubmission: new Date(attempt.submittedAt!) > new Date(current.lastSubmission)
+            ? attempt.submittedAt!
+            : current.lastSubmission
+        });
+      }
+
+      // Build leaderboard
+      const leaderboard = await Promise.all(
+        Array.from(userScores.entries()).map(async ([userId, data]) => {
+          const user = await storage.getUser(userId);
+          return {
+            userId,
+            userName: user?.fullName || 'Unknown',
+            totalScore: data.totalScore,
+            maxScore: data.maxScore,
+            submittedAt: data.lastSubmission
+          };
+        })
+      );
+
+      // Sort by total score (desc) then by last submission (asc)
+      leaderboard.sort((a, b) => {
+        if (b.totalScore !== a.totalScore) {
+          return b.totalScore - a.totalScore;
+        }
+        return new Date(a.submittedAt).getTime() - new Date(b.submittedAt).getTime();
+      });
+
+      // Add ranks
+      const rankedLeaderboard = leaderboard.map((entry, index) => ({
+        rank: index + 1,
+        ...entry
+      }));
+
+      res.json(rankedLeaderboard);
+    } catch (error) {
+      console.error("Get event leaderboard error:", error);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
 
   return httpServer
 }
