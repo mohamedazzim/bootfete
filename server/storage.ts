@@ -1295,12 +1295,94 @@ export class DatabaseStorage implements IStorage {
       activeRoundRules = await this.getRoundRules(activeRound.id);
     }
 
+    // Fetch team details if this is a team registration
+    const user = await this.getUser(userId);
+    let teamDetails: any[] = [];
+
+    if (user) {
+      // Check if user is the organizer
+      const [organizerReg] = await db
+        .select()
+        .from(registrations)
+        .where(and(
+          eq(registrations.eventId, eventId),
+          eq(registrations.organizerEmail, user.email),
+          eq(registrations.status, 'confirmed')
+        ));
+
+      if (organizerReg) {
+        // User is organizer - Add organizer first
+        teamDetails.push({
+          name: organizerReg.organizerName,
+          email: organizerReg.organizerEmail,
+          rollNo: organizerReg.organizerRollNo,
+          role: 'Organizer'
+        });
+
+        // Add team members
+        const members = await db
+          .select()
+          .from(teamMembers)
+          .where(eq(teamMembers.registrationId, organizerReg.id));
+
+        members.forEach(m => {
+          teamDetails.push({
+            name: m.memberName,
+            email: m.memberEmail,
+            rollNo: m.memberRollNo,
+            role: 'Member'
+          });
+        });
+      } else {
+        // Check if user is a team member
+        const [memberRecord] = await db
+          .select({
+            registration: registrations,
+            member: teamMembers
+          })
+          .from(teamMembers)
+          .innerJoin(registrations, eq(teamMembers.registrationId, registrations.id))
+          .where(and(
+            eq(registrations.eventId, eventId),
+            eq(teamMembers.memberEmail, user.email),
+            eq(registrations.status, 'confirmed')
+          ));
+
+        if (memberRecord) {
+          const reg = memberRecord.registration;
+          // Add organizer
+          teamDetails.push({
+            name: reg.organizerName,
+            email: reg.organizerEmail,
+            rollNo: reg.organizerRollNo,
+            role: 'Organizer'
+          });
+
+          // Add all team members (including self)
+          const members = await db
+            .select()
+            .from(teamMembers)
+            .where(eq(teamMembers.registrationId, reg.id));
+
+          members.forEach(m => {
+            teamDetails.push({
+              name: m.memberName,
+              email: m.memberEmail,
+              rollNo: m.memberRollNo,
+              role: 'Member'
+            });
+          });
+        }
+      }
+    }
+
     return {
       credential,
       event,
       rounds,
       eventRules,
-      activeRoundRules
+      activeRoundRules,
+      team: teamDetails.length > 0 ? teamDetails : null
     };
   }
 

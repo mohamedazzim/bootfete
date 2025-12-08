@@ -190,10 +190,42 @@ export default function PublicRegistrationFormPage() {
             setSubmitted(true);
             toast({ title: "Success", description: "Registration submitted successfully!" });
         } catch (error: any) {
+            let description: React.ReactNode = error.message || "An error occurred during registration";
+
+            // Try to parse JSON error message from backend
+            try {
+                // Backend error message format from apiRequest is usually "Status: JSON_BODY"
+                const jsonStart = error.message.indexOf('{');
+                if (jsonStart !== -1) {
+                    const jsonPart = error.message.substring(jsonStart);
+                    const errorObj = JSON.parse(jsonPart);
+
+                    if (errorObj.invalidMembers && Array.isArray(errorObj.invalidMembers)) {
+                        description = (
+                            <div className="flex flex-col gap-2 mt-2">
+                                <p className="font-semibold">{errorObj.message}</p>
+                                <ul className="list-disc pl-4 space-y-2 text-sm">
+                                    {errorObj.invalidMembers.map((m: any, idx: number) => (
+                                        <li key={idx}>
+                                            <span className="font-semibold">{m.name}</span> ({m.rollNo}) - {m.reason}
+                                        </li>
+                                    ))}
+                                </ul>
+                            </div>
+                        );
+                    } else if (errorObj.message) {
+                        description = errorObj.message;
+                    }
+                }
+            } catch (e) {
+                console.error("Failed to parse registration error toast", e);
+            }
+
             toast({
                 title: "Registration Failed",
-                description: error.message || "An error occurred during registration",
-                variant: "destructive"
+                description: description,
+                variant: "destructive",
+                className: "max-w-md"
             });
         } finally {
             setIsSubmitting(false);

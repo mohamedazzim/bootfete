@@ -2728,6 +2728,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         })
       }
 
+      // Validate all members (Organizer + Team)
+      const invalidMembers: Array<{ rollNo: string; name: string; reason: string }> = []
+
       // Check if organizer is already registered for this category
       const organizerCheck = await storage.checkRollNoCategoryRegistration(
         organizerRollNo,
@@ -2735,15 +2738,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       )
 
       if (organizerCheck.isRegistered) {
-        return res.status(409).json({
-          message: `${organizerRollNo} is already registered for ${organizerCheck.event?.name} in ${event.category} category`,
-          conflictingEvent: organizerCheck.event?.name,
-          role: organizerCheck.role
+        invalidMembers.push({
+          rollNo: organizerRollNo,
+          name: organizerName,
+          reason: `Already registered for ${organizerCheck.event?.name} in ${event.category} category (Organizer)`
         })
       }
 
       // Validate each team member
-      const invalidMembers: Array<{ rollNo: string; reason: string }> = []
       const allRollNos = [organizerRollNo]
 
       if (teamMembers && teamMembers.length > 0) {
@@ -2751,6 +2753,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           if (!member.memberRollNo || !member.memberName || !member.memberEmail || !member.memberDept) {
             invalidMembers.push({
               rollNo: member.memberRollNo || 'unknown',
+              name: member.memberName || 'Unknown',
               reason: 'Missing required fields (rollNo, name, email, dept)'
             })
             continue
@@ -2760,6 +2763,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           if (allRollNos.includes(member.memberRollNo)) {
             invalidMembers.push({
               rollNo: member.memberRollNo,
+              name: member.memberName,
               reason: 'Duplicate roll number in team'
             })
             continue
@@ -2775,6 +2779,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           if (memberCheck.isRegistered) {
             invalidMembers.push({
               rollNo: member.memberRollNo,
+              name: member.memberName,
               reason: `Already registered for ${memberCheck.event?.name} in ${event.category} category`
             })
           }
@@ -2810,6 +2815,37 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Invalidate registration caches
       await cacheService.deletePattern('registrations:*')
+
+      // Send registration received emails (background)
+      // 1. Organizer
+      queueService.addEmailJob(
+        organizerEmail,
+        `Registration Received - ${event.name}`,
+        'registration_received',
+        {
+          name: organizerName,
+          eventName: event.name,
+          registrationId: registration.id
+        },
+        organizerName
+      ).catch(err => console.error(`Failed to queue registration email for ${organizerEmail}:`, err))
+
+      // 2. Team Members
+      if (teamMembers && teamMembers.length > 0) {
+        teamMembers.forEach((member: any) => {
+          queueService.addEmailJob(
+            member.memberEmail,
+            `Registration Received - ${event.name}`,
+            'registration_received',
+            {
+              name: member.memberName,
+              eventName: event.name,
+              registrationId: registration.id
+            },
+            member.memberName
+          ).catch(err => console.error(`Failed to queue registration email for ${member.memberEmail}:`, err))
+        })
+      }
 
 
       res.status(201).json({
@@ -2861,20 +2897,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   })
 
-  app.get("/api/registrations", requireAuth, async (req: AuthRequest, res: Response) => {
-    try {
-      const user = req.user!
-      if (user.role !== "super_admin" && user.role !== "registration_committee") {
-        return res.status(403).json({ message: "Forbidden" })
-      }
 
-      const registrations = await storage.getRegistrations()
-      res.json(registrations)
-    } catch (error) {
-      console.error("Get registrations error:", error)
-      res.status(500).json({ message: "Internal server error" })
-    }
-  })
 
   // Get unique colleges for filtering
   app.get("/api/registrations/colleges", requireAuth, async (req: AuthRequest, res: Response) => {
@@ -3036,6 +3059,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
             member.memberDept
           )
           // Note: No credentials created for team members - they share organizer's credentials
+        }
+      }
+
+      // Send credentials email to team members
+      if (registration.teamMembers && registration.teamMembers.length > 0) {
+        // Find credentials for this event (assigned to organizer)
+        const credential = await storage.getEventCredentialByUserAndEvent(organizerUserId, registration.eventId)
+        if (credential) {
+          for (const member of registration.teamMembers) {
+            queueService.addEmailJob(
+              member.memberEmail,
+              `Registration Confirmed - ${event.name}`,
+              'registration_approved',
+              {
+                name: member.memberName,
+                eventName: event.name,
+                username: credential.eventUsername,
+                password: credential.eventPassword
+              },
+              member.memberName
+            ).catch(err => {
+              console.error(`Failed to queue approval email for team member ${member.memberEmail}:`, err)
+            })
+          }
         }
       }
 

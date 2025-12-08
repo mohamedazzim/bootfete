@@ -22,7 +22,7 @@ export default function ParticipantDashboard() {
     refetchInterval: 5000,
   });
 
-  const { credential, event, eventRules, rounds } = credentialData || {};
+  const { credential, event, eventRules, rounds, team } = credentialData || {};
   const testEnabled = credential?.testEnabled || false;
   const activeRounds = rounds?.filter((r: any) => r.status === 'in_progress') || [];
   const hasActiveRounds = activeRounds.length > 0;
@@ -103,7 +103,7 @@ export default function ParticipantDashboard() {
       <div className="max-w-4xl mx-auto p-4 md:p-8">
         <div className="text-center mb-8">
           <h1 className="text-3xl font-bold text-gray-900 mb-2" data-testid="heading-dashboard">
-            BootFeet 2K26 | {event?.name || 'Event'} | {user?.fullName || 'Participant'}
+            BootFeet 2K26 | {event?.name || 'Event'} | {team && team.length > 0 ? team.map((m: any) => m.name).join(', ') : (user?.fullName || 'Participant')}
           </h1>
           <p className="text-gray-600" data-testid="text-event-description">
             {event?.description}

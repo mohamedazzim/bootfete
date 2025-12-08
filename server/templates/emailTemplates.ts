@@ -1,3 +1,90 @@
+export function generateRegistrationReceivedEmail(
+  name: string,
+  eventName: string,
+  registrationId: string
+): string {
+  return `
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Registration Received - ${eventName}</title>
+      </head>
+      <body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #f3f4f6;">
+        <table role="presentation" style="width: 100%; border-collapse: collapse;">
+          <tr>
+            <td align="center" style="padding: 40px 0;">
+              <table role="presentation" style="width: 600px; max-width: 100%; background: white; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
+                <tr>
+                  <td style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 40px 30px; text-align: center; border-radius: 12px 12px 0 0;">
+                    <h1 style="margin: 0; color: white; font-size: 28px; font-weight: 700;">BootFeet 2K26</h1>
+                    <p style="margin: 10px 0 0; color: rgba(255,255,255,0.9); font-size: 14px;">Symposium Management Platform</p>
+                  </td>
+                </tr>
+                
+                <tr>
+                  <td style="padding: 40px 30px;">
+                    <div style="background: #e0f2fe; border-left: 4px solid #0284c7; padding: 16px; margin-bottom: 30px; border-radius: 4px;">
+                      <p style="margin: 0; color: #075985; font-weight: 600; font-size: 16px;">✓ Registration Received</p>
+                    </div>
+                    
+                    <h2 style="margin: 0 0 16px; color: #111827; font-size: 24px;">Hello ${name}!</h2>
+                    
+                    <p style="margin: 0 0 16px; color: #4b5563; font-size: 16px; line-height: 1.6;">
+                      We have received your registration for <strong>${eventName}</strong>.
+                    </p>
+                    
+                    <p style="margin: 0 0 24px; color: #4b5563; font-size: 16px; line-height: 1.6;">
+                      Your application is currently <strong>Pending Approval</strong>. You will receive another email with your login credentials once your registration is confirmed by the committee.
+                    </p>
+                    
+                    <table style="width: 100%; border-collapse: collapse; background: #f9fafb; border-radius: 8px; overflow: hidden; margin-bottom: 24px;">
+                      <tr>
+                        <td style="padding: 16px 20px; border-bottom: 1px solid #e5e7eb;">
+                          <span style="color: #6b7280; font-size: 14px;">Event</span>
+                        </td>
+                        <td style="padding: 16px 20px; border-bottom: 1px solid #e5e7eb; text-align: right;">
+                          <strong style="color: #111827; font-size: 16px;">${eventName}</strong>
+                        </td>
+                      </tr>
+                      <tr>
+                        <td style="padding: 16px 20px;">
+                          <span style="color: #6b7280; font-size: 14px;">Registration ID</span>
+                        </td>
+                        <td style="padding: 16px 20px; text-align: right;">
+                          <strong style="color: #111827; font-size: 16px; font-family: monospace;">${registrationId}</strong>
+                        </td>
+                      </tr>
+                    </table>
+                    
+                    <div style="background: #f3f4f6; padding: 16px; margin-top: 24px; border-radius: 4px;">
+                      <p style="margin: 0; color: #4b5563; font-size: 14px; line-height: 1.5;">
+                        Only the team leader will receive the initial confirmation, but all team members have been registered.
+                      </p>
+                    </div>
+                  </td>
+                </tr>
+                
+                <tr>
+                  <td style="padding: 30px; background: #f9fafb; border-radius: 0 0 12px 12px; border-top: 1px solid #e5e7eb;">
+                    <p style="margin: 0 0 8px; color: #6b7280; font-size: 14px; text-align: center;">
+                      Questions? Contact our support team
+                    </p>
+                    <p style="margin: 0; color: #9ca3af; font-size: 12px; text-align: center;">
+                      © 2026 BootFeet. All rights reserved.
+                    </p>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+        </table>
+      </body>
+    </html>
+  `;
+}
+
 export function generateRegistrationApprovedEmail(
   name: string,
   eventName: string,
@@ -201,7 +288,7 @@ export function generateTestStartReminderEmail(
     dateStyle: 'full',
     timeStyle: 'short'
   });
-  
+
   return `
     <!DOCTYPE html>
     <html>

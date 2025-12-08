@@ -79,6 +79,14 @@ class QueueService {
                 let result;
 
                 switch (templateName) {
+                    case 'registration_received':
+                        result = await emailService.sendRegistrationReceived(
+                            to,
+                            variables.name,
+                            variables.eventName,
+                            variables.registrationId
+                        );
+                        break;
                     case 'registration_approved':
                         result = await emailService.sendRegistrationApproved(
                             to,
@@ -196,6 +204,9 @@ class QueueService {
             // Note: This duplicates logic from processJob. In a real app, extract to `processEmailLogic`.
             let result;
             switch (templateName) {
+                case 'registration_received':
+                    result = await emailService.sendRegistrationReceived(to, variables.name, variables.eventName, variables.registrationId);
+                    break;
                 case 'registration_approved':
                     result = await emailService.sendRegistrationApproved(to, variables.name, variables.eventName, variables.username, variables.password);
                     break;

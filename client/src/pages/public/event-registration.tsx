@@ -128,12 +128,28 @@ export default function EventRegistrationPage() {
             });
         },
         onError: (error: any) => {
-            const message = error?.invalidMembers
-                ? `Team member issues: ${error.invalidMembers.map((m: any) => `${m.rollNo}: ${m.reason}`).join(', ')}`
-                : error.message || 'Registration failed';
+            let title = "Registration Failed";
+            let description: React.ReactNode = error.message || 'Registration failed';
+
+            if (error?.invalidMembers && Array.isArray(error.invalidMembers)) {
+                title = "Registration Conflicts Detected";
+                description = (
+                    <div className="mt-2 text-sm">
+                        <p className="mb-2">The following participants cannot be registered:</p>
+                        <ul className="list-disc pl-4 space-y-1">
+                            {error.invalidMembers.map((m: any, i: number) => (
+                                <li key={i} className="text-left">
+                                    <span className="font-semibold">{m.rollNo}:</span> {m.reason}
+                                </li>
+                            ))}
+                        </ul>
+                    </div>
+                );
+            }
+
             toast({
-                title: "Registration Failed",
-                description: message,
+                title,
+                description,
                 variant: "destructive",
             });
         },

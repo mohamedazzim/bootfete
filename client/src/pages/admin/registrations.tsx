@@ -96,7 +96,19 @@ export default function AdminRegistrationsPage() {
                           {registration.organizerRollNo || 'N/A'}
                         </TableCell>
                         <TableCell data-testid={`text-name-${registration.id}`}>
-                          {registration.organizerName || 'N/A'}
+                          <div className="font-medium">
+                            {registration.organizerName || 'N/A'}
+                            <span className="text-xs text-muted-foreground ml-2">(Leader)</span>
+                          </div>
+                          {registration.teamMembers && registration.teamMembers.length > 0 && (
+                            <div className="text-sm text-muted-foreground mt-1 space-y-0.5">
+                              {registration.teamMembers.map((m: any) => (
+                                <div key={m.id} className="flex items-center gap-2">
+                                  <span>{m.memberName}</span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
                         </TableCell>
                         <TableCell data-testid={`text-email-${registration.id}`}>
                           {registration.organizerEmail || 'N/A'}

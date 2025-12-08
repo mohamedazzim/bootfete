@@ -18,6 +18,8 @@ interface RegistrationWithDetails extends Registration {
   teamMembers?: TeamMember[];
 }
 
+
+
 export default function RegistrationCommitteeRegistrationsPage() {
   const { toast } = useToast();
   const [selectedRegistration, setSelectedRegistration] = useState<RegistrationWithDetails | null>(null);
@@ -76,56 +78,137 @@ export default function RegistrationCommitteeRegistrationsPage() {
     return event?.name || eventId;
   };
 
-  const filteredRegistrations = useMemo(() => {
+  // 1. Group by Unique Participant (using Roll No)
+  const groupedUniqueParticipants = useMemo(() => {
     if (!registrations) return [];
 
-    return registrations.filter(reg => {
+    const uniqueParticipantsMap = new Map<string, {
+      id: string; // generated ID
+      name: string;
+      email: string;
+      rollNo: string;
+      dept: string;
+      college: string;
+      phone: string;
+      registrations: Array<{
+        id: string; // registration ID
+        eventName: string;
+        eventId: string;
+        role: 'Leader' | 'Member';
+        status: string;
+        registrationType: string;
+        createdAt: Date;
+        originalRegistration: RegistrationWithDetails;
+      }>
+    }>();
+
+    registrations.forEach(reg => {
+      // Process Organizer
+      const organizerKey = reg.organizerRollNo || reg.organizerEmail;
+      if (!uniqueParticipantsMap.has(organizerKey)) {
+        uniqueParticipantsMap.set(organizerKey, {
+          id: `p-${organizerKey}`,
+          name: reg.organizerName,
+          email: reg.organizerEmail,
+          rollNo: reg.organizerRollNo,
+          dept: reg.organizerDept,
+          college: reg.organizerCollege || '',
+          phone: reg.organizerPhone || '',
+          registrations: []
+        });
+      }
+      uniqueParticipantsMap.get(organizerKey)!.registrations.push({
+        id: reg.id,
+        eventName: reg.event?.name || getEventName(reg.eventId),
+        eventId: reg.eventId,
+        role: 'Leader',
+        status: reg.status,
+        registrationType: reg.registrationType,
+        createdAt: new Date(reg.createdAt),
+        originalRegistration: reg
+      });
+
+      // Process Team Members
+      if (reg.teamMembers && reg.teamMembers.length > 0) {
+        reg.teamMembers.forEach(member => {
+          const memberKey = member.memberRollNo || member.memberEmail;
+          if (!uniqueParticipantsMap.has(memberKey)) {
+            uniqueParticipantsMap.set(memberKey, {
+              id: `p-${memberKey}`,
+              name: member.memberName,
+              email: member.memberEmail,
+              rollNo: member.memberRollNo,
+              dept: member.memberDept,
+              college: reg.organizerCollege || '', // Inherit college
+              phone: member.memberPhone || '',
+              registrations: []
+            });
+          }
+          uniqueParticipantsMap.get(memberKey)!.registrations.push({
+            id: reg.id, // Links to parent registration
+            eventName: reg.event?.name || getEventName(reg.eventId),
+            eventId: reg.eventId,
+            role: 'Member',
+            status: reg.status,
+            registrationType: reg.registrationType,
+            createdAt: new Date(member.addedAt || reg.createdAt),
+            originalRegistration: reg
+          });
+        });
+      }
+    });
+
+    return Array.from(uniqueParticipantsMap.values());
+  }, [registrations, events]);
+
+  // 2. Filter the grouped unique participants
+  const filteredParticipants = useMemo(() => {
+    return groupedUniqueParticipants.filter(p => {
       const searchLower = searchQuery.toLowerCase();
-
       const matchesSearch = !searchQuery ||
-        reg.organizerName.toLowerCase().includes(searchLower) ||
-        reg.organizerEmail.toLowerCase().includes(searchLower) ||
-        reg.organizerRollNo.toLowerCase().includes(searchLower) ||
-        reg.organizerDept.toLowerCase().includes(searchLower) ||
-        reg.teamMembers?.some(m =>
-          m.memberName.toLowerCase().includes(searchLower) ||
-          m.memberRollNo.toLowerCase().includes(searchLower)
-        );
+        p.name.toLowerCase().includes(searchLower) ||
+        p.email.toLowerCase().includes(searchLower) ||
+        p.rollNo.toLowerCase().includes(searchLower) ||
+        p.dept.toLowerCase().includes(searchLower);
 
-      const matchesEvent = filterEvent === "all" || reg.eventId === filterEvent;
-      const matchesStatus = filterStatus === "all" || reg.status === filterStatus;
-      const matchesCollege = filterCollege === "all" || reg.organizerCollege === filterCollege;
+      // Check if ANY of the participant's registrations match the filters
+      const matchesEvent = filterEvent === "all" || p.registrations.some(r => r.eventId === filterEvent);
+      const matchesStatus = filterStatus === "all" || p.registrations.some(r => r.status === filterStatus);
+      const matchesCollege = filterCollege === "all" || p.college === filterCollege;
 
       return matchesSearch && matchesEvent && matchesStatus && matchesCollege;
     });
-  }, [registrations, searchQuery, filterEvent, filterStatus, filterCollege]);
+  }, [groupedUniqueParticipants, searchQuery, filterEvent, filterStatus, filterCollege]);
 
-  const groupedRegistrations = useMemo(() => {
-    if (groupBy === "none") {
-      return { "All Registrations": filteredRegistrations };
+  // 3. Grouping for display (e.g. by College, Dept) - applied on the UNIQUE participants
+  const displayedGroups = useMemo(() => {
+    if (groupBy === "none" || groupBy === "event" || groupBy === "status") {
+      // Logic adjustment: "Group by Event" or "Status" doesn't strictly make sense for a person with MULTIPLE events/statuses
+      // So we might disable those groups or just group by "Mixed" if they have multiple.
+      // For simplicity and correctness with the new view, we might only support grouping by College/Dept meaningfully, 
+      // or "None" which lists everyone.
+      // If user selects "Group By Event", we could list them under "Multiple Events" or duplicate them (which goes against the requirement).
+      // Let's stick to simple "All Participants" if grouping doesn't fit well, or group by primary attribute.
+      return { "All Participants": filteredParticipants };
     }
 
-    const groups: Record<string, typeof filteredRegistrations> = {};
+    const groups: Record<string, typeof filteredParticipants> = {};
 
-    filteredRegistrations.forEach(reg => {
+    filteredParticipants.forEach(p => {
       let groupKey = "Other";
 
-      if (groupBy === "event") {
-        groupKey = reg.event?.name || getEventName(reg.eventId);
-      } else if (groupBy === "status") {
-        groupKey = reg.status.charAt(0).toUpperCase() + reg.status.slice(1);
-      } else if (groupBy === "dept") {
-        groupKey = reg.organizerDept || "Unknown";
+      if (groupBy === "dept") {
+        groupKey = p.dept || "Unknown";
       } else if (groupBy === "college") {
-        groupKey = reg.organizerCollege || "Unknown";
+        groupKey = p.college || "Unknown";
       }
 
       if (!groups[groupKey]) groups[groupKey] = [];
-      groups[groupKey].push(reg);
+      groups[groupKey].push(p);
     });
 
     return groups;
-  }, [filteredRegistrations, groupBy, events]);
+  }, [filteredParticipants, groupBy]);
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -185,7 +268,7 @@ export default function RegistrationCommitteeRegistrationsPage() {
                   <Filter className="h-5 w-5" />
                   Search & Filter
                 </CardTitle>
-                <CardDescription>Find registrations by name, roll number, or event</CardDescription>
+                <CardDescription>Find participants by name, roll number, or event</CardDescription>
               </div>
               {hasActiveFilters && (
                 <Button variant="outline" size="sm" onClick={clearFilters} data-testid="button-clear-filters">
@@ -260,22 +343,7 @@ export default function RegistrationCommitteeRegistrationsPage() {
                 >
                   None
                 </Button>
-                <Button
-                  variant={groupBy === "event" ? "default" : "outline"}
-                  size="sm"
-                  onClick={() => setGroupBy("event")}
-                  data-testid="button-group-event"
-                >
-                  Event
-                </Button>
-                <Button
-                  variant={groupBy === "status" ? "default" : "outline"}
-                  size="sm"
-                  onClick={() => setGroupBy("status")}
-                  data-testid="button-group-status"
-                >
-                  Status
-                </Button>
+                {/* Disabled logical grouping by Event/Status for consolidated view */}
                 <Button
                   variant={groupBy === "dept" ? "default" : "outline"}
                   size="sm"
@@ -294,7 +362,7 @@ export default function RegistrationCommitteeRegistrationsPage() {
                 </Button>
               </div>
               <span className="ml-auto text-sm text-muted-foreground">
-                Showing {filteredRegistrations.length} of {registrations?.length || 0} registrations
+                Showing {filteredParticipants.length} participants
               </span>
             </div>
           </CardContent>
@@ -302,84 +370,71 @@ export default function RegistrationCommitteeRegistrationsPage() {
 
         {isLoading ? (
           <div data-testid="loading-registrations">Loading registrations...</div>
-        ) : Object.entries(groupedRegistrations).map(([groupName, groupRegs]) => (
+        ) : Object.entries(displayedGroups).map(([groupName, groupParticipants]) => (
           <Card key={groupName} className="mb-4">
             <CardHeader>
               <CardTitle>{groupName}</CardTitle>
-              <CardDescription>{groupRegs.length} registration(s)</CardDescription>
+              <CardDescription>{groupParticipants.length} participant(s)</CardDescription>
             </CardHeader>
             <CardContent>
-              {groupRegs.length > 0 ? (
+              {groupParticipants.length > 0 ? (
                 <div className="overflow-x-auto">
                   <Table data-testid={`table-registrations-${groupName}`}>
                     <TableHeader>
                       <TableRow>
-                        <TableHead>Organizer</TableHead>
+                        <TableHead>Participant</TableHead>
                         <TableHead>Roll No</TableHead>
                         <TableHead>Dept</TableHead>
                         <TableHead>College</TableHead>
-                        <TableHead>Event</TableHead>
-                        <TableHead>Team Size</TableHead>
-                        <TableHead>Type</TableHead>
-                        <TableHead>Status</TableHead>
-                        <TableHead>Date</TableHead>
+                        <TableHead>Event(s)</TableHead>
                         <TableHead>Actions</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {groupRegs.map((registration: RegistrationWithDetails) => (
-                        <TableRow key={registration.id} data-testid={`row-registration-${registration.id}`}>
+                      {groupParticipants.map((p) => (
+                        <TableRow key={p.id} data-testid={`row-participant-${p.id}`}>
                           <TableCell>
                             <div>
-                              <p className="font-medium">{registration.organizerName}</p>
-                              <p className="text-sm text-muted-foreground">{registration.organizerEmail}</p>
+                              <p className="font-medium">{p.name}</p>
+                              <p className="text-sm text-muted-foreground">{p.email}</p>
                             </div>
                           </TableCell>
                           <TableCell>
-                            <code className="text-sm">{registration.organizerRollNo}</code>
+                            <code className="text-sm">{p.rollNo}</code>
                           </TableCell>
                           <TableCell>
-                            <span className="text-sm">{registration.organizerDept}</span>
+                            <span className="text-sm">{p.dept}</span>
                           </TableCell>
                           <TableCell>
                             <span className="text-sm text-muted-foreground">
-                              {registration.organizerCollege || '-'}
+                              {p.college || '-'}
                             </span>
                           </TableCell>
                           <TableCell>
-                            <Badge variant="outline">
-                              {registration.event?.name || getEventName(registration.eventId)}
-                            </Badge>
-                          </TableCell>
-                          <TableCell>
-                            <div className="flex items-center gap-1">
-                              <Users className="h-4 w-4 text-muted-foreground" />
-                              <span>{getTotalMembers(registration)}</span>
+                            <div className="space-y-2">
+                              {p.registrations.map(reg => (
+                                <div key={reg.id + reg.eventId} className="flex items-center gap-2 flex-wrap">
+                                  <Badge variant="outline">{reg.eventName}</Badge>
+                                  <span className="text-xs text-muted-foreground">({reg.role})</span>
+                                  <Badge variant={getStatusColor(reg.status)} className="text-xs h-5 px-1.5">{reg.status}</Badge>
+                                </div>
+                              ))}
                             </div>
                           </TableCell>
                           <TableCell>
-                            <Badge variant="secondary">
-                              {registration.registrationType}
-                            </Badge>
-                          </TableCell>
-                          <TableCell>
-                            <Badge variant={getStatusColor(registration.status)}>
-                              {registration.status}
-                            </Badge>
-                          </TableCell>
-                          <TableCell>
-                            {new Date(registration.createdAt).toLocaleDateString()}
-                          </TableCell>
-                          <TableCell>
-                            {registration.status === 'pending' && (
-                              <Button
-                                size="sm"
-                                onClick={() => setSelectedRegistration(registration)}
-                                data-testid={`button-confirm-${registration.id}`}
-                              >
-                                Confirm
-                              </Button>
-                            )}
+                            <div className="space-y-1">
+                              {p.registrations.filter(r => r.status === 'pending').map(reg => (
+                                <Button
+                                  key={reg.id}
+                                  size="sm"
+                                  className="h-7 text-xs w-full"
+                                  onClick={() => setSelectedRegistration(reg.originalRegistration)}
+                                  data-testid={`button-confirm-${reg.id}`}
+                                >
+                                  Confirm {reg.eventName}
+                                </Button>
+                              ))}
+                            </div>
                           </TableCell>
                         </TableRow>
                       ))}
@@ -388,7 +443,7 @@ export default function RegistrationCommitteeRegistrationsPage() {
                 </div>
               ) : (
                 <div className="text-center py-8 text-muted-foreground" data-testid="text-no-registrations">
-                  No registrations match your filters
+                  No participants match your filters
                 </div>
               )}
             </CardContent>
