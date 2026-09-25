@@ -1,3 +1,6 @@
+import dns from "node:dns";
+dns.setDefaultResultOrder("ipv4first");
+
 import express, { type Request, Response, NextFunction } from "express";
 // Force restart timestamp: 2025-12-05T14:30:00
 import { registerRoutes } from "./routes";
@@ -63,6 +66,17 @@ app.use(express.json({
   }
 }));
 app.use(express.urlencoded({ extended: false, limit: '10mb' }));
+
+import path from "path";
+
+// Serve uploads directory specifically
+const uploadsPath = path.join(process.cwd(), 'uploads');
+console.log('[Server] Serving uploads from:', uploadsPath);
+
+app.use('/uploads', (req, res, next) => {
+  console.log(`[Uploads] Request: ${req.url}`);
+  next();
+}, express.static(uploadsPath));
 
 // Session configuration with Redis
 const store = new RedisStore({
@@ -150,7 +164,6 @@ monitoringService.start();
   server.listen({
     port,
     host: "0.0.0.0",
-    reusePort: true,
   }, () => {
     log(`serving on port ${port}`);
 

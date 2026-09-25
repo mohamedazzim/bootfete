@@ -29,7 +29,7 @@ export default function EventDetailsPage() {
     enabled: !!eventId,
   });
 
-  const { data: participants } = useQuery<Participant[]>({
+  const { data: participants } = useQuery<any[]>({
     queryKey: ['/api/events', eventId, 'participants'],
     enabled: !!eventId,
   });
@@ -176,12 +176,18 @@ export default function EventDetailsPage() {
           <TabsContent value="rounds">
             <Card>
               <CardHeader>
-                <div className="flex justify-between items-center">
+                <div className="flex justify-between items-center gap-2">
                   <CardTitle>Event Rounds</CardTitle>
-                  <Button size="sm" onClick={() => setLocation(`/admin/events/${eventId}/rounds/new`)} data-testid="button-create-round">
-                    <Plus className="mr-2 h-4 w-4" />
-                    Add Round
-                  </Button>
+                  <div className="flex gap-2">
+                    <Button size="sm" variant="outline" onClick={() => setLocation(`/admin/tests`)} data-testid="button-manage-tests">
+                      <Edit className="mr-2 h-4 w-4" />
+                      Manage Tests
+                    </Button>
+                    <Button size="sm" onClick={() => setLocation('/admin/tests')} data-testid="button-create-round">
+                      <Plus className="mr-2 h-4 w-4" />
+                      Add Round
+                    </Button>
+                  </div>
                 </div>
               </CardHeader>
               <CardContent>
@@ -207,7 +213,7 @@ export default function EventDetailsPage() {
                           <TableCell>{round.name}</TableCell>
                           <TableCell>{round.duration} min</TableCell>
                           <TableCell>
-                            <Badge variant={round.status === 'active' ? 'default' : 'secondary'}>
+                            <Badge variant={round.status === 'in_progress' ? 'default' : 'secondary'}>
                               {round.status}
                             </Badge>
                           </TableCell>
@@ -215,7 +221,7 @@ export default function EventDetailsPage() {
                             <Button
                               variant="ghost"
                               size="sm"
-                              onClick={() => setLocation(`/admin/rounds/${round.id}`)}
+                              onClick={() => setLocation('/admin/tests')}
                               data-testid={`button-view-round-${round.id}`}
                             >
                               View

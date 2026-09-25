@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+﻿import { useState, useMemo, useCallback } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
-import { Copy, CheckCircle, Search, Filter, X, Users } from "lucide-react";
+import { Copy, CheckCircle, Search, Filter, X, Users, AlertCircle, Download } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import RegistrationCommitteeLayout from "@/components/layouts/RegistrationCommitteeLayout";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -22,10 +22,21 @@ interface RegistrationWithDetails extends Registration {
 
 export default function RegistrationCommitteeRegistrationsPage() {
   const { toast } = useToast();
-  const [selectedRegistration, setSelectedRegistration] = useState<RegistrationWithDetails | null>(null);
+
+  // New state for the confirmation dialog
+  const [confirmDialog, setConfirmDialog] = useState<{
+    isOpen: boolean;
+    participant: any; // Using the grouped participant type structure
+    pendingIds: string[];
+  }>({
+    isOpen: false,
+    participant: null,
+    pendingIds: []
+  });
+
   const [showCredentials, setShowCredentials] = useState(false);
   const [credentials, setCredentials] = useState<{
-    eventCredentials: Array<{ eventId: string; eventName: string; eventUsername: string; eventPassword: string }>;
+    eventCredentials: Array<{ eventId: string; eventName: string; eventUsername: string; eventPassword: string; teamId?: string }>;
   } | null>(null);
 
   const [searchQuery, setSearchQuery] = useState("");
@@ -46,6 +57,87 @@ export default function RegistrationCommitteeRegistrationsPage() {
     queryKey: ['/api/registrations/colleges'],
   });
 
+  const escapeCsv = (val: any) => {
+    if (val === null || val === undefined) return "";
+    const str = String(val);
+    if (str.includes('"') || str.includes(',') || str.includes('\n')) {
+      return '"' + str.replace(/"/g, '""') + '"';
+    }
+    return str;
+  };
+
+  const handleExportCsv = useCallback(() => {
+    if (!registrations || registrations.length === 0) return;
+
+    const headers = [
+      'Team ID',
+      'Participant Name',
+      'Roll No',
+      'Email',
+      'Phone',
+      'Department',
+      'College',
+      'Event',
+    ];
+
+    const rows: Array<{ college: string; data: string }> = [];
+
+    registrations.forEach((reg) => {
+      const base = {
+        teamId: reg.teamId || reg.id,
+        eventName: reg.event?.name || reg.eventId,
+        college: reg.organizerCollege || '',
+      };
+
+      // Leader row
+      rows.push({
+        college: base.college,
+        data: [
+          base.teamId,
+          reg.organizerName,
+          reg.organizerRollNo,
+          reg.organizerEmail,
+          reg.organizerPhone,
+          reg.organizerDept,
+          base.college,
+          base.eventName,
+        ].map(escapeCsv).join(',')
+      });
+
+      // Team member rows
+      if (reg.teamMembers?.length) {
+        reg.teamMembers.forEach((tm) => {
+          rows.push({
+            college: base.college,
+            data: [
+              base.teamId,
+              tm.memberName,
+              tm.memberRollNo,
+              tm.memberEmail,
+              tm.memberPhone,
+              tm.memberDept,
+              base.college,
+              base.eventName,
+            ].map(escapeCsv).join(',')
+          });
+        });
+      }
+    });
+
+    // Sort by college name for grouping
+    rows.sort((a, b) => a.college.localeCompare(b.college));
+
+    const csv = [headers.join(','), ...rows.map(r => r.data)].join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'registrations-export.csv';
+    link.click();
+    URL.revokeObjectURL(url);
+  }, [registrations]);
+
+  // Single confirm mutation (used internally by bulk generally now, or for single specific actions)
   const confirmMutation = useMutation({
     mutationFn: async (registrationId: string) => {
       const response = await apiRequest('PATCH', `/api/registrations/${registrationId}/confirm`);
@@ -57,11 +149,39 @@ export default function RegistrationCommitteeRegistrationsPage() {
         setCredentials({ eventCredentials: data.eventCredentials });
         setShowCredentials(true);
       }
-      setSelectedRegistration(null);
+      setConfirmDialog(prev => ({ ...prev, isOpen: false }));
       queryClient.invalidateQueries({ queryKey: ['/api/registrations'] });
       toast({
         title: "Success",
         description: "Registration confirmed successfully",
+      });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Error",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
+  });
+
+  // Bulk confirm mutation
+  const bulkConfirmMutation = useMutation({
+    mutationFn: async (registrationIds: string[]) => {
+      const response = await apiRequest('POST', `/api/registrations/bulk-confirm`, { registrationIds });
+      return response.json();
+    },
+    onSuccess: (data) => {
+      setConfirmDialog(prev => ({ ...prev, isOpen: false }));
+      queryClient.invalidateQueries({ queryKey: ['/api/registrations'] });
+      // Show credentials if returned (bulk confirm might return a list of results)
+      // The API returns { confirmed: number, message: string, results: [...] }
+      // We might want to aggregate credentials from results if needed, 
+      // but usually bulk confirm emails them. 
+      // For now, simple success message is okay, or specialized credential display if critical.
+      toast({
+        title: "Success",
+        description: data.message || `Confirmed ${data.confirmed} registration(s)`,
       });
     },
     onError: (error: Error) => {
@@ -92,6 +212,7 @@ export default function RegistrationCommitteeRegistrationsPage() {
       phone: string;
       registrations: Array<{
         id: string; // registration ID
+        teamId: string | null;
         eventName: string;
         eventId: string;
         role: 'Leader' | 'Member';
@@ -116,9 +237,11 @@ export default function RegistrationCommitteeRegistrationsPage() {
           phone: reg.organizerPhone || '',
           registrations: []
         });
+
       }
       uniqueParticipantsMap.get(organizerKey)!.registrations.push({
         id: reg.id,
+        teamId: reg.teamId,
         eventName: reg.event?.name || getEventName(reg.eventId),
         eventId: reg.eventId,
         role: 'Leader',
@@ -128,7 +251,13 @@ export default function RegistrationCommitteeRegistrationsPage() {
         originalRegistration: reg
       });
 
-      // Process Team Members
+      // Process Team Members (for display context, they appear in their own rows if they are organizers, 
+      // but here we are listing "Participants" as rows. 
+      // If a team member is JUST a member, they don't get a row? 
+      // The logic below adds them as separate entries if they are team members 
+      // so they can see their status. 
+      // BUT for "Approval", we usually approve the TEAM (Leader's registration).
+      // So approval actions should be on the Leader's row.
       if (reg.teamMembers && reg.teamMembers.length > 0) {
         reg.teamMembers.forEach(member => {
           const memberKey = member.memberRollNo || member.memberEmail;
@@ -139,13 +268,14 @@ export default function RegistrationCommitteeRegistrationsPage() {
               email: member.memberEmail,
               rollNo: member.memberRollNo,
               dept: member.memberDept,
-              college: reg.organizerCollege || '', // Inherit college
+              college: reg.organizerCollege || '',
               phone: member.memberPhone || '',
               registrations: []
             });
           }
           uniqueParticipantsMap.get(memberKey)!.registrations.push({
-            id: reg.id, // Links to parent registration
+            id: reg.id,
+            teamId: reg.teamId,
             eventName: reg.event?.name || getEventName(reg.eventId),
             eventId: reg.eventId,
             role: 'Member',
@@ -161,7 +291,7 @@ export default function RegistrationCommitteeRegistrationsPage() {
     return Array.from(uniqueParticipantsMap.values());
   }, [registrations, events]);
 
-  // 2. Filter the grouped unique participants
+  // 2. Filter
   const filteredParticipants = useMemo(() => {
     return groupedUniqueParticipants.filter(p => {
       const searchLower = searchQuery.toLowerCase();
@@ -171,7 +301,6 @@ export default function RegistrationCommitteeRegistrationsPage() {
         p.rollNo.toLowerCase().includes(searchLower) ||
         p.dept.toLowerCase().includes(searchLower);
 
-      // Check if ANY of the participant's registrations match the filters
       const matchesEvent = filterEvent === "all" || p.registrations.some(r => r.eventId === filterEvent);
       const matchesStatus = filterStatus === "all" || p.registrations.some(r => r.status === filterStatus);
       const matchesCollege = filterCollege === "all" || p.college === filterCollege;
@@ -180,15 +309,9 @@ export default function RegistrationCommitteeRegistrationsPage() {
     });
   }, [groupedUniqueParticipants, searchQuery, filterEvent, filterStatus, filterCollege]);
 
-  // 3. Grouping for display (e.g. by College, Dept) - applied on the UNIQUE participants
+  // 3. Grouping for display
   const displayedGroups = useMemo(() => {
     if (groupBy === "none" || groupBy === "event" || groupBy === "status") {
-      // Logic adjustment: "Group by Event" or "Status" doesn't strictly make sense for a person with MULTIPLE events/statuses
-      // So we might disable those groups or just group by "Mixed" if they have multiple.
-      // For simplicity and correctness with the new view, we might only support grouping by College/Dept meaningfully, 
-      // or "None" which lists everyone.
-      // If user selects "Group By Event", we could list them under "Multiple Events" or duplicate them (which goes against the requirement).
-      // Let's stick to simple "All Participants" if grouping doesn't fit well, or group by primary attribute.
       return { "All Participants": filteredParticipants };
     }
 
@@ -196,12 +319,8 @@ export default function RegistrationCommitteeRegistrationsPage() {
 
     filteredParticipants.forEach(p => {
       let groupKey = "Other";
-
-      if (groupBy === "dept") {
-        groupKey = p.dept || "Unknown";
-      } else if (groupBy === "college") {
-        groupKey = p.college || "Unknown";
-      }
+      if (groupBy === "dept") groupKey = p.dept || "Unknown";
+      else if (groupBy === "college") groupKey = p.college || "Unknown";
 
       if (!groups[groupKey]) groups[groupKey] = [];
       groups[groupKey].push(p);
@@ -212,14 +331,10 @@ export default function RegistrationCommitteeRegistrationsPage() {
 
   const getStatusColor = (status: string) => {
     switch (status) {
-      case 'confirmed':
-        return 'default';
-      case 'pending':
-        return 'secondary';
-      case 'cancelled':
-        return 'destructive';
-      default:
-        return 'outline';
+      case 'confirmed': return 'default';
+      case 'pending': return 'secondary';
+      case 'cancelled': return 'destructive';
+      default: return 'outline';
     }
   };
 
@@ -235,29 +350,43 @@ export default function RegistrationCommitteeRegistrationsPage() {
     if (credentials) {
       let text = `Event Credentials:\n`;
       credentials.eventCredentials.forEach((event) => {
-        text += `\n${event.eventName}:\nUsername: ${event.eventUsername}\nPassword: ${event.eventPassword}\n`;
+        text += `\n${event.eventName}:\nTeam ID: ${event.teamId || 'â€”'}\nUsername: ${event.eventUsername}\nPassword: ${event.eventPassword}\n`;
       });
-
       navigator.clipboard.writeText(text);
-      toast({
-        title: "Copied",
-        description: "Credentials copied to clipboard",
-      });
+      toast({ title: "Copied", description: "Credentials copied to clipboard" });
     }
   };
 
   const hasActiveFilters = searchQuery || filterEvent !== "all" || filterStatus !== "all" || filterCollege !== "all" || groupBy !== "none";
 
-  const getTotalMembers = (reg: RegistrationWithDetails) => {
-    return 1 + (reg.teamMembers?.length || 0); // 1 for organizer + team members
+  const handleConfirmClick = (participant: any, pendingIds: string[]) => {
+    setConfirmDialog({
+      isOpen: true,
+      participant,
+      pendingIds
+    });
+  };
+
+  const handleConfirmAction = () => {
+    const { pendingIds } = confirmDialog;
+    if (pendingIds.length === 1) {
+      confirmMutation.mutate(pendingIds[0]);
+    } else {
+      bulkConfirmMutation.mutate(pendingIds);
+    }
   };
 
   return (
     <RegistrationCommitteeLayout>
       <div className="container mx-auto p-4 md:p-6 max-w-7xl" data-testid="page-reg-committee-registrations">
-        <div className="mb-6">
-          <h1 className="text-3xl font-bold" data-testid="heading-registrations">Registrations</h1>
-          <p className="text-muted-foreground">Review and confirm participant registrations</p>
+        <div className="mb-6 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+          <div>
+            <h1 className="text-3xl font-bold" data-testid="heading-registrations">Registrations</h1>
+            <p className="text-muted-foreground">Review and confirm participant registrations</p>
+          </div>
+          <Button variant="outline" onClick={handleExportCsv} disabled={!registrations || registrations.length === 0}>
+            <Download className="h-4 w-4 mr-2" /> Export CSV
+          </Button>
         </div>
 
         <Card className="mb-6">
@@ -343,7 +472,6 @@ export default function RegistrationCommitteeRegistrationsPage() {
                 >
                   None
                 </Button>
-                {/* Disabled logical grouping by Event/Status for consolidated view */}
                 <Button
                   variant={groupBy === "dept" ? "default" : "outline"}
                   size="sm"
@@ -415,6 +543,7 @@ export default function RegistrationCommitteeRegistrationsPage() {
                               {p.registrations.map(reg => (
                                 <div key={reg.id + reg.eventId} className="flex items-center gap-2 flex-wrap">
                                   <Badge variant="outline">{reg.eventName}</Badge>
+                                  <Badge variant="secondary" className="text-[11px] font-mono">{reg.teamId}</Badge>
                                   <span className="text-xs text-muted-foreground">({reg.role})</span>
                                   <Badge variant={getStatusColor(reg.status)} className="text-xs h-5 px-1.5">{reg.status}</Badge>
                                 </div>
@@ -422,19 +551,22 @@ export default function RegistrationCommitteeRegistrationsPage() {
                             </div>
                           </TableCell>
                           <TableCell>
-                            <div className="space-y-1">
-                              {p.registrations.filter(r => r.status === 'pending').map(reg => (
+                            {(() => {
+                              const pendingRegs = p.registrations.filter(r => r.status === 'pending' && r.role === 'Leader');
+                              const pendingIds = Array.from(new Set(pendingRegs.map(r => r.id)));
+                              if (pendingIds.length === 0) return null;
+                              return (
                                 <Button
-                                  key={reg.id}
                                   size="sm"
-                                  className="h-7 text-xs w-full"
-                                  onClick={() => setSelectedRegistration(reg.originalRegistration)}
-                                  data-testid={`button-confirm-${reg.id}`}
+                                  className="h-8"
+                                  onClick={() => handleConfirmClick(p, pendingIds)}
+                                  disabled={confirmMutation.isPending || bulkConfirmMutation.isPending}
+                                  data-testid={`button-confirm-all-${p.id}`}
                                 >
-                                  Confirm {reg.eventName}
+                                  {pendingIds.length === 1 ? 'Confirm' : `Confirm All (${pendingIds.length})`}
                                 </Button>
-                              ))}
-                            </div>
+                              );
+                            })()}
                           </TableCell>
                         </TableRow>
                       ))}
@@ -460,94 +592,115 @@ export default function RegistrationCommitteeRegistrationsPage() {
           </Card>
         )}
 
-        {/* Confirm Registration Dialog */}
-        <Dialog open={!!selectedRegistration} onOpenChange={(open) => !open && setSelectedRegistration(null)}>
+        {/* Detailed Confirmation Dialog */}
+        <Dialog open={confirmDialog.isOpen} onOpenChange={(open) => setConfirmDialog(prev => ({ ...prev, isOpen: open }))}>
           <DialogContent className="max-w-2xl" data-testid="dialog-confirm">
             <DialogHeader>
               <DialogTitle data-testid="dialog-title">Confirm Registration</DialogTitle>
               <DialogDescription data-testid="dialog-description">
-                Review the registration details and confirm to create participant credentials
+                Review details for <strong>{confirmDialog.participant?.name}</strong> before approving.
               </DialogDescription>
             </DialogHeader>
-            {selectedRegistration && (
-              <div className="space-y-4" data-testid="registration-details">
-                <div className="grid grid-cols-2 gap-4">
+            {confirmDialog.participant && (
+              <div className="space-y-6" data-testid="registration-details">
+                {/* Participant/Organizer Info */}
+                <div className="grid grid-cols-2 gap-4 border p-4 rounded-md bg-muted/20">
                   <div>
-                    <p className="text-sm text-muted-foreground">Organizer</p>
-                    <p className="font-medium">{selectedRegistration.organizerName}</p>
+                    <p className="text-xs text-muted-foreground uppercase tracking-wider font-semibold">Organizer / Name</p>
+                    <p className="font-medium">{confirmDialog.participant.name}</p>
+                    <p className="text-sm text-muted-foreground">{confirmDialog.participant.email}</p>
                   </div>
                   <div>
-                    <p className="text-sm text-muted-foreground">Roll No</p>
-                    <p className="font-medium">{selectedRegistration.organizerRollNo}</p>
+                    <p className="text-xs text-muted-foreground uppercase tracking-wider font-semibold">Roll No & Dept</p>
+                    <p className="font-medium">{confirmDialog.participant.rollNo}</p>
+                    <p className="text-sm text-muted-foreground">{confirmDialog.participant.dept}</p>
                   </div>
-                  <div>
-                    <p className="text-sm text-muted-foreground">Email</p>
-                    <p className="font-medium">{selectedRegistration.organizerEmail}</p>
+                  <div className="col-span-2">
+                    <p className="text-xs text-muted-foreground uppercase tracking-wider font-semibold">College</p>
+                    <p className="font-medium">{confirmDialog.participant.college}</p>
                   </div>
-                  <div>
-                    <p className="text-sm text-muted-foreground">Department</p>
-                    <p className="font-medium">{selectedRegistration.organizerDept}</p>
-                  </div>
-                  {selectedRegistration.organizerCollege && (
-                    <div>
-                      <p className="text-sm text-muted-foreground">College</p>
-                      <p className="font-medium">{selectedRegistration.organizerCollege}</p>
-                    </div>
-                  )}
                 </div>
 
+                {/* Events to be Confirmed */}
                 <div>
-                  <p className="text-sm text-muted-foreground mb-2">Event</p>
-                  <Badge variant="outline" className="text-base py-1 px-3">
-                    {selectedRegistration.event?.name || getEventName(selectedRegistration.eventId)}
-                  </Badge>
+                  <h4 className="text-sm font-semibold mb-2 flex items-center gap-2">
+                    <CheckCircle className="h-4 w-4 text-green-600" />
+                    Events to Confirm ({confirmDialog.pendingIds.length})
+                  </h4>
+                  <div className="space-y-3">
+                    {confirmDialog.pendingIds.map(id => {
+                      const reg = confirmDialog.participant.registrations.find((r: any) => r.id === id);
+                      if (!reg) return null;
+
+                      const teamMembers = reg.originalRegistration.teamMembers || [];
+
+                      return (
+                        <div key={id} className="border rounded-md p-3">
+                          <div className="flex justify-between items-center mb-2">
+                            <Badge variant="outline" className="text-base">{reg.eventName}</Badge>
+                            <span className="text-xs font-mono text-muted-foreground">Team ID: {reg.teamId}</span>
+                            <Badge variant="secondary">Pending</Badge>
+                          </div>
+
+                          {/* Team Members List */}
+                          {teamMembers.length > 0 ? (
+                            <div className="mt-2">
+                              <p className="text-xs text-muted-foreground font-semibold mb-1">Team Members ({teamMembers.length})</p>
+                              <Table>
+                                <TableHeader>
+                                  <TableRow className="bg-muted/50 h-8">
+                                    <TableHead className="h-8 py-0">Name</TableHead>
+                                    <TableHead className="h-8 py-0">Roll No</TableHead>
+                                  </TableRow>
+                                </TableHeader>
+                                <TableBody>
+                                  {teamMembers.map((tm: any) => (
+                                    <TableRow key={tm.id} className="h-8">
+                                      <TableCell className="py-1">{tm.memberName}</TableCell>
+                                      <TableCell className="py-1 text-xs font-mono">{tm.memberRollNo}</TableCell>
+                                    </TableRow>
+                                  ))}
+                                </TableBody>
+                              </Table>
+                            </div>
+                          ) : (
+                            <p className="text-sm text-muted-foreground italic">Individual Participation</p>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
 
-                {selectedRegistration.teamMembers && selectedRegistration.teamMembers.length > 0 && (
-                  <div>
-                    <p className="text-sm text-muted-foreground mb-2">
-                      Team Members ({selectedRegistration.teamMembers.length})
-                    </p>
-                    <div className="space-y-2">
-                      {selectedRegistration.teamMembers.map((member) => (
-                        <div key={member.id} className="flex items-center justify-between p-2 bg-muted rounded">
-                          <div>
-                            <p className="font-medium">{member.memberName}</p>
-                            <p className="text-sm text-muted-foreground">{member.memberEmail}</p>
-                          </div>
-                          <code className="text-sm">{member.memberRollNo}</code>
-                        </div>
-                      ))}
-                    </div>
+                <div className="bg-blue-50 dark:bg-blue-950 p-3 rounded-md flex gap-2 items-start">
+                  <AlertCircle className="h-5 w-5 text-blue-600 dark:text-blue-400 mt-0.5" />
+                  <div className="text-sm text-blue-900 dark:text-blue-200">
+                    <p className="font-medium">Action Required</p>
+                    <p>Clicking approve will generate credentials and email them to the organizer.</p>
                   </div>
-                )}
-
-                <div className="bg-muted/50 p-3 rounded-md text-sm">
-                  <p className="font-medium mb-1">What will happen:</p>
-                  <ul className="space-y-1 text-muted-foreground">
-                    <li>• Event credentials will be created for all team members</li>
-                    <li>• Total {getTotalMembers(selectedRegistration)} participant(s) will be registered</li>
-                    <li>• Credentials will be shown for distribution</li>
-                  </ul>
                 </div>
               </div>
             )}
-            <DialogFooter>
-              <Button variant="outline" onClick={() => setSelectedRegistration(null)} data-testid="button-cancel">
+            <DialogFooter className="gap-2 sm:gap-0">
+              <Button variant="outline" onClick={() => setConfirmDialog(prev => ({ ...prev, isOpen: false }))} data-testid="button-cancel">
                 Cancel
               </Button>
               <Button
-                onClick={() => selectedRegistration && confirmMutation.mutate(selectedRegistration.id)}
-                disabled={confirmMutation.isPending}
+                onClick={handleConfirmAction}
+                disabled={confirmMutation.isPending || bulkConfirmMutation.isPending}
                 data-testid="button-confirm-approve"
+                className="bg-green-600 hover:bg-green-700 text-white"
               >
-                {confirmMutation.isPending ? 'Confirming...' : 'Confirm & Create Credentials'}
+                {confirmMutation.isPending || bulkConfirmMutation.isPending
+                  ? 'Confirming...'
+                  : `Approve & Send Credentials (${confirmDialog.pendingIds.length})`
+                }
               </Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>
 
-        {/* Credentials Dialog */}
+        {/* Credentials Dialog (Post-Success) */}
         <Dialog open={showCredentials} onOpenChange={setShowCredentials}>
           <DialogContent className="max-w-2xl" data-testid="dialog-credentials">
             <DialogHeader>
@@ -565,6 +718,10 @@ export default function RegistrationCommitteeRegistrationsPage() {
                   <div key={event.eventId} className="p-4 bg-blue-50 dark:bg-blue-950 rounded-md">
                     <p className="font-semibold text-blue-900 dark:text-blue-100 mb-2">{event.eventName}</p>
                     <div className="grid grid-cols-2 gap-4 text-sm">
+                      <div>
+                        <span className="text-muted-foreground">Team ID:</span>
+                        <code className="ml-2 font-mono">{event.teamId || 'â€”'}</code>
+                      </div>
                       <div>
                         <span className="text-muted-foreground">Username:</span>
                         <code className="ml-2 font-mono">{event.eventUsername}</code>

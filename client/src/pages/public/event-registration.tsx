@@ -6,17 +6,19 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { CheckCircle, AlertCircle, Plus, Trash2, Loader2, UserPlus, Users } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import type { Event } from "@shared/schema";
+import { DEPARTMENT_OPTIONS } from "@shared/schema";
 
 interface TeamMember {
     memberRollNo: string;
     memberName: string;
     memberEmail: string;
-    memberDept: string;
     memberPhone: string;
+    memberFoodType: 'veg' | 'nonveg';
     validationStatus?: 'pending' | 'valid' | 'invalid';
     validationMessage?: string;
 }
@@ -40,8 +42,10 @@ export default function EventRegistrationPage() {
     const [organizerName, setOrganizerName] = useState("");
     const [organizerEmail, setOrganizerEmail] = useState("");
     const [organizerDept, setOrganizerDept] = useState("");
+    const [organizerDeptIsOther, setOrganizerDeptIsOther] = useState(false);
     const [organizerCollege, setOrganizerCollege] = useState("");
     const [organizerPhone, setOrganizerPhone] = useState("");
+    const [organizerFoodType, setOrganizerFoodType] = useState<'veg' | 'nonveg'>('veg');
     const [organizerValidation, setOrganizerValidation] = useState<ValidationResult | null>(null);
     const [isValidatingOrganizer, setIsValidatingOrganizer] = useState(false);
 
@@ -51,7 +55,7 @@ export default function EventRegistrationPage() {
 
     // Fetch event details
     const { data: event, isLoading: isLoadingEvent } = useQuery<Event>({
-        queryKey: [`/api/events/${eventId}`],
+        queryKey: [`/api/events/public/${eventId}`],
         enabled: !!eventId,
     });
 
@@ -111,12 +115,14 @@ export default function EventRegistrationPage() {
                 organizerDept,
                 organizerCollege,
                 organizerPhone,
+                organizerFoodType,
                 teamMembers: teamMembers.map(m => ({
                     memberRollNo: m.memberRollNo,
                     memberName: m.memberName,
                     memberEmail: m.memberEmail,
-                    memberDept: m.memberDept,
-                    memberPhone: m.memberPhone
+                    memberDept: organizerDept,
+                    memberPhone: m.memberPhone,
+                    memberFoodType: m.memberFoodType,
                 }))
             });
         },
@@ -130,8 +136,27 @@ export default function EventRegistrationPage() {
         onError: (error: any) => {
             let title = "Registration Failed";
             let description: React.ReactNode = error.message || 'Registration failed';
+            let duration = 5000;
 
-            if (error?.invalidMembers && Array.isArray(error.invalidMembers)) {
+            // Handle department limit exceeded error (machine-readable code)
+            if (error?.code === 'DEPARTMENT_LIMIT_EXCEEDED') {
+                title = "Department Limit Reached";
+                description = (
+                    <div className="space-y-2">
+                        <p className="font-semibold">Only 10 unique participants are allowed per department per college.</p>
+                        <p className="text-sm">
+                            Department: <span className="font-medium">{error.department}</span>
+                        </p>
+                        <p className="text-sm">
+                            Current Count: <span className="font-medium">{error.currentCount || 10}/10</span>
+                        </p>
+                        <p className="text-sm mt-2">This limit ensures fair participation across all departments at your college.</p>
+                    </div>
+                );
+                duration = 10000; // 10 seconds for department limit errors
+            }
+            // Handle invalid members error
+            else if (error?.invalidMembers && Array.isArray(error.invalidMembers)) {
                 title = "Registration Conflicts Detected";
                 description = (
                     <div className="mt-2 text-sm">
@@ -151,6 +176,7 @@ export default function EventRegistrationPage() {
                 title,
                 description,
                 variant: "destructive",
+                duration,
             });
         },
     });
@@ -171,8 +197,8 @@ export default function EventRegistrationPage() {
             memberRollNo: '',
             memberName: '',
             memberEmail: '',
-            memberDept: '',
-            memberPhone: ''
+            memberPhone: '',
+            memberFoodType: 'veg',
         }]);
     };
 
@@ -182,7 +208,7 @@ export default function EventRegistrationPage() {
     };
 
     // Update team member field
-    const updateTeamMember = (index: number, field: keyof TeamMember, value: string) => {
+    const updateTeamMember = (index: number, field: keyof TeamMember, value: string | boolean) => {
         const updated = [...teamMembers];
         (updated[index] as any)[field] = value;
         setTeamMembers(updated);
@@ -200,9 +226,9 @@ export default function EventRegistrationPage() {
         if (!organizerRollNo || !organizerName || !organizerEmail || !organizerDept) return false;
         if (organizerValidation?.blocked) return false;
 
-        // Check all team members
+        // Check all team members (department inherited from organizer)
         for (const member of teamMembers) {
-            if (!member.memberRollNo || !member.memberName || !member.memberEmail || !member.memberDept) return false;
+            if (!member.memberRollNo || !member.memberName || !member.memberEmail) return false;
             if (member.validationStatus === 'invalid') return false;
         }
 
@@ -363,13 +389,37 @@ export default function EventRegistrationPage() {
 
                                 <div className="space-y-2">
                                     <Label htmlFor="dept">Department <span className="text-destructive">*</span></Label>
-                                    <Input
-                                        id="dept"
-                                        value={organizerDept}
-                                        onChange={(e) => setOrganizerDept(e.target.value)}
-                                        placeholder="e.g., Computer Science"
-                                        required
-                                    />
+                                    <Select 
+                                        value={organizerDeptIsOther ? "Others" : (organizerDept && DEPARTMENT_OPTIONS.slice(0, -1).includes(organizerDept as any) ? organizerDept : undefined)} 
+                                        onValueChange={(val) => {
+                                            if (val === "Others") {
+                                                setOrganizerDeptIsOther(true);
+                                                setOrganizerDept("");
+                                            } else {
+                                                setOrganizerDeptIsOther(false);
+                                                setOrganizerDept(val);
+                                            }
+                                        }}
+                                    >
+                                        <SelectTrigger>
+                                            <SelectValue placeholder="Select department" />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            {DEPARTMENT_OPTIONS.map((dept) => (
+                                                <SelectItem key={dept} value={dept}>{dept}</SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
+                                    {organizerDeptIsOther && (
+                                        <Input
+                                            id="dept"
+                                            className="mt-2"
+                                            value={organizerDept}
+                                            onChange={(e) => setOrganizerDept(e.target.value)}
+                                            placeholder="Enter your department"
+                                            required
+                                        />
+                                    )}
                                 </div>
 
                                 <div className="space-y-2">
@@ -391,6 +441,22 @@ export default function EventRegistrationPage() {
                                         onChange={(e) => setOrganizerPhone(e.target.value)}
                                         placeholder="10-digit mobile number"
                                     />
+                                </div>
+
+                                <div className="space-y-2">
+                                    <Label htmlFor="foodType">Food Preference <span className="text-destructive">*</span></Label>
+                                    <Select 
+                                        value={organizerFoodType} 
+                                        onValueChange={(val: 'veg' | 'nonveg') => setOrganizerFoodType(val)}
+                                    >
+                                        <SelectTrigger>
+                                            <SelectValue placeholder="Select food preference" />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            <SelectItem value="veg">Veg</SelectItem>
+                                            <SelectItem value="nonveg">Non-veg</SelectItem>
+                                        </SelectContent>
+                                    </Select>
                                 </div>
                             </div>
                         </CardContent>
@@ -480,16 +546,6 @@ export default function EventRegistrationPage() {
                                             </div>
 
                                             <div className="space-y-2">
-                                                <Label>Department <span className="text-destructive">*</span></Label>
-                                                <Input
-                                                    value={member.memberDept}
-                                                    onChange={(e) => updateTeamMember(index, 'memberDept', e.target.value)}
-                                                    placeholder="e.g., Computer Science"
-                                                    required
-                                                />
-                                            </div>
-
-                                            <div className="space-y-2 md:col-span-2">
                                                 <Label>Phone Number</Label>
                                                 <Input
                                                     type="tel"
@@ -497,6 +553,22 @@ export default function EventRegistrationPage() {
                                                     onChange={(e) => updateTeamMember(index, 'memberPhone', e.target.value)}
                                                     placeholder="10-digit mobile number"
                                                 />
+                                            </div>
+
+                                            <div className="space-y-2">
+                                                <Label>Food Preference <span className="text-destructive">*</span></Label>
+                                                <Select 
+                                                    value={member.memberFoodType} 
+                                                    onValueChange={(val: 'veg' | 'nonveg') => updateTeamMember(index, 'memberFoodType', val)}
+                                                >
+                                                    <SelectTrigger>
+                                                        <SelectValue placeholder="Select food preference" />
+                                                    </SelectTrigger>
+                                                    <SelectContent>
+                                                        <SelectItem value="veg">Veg</SelectItem>
+                                                        <SelectItem value="nonveg">Non-veg</SelectItem>
+                                                    </SelectContent>
+                                                </Select>
                                             </div>
                                         </div>
                                     </div>

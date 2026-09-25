@@ -1,6 +1,6 @@
 import { useParams, useLocation } from 'wouter';
 import { useQuery, useMutation } from '@tanstack/react-query';
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import ParticipantLayout from '@/components/layouts/ParticipantLayout';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -8,17 +8,37 @@ import { Badge } from '@/components/ui/badge';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import { Input } from '@/components/ui/input';
 import { Progress } from '@/components/ui/progress';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { useToast } from '@/hooks/use-toast';
 import { apiRequest, queryClient } from '@/lib/queryClient';
-import { Clock, AlertTriangle, Send, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Clock, AlertTriangle, Send, ChevronLeft, ChevronRight, Pause } from 'lucide-react';
 import type { TestAttempt, Question, Answer, Round, RoundRules, Participant } from '@shared/schema';
 
 interface TestAttemptWithDetails extends TestAttempt {
   round: Round;
   questions: (Question & { questionText: string })[];
   answers: Answer[];
+}
+
+// Seeded shuffle function for consistent randomization per attempt
+function shuffleWithSeed(array: string[], seed: string): string[] {
+  const shuffled = [...array];
+  let hash = 0;
+  for (let i = 0; i < seed.length; i++) {
+    hash = ((hash << 5) - hash) + seed.charCodeAt(i);
+    hash |= 0;
+  }
+  const seededRandom = () => {
+    hash = (hash * 1103515245 + 12345) & 0x7fffffff;
+    return (hash % 1000) / 1000;
+  };
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = Math.floor(seededRandom() * (i + 1));
+    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+  }
+  return shuffled;
 }
 
 export default function TakeTestPage() {
@@ -38,10 +58,17 @@ export default function TakeTestPage() {
   const [timeWarningMessage, setTimeWarningMessage] = useState('');
   const [showSubmitConfirm, setShowSubmitConfirm] = useState(false);
 
+  // Mobile device detection - iOS Safari doesn't support Fullscreen API for non-video elements
+  const isMobileDevice = /iPhone|iPad|iPod|Android|webOS|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+  const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
+  const supportsFullscreen = !!(document.documentElement.requestFullscreen || (document.documentElement as any).webkitRequestFullscreen);
+  const canUseFullscreen = supportsFullscreen && !isIOS;
+
   // Ref to track test status for event handlers
   const testStatusRef = useRef<string>('in_progress');
   const hasShown5MinWarning = useRef(false);
   const hasShown1MinWarning = useRef(false);
+  const hasTriggeredSubmit = useRef(false);
 
   const { data: attempt, isLoading } = useQuery<TestAttemptWithDetails>({
     queryKey: ['/api/attempts', attemptId],
@@ -78,23 +105,27 @@ export default function TakeTestPage() {
   const { data: participant } = useQuery<Participant | null>({
     queryKey: ['/api/participants/my-registrations', attempt?.userId, attempt?.round?.eventId],
     queryFn: async () => {
-      if (!attempt?.userId || !attempt?.round?.eventId) return null;
-      const response = await fetch(`/api/participants/my-registrations`, {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
-        }
-      });
+      const response = await apiRequest('GET', '/api/participants/my-registrations');
       const participants: Participant[] = await response.json();
-      return participants.find((p: Participant) => p.eventId === attempt.round.eventId && p.userId === attempt.userId) || null;
+      const targetEventId = attempt?.round?.eventId || (attempt as any)?.eventId;
+      return participants.find((p: Participant) => (!targetEventId || p.eventId === targetEventId)) || participants[0] || null;
     },
-    enabled: !!attempt?.userId && !!attempt?.round?.eventId,
+    enabled: !!attempt,
   });
 
   // Mutations defined early to avoid TDZ issues
   const disqualifyMutation = useMutation({
     mutationFn: async () => {
-      if (!participant?.id) throw new Error('Participant not found');
-      return apiRequest('PATCH', `/api/participants/${participant.id}/disqualify`, {});
+      let targetId = participant?.id;
+      if (!targetId) {
+        const response = await apiRequest('GET', '/api/participants/my-registrations');
+        const participants: Participant[] = await response.json();
+        const targetEventId = attempt?.round?.eventId || (attempt as any)?.eventId;
+        const found = participants.find((p: Participant) => (!targetEventId || p.eventId === targetEventId)) || participants[0];
+        targetId = found?.id;
+      }
+      if (!targetId) throw new Error('Participant not found');
+      return apiRequest('PATCH', `/api/participants/${targetId}/disqualify`, {});
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['/api/participants'] });
@@ -141,16 +172,20 @@ export default function TakeTestPage() {
     if (attempt?.round && attempt.startedAt) {
       const duration = attempt.round.duration * 60; // Convert to seconds
       const startTime = new Date(attempt.startedAt).getTime();
-      const now = Date.now();
-      const elapsed = Math.floor((now - startTime) / 1000);
+      const isPaused = currentRound?.status === 'paused';
+      const effectiveNow = isPaused && currentRound?.updatedAt ? new Date(currentRound.updatedAt).getTime() : Date.now();
+      const elapsed = Math.floor((effectiveNow - startTime) / 1000);
       const remaining = Math.max(0, duration - elapsed);
       setTimeRemaining(remaining);
     }
-  }, [attempt]);
+  }, [attempt, currentRound?.status, currentRound?.updatedAt]);
 
-  // Auto-submit when round is ended by admin
+  // Auto-submit  // Check if round ended or paused
   useEffect(() => {
-    if (currentRound?.status === 'completed' && attempt?.status === 'in_progress' && hasStarted) {
+    const isSubmitted = sessionStorage.getItem(`submitted_${attemptId}`);
+    if (currentRound?.status === 'completed' && attempt?.status === 'in_progress' && !hasTriggeredSubmit.current && !isSubmitted) {
+      hasTriggeredSubmit.current = true;
+      sessionStorage.setItem(`submitted_${attemptId}`, 'true');
       toast({
         title: 'Round Ended',
         description: 'The admin has ended this round. Your test will be auto-submitted.',
@@ -158,13 +193,31 @@ export default function TakeTestPage() {
       });
       setTimeout(() => submitTestMutation.mutate(), 2000);
     }
-  }, [currentRound?.status, attempt?.status, hasStarted, submitTestMutation, toast]);
+  }, [currentRound?.status, attempt?.status, attemptId, submitTestMutation, toast]);
 
-  // Timer countdown with warnings
+  // Countdown interval - created once per active test, NOT on every tick.
+  // (Previously this effect depended on `timeRemaining`, tearing down and
+  // recreating the interval every second.)
+  useEffect(() => {
+    if (!attempt || !hasStarted) return;
+    if (attempt.status !== 'in_progress') return;
+
+    const timer = setInterval(() => {
+      if (currentRound?.status === 'paused') return;
+      setTimeRemaining((prev) => (prev <= 1 ? 0 : prev - 1));
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [attempt, hasStarted, currentRound?.status]);
+
+  // Auto-submit + time warnings react to timeRemaining changes
   useEffect(() => {
     if (!attempt || !hasStarted) return;
 
-    if (timeRemaining <= 0 && attempt.status === 'in_progress') {
+    const isSubmitted = sessionStorage.getItem(`submitted_${attemptId}`);
+    if (timeRemaining <= 0 && attempt.status === 'in_progress' && !hasTriggeredSubmit.current && !isSubmitted) {
+      hasTriggeredSubmit.current = true;
+      sessionStorage.setItem(`submitted_${attemptId}`, 'true');
       submitTestMutation.mutate();
       return;
     }
@@ -194,46 +247,56 @@ export default function TakeTestPage() {
       });
       setTimeout(() => setShowTimeWarning(false), 5000);
     }
+  }, [timeRemaining, attempt, hasStarted, attemptId, submitTestMutation, toast]);
 
-    const timer = setInterval(() => {
-      setTimeRemaining((prev) => {
-        if (prev <= 1) {
-          clearInterval(timer);
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-
-    return () => clearInterval(timer);
-  }, [timeRemaining, attempt, hasStarted, submitTestMutation, toast]);
-
-  // Handle fullscreen start - ALWAYS enforce fullscreen
+  // Handle fullscreen start - Skip on mobile devices that don't support it
   const handleBeginTest = async () => {
+    // On mobile/iOS devices, skip fullscreen requirement but still start test
+    if (!canUseFullscreen) {
+      console.log('Mobile device detected - skipping fullscreen, starting test directly');
+      toast({
+        title: 'Test Starting',
+        description: 'Stay on this screen and don\'t switch apps',
+      });
+      setHasStarted(true);
+      return;
+    }
+
+    // Desktop: Try to enter fullscreen
     try {
       await document.documentElement.requestFullscreen();
       setHasStarted(true);
     } catch (err) {
       console.error('Failed to enter fullscreen:', err);
+      // If fullscreen fails on desktop, still allow starting (graceful degradation)
       toast({
-        title: 'Fullscreen required',
-        description: 'Please allow fullscreen mode to start the test',
-        variant: 'destructive',
+        title: 'Fullscreen not available',
+        description: 'Test will start without fullscreen. Stay on this screen.',
+        variant: 'default',
       });
+      setHasStarted(true);
     }
   };
 
-  // Handle re-entering fullscreen
+  // Handle re-entering fullscreen (desktop only)
   const handleReenterFullscreen = async () => {
+    // On mobile, just close the modal since fullscreen isn't supported
+    if (!canUseFullscreen) {
+      setShowFullscreenModal(false);
+      return;
+    }
+
     try {
       await document.documentElement.requestFullscreen();
       setShowFullscreenModal(false);
     } catch (err) {
       console.error('Failed to re-enter fullscreen:', err);
+      // If re-entering fails, just close modal and continue
+      setShowFullscreenModal(false);
       toast({
-        title: 'Fullscreen required',
-        description: 'Please allow fullscreen mode to continue',
-        variant: 'destructive',
+        title: 'Fullscreen unavailable',
+        description: 'Continue your test carefully',
+        variant: 'default',
       });
     }
   };
@@ -246,18 +309,26 @@ export default function TakeTestPage() {
     setViolationCount(prev => {
       const newCount = prev + 1;
 
+      // Mobile: Stricter - 1st warning, 2nd eliminate (since no fullscreen)
+      // Desktop: 1st warning, 2nd warning, 3rd eliminate
+      const maxWarnings = isMobileDevice ? 1 : 2;
+      const eliminationThreshold = isMobileDevice ? 2 : 3;
+
       if (newCount === 1) {
         // First violation - Show warning
-        setViolationMessage('⚠️ You are not allowed to use shortcuts or leave the test screen. Further attempts will eliminate you.');
+        setViolationMessage('⚠️ You are not allowed to switch apps or leave the test screen. ' +
+          (isMobileDevice ? 'One more switch will eliminate you!' : 'Further attempts will eliminate you.'));
         setShowViolationWarning(true);
         toast({
           title: '⚠️ Warning #1',
-          description: 'You are not allowed to use shortcuts or leave the test screen. Further attempts will eliminate you.',
+          description: isMobileDevice
+            ? 'One more app/tab switch will eliminate you!'
+            : 'Do not leave the test screen. Further attempts will eliminate you.',
           variant: 'destructive',
         });
         setTimeout(() => setShowViolationWarning(false), 5000);
-      } else if (newCount === 2) {
-        // Second violation - Final warning
+      } else if (newCount === 2 && !isMobileDevice) {
+        // Second violation (desktop only) - Final warning
         setViolationMessage('⚠️ Final warning! Another attempt will eliminate you.');
         setShowViolationWarning(true);
         toast({
@@ -266,8 +337,8 @@ export default function TakeTestPage() {
           variant: 'destructive',
         });
         setTimeout(() => setShowViolationWarning(false), 5000);
-      } else if (newCount >= 3) {
-        // Third violation - Eliminate
+      } else if (newCount >= eliminationThreshold) {
+        // Eliminate (2nd for mobile, 3rd for desktop)
         setViolationMessage('❌ You have been eliminated for violating event rules.');
         setShowViolationWarning(true);
         toast({
@@ -282,11 +353,11 @@ export default function TakeTestPage() {
 
       return newCount;
     });
-  }, [attemptId, disqualifyMutation, submitTestMutation, toast]);
+  }, [attemptId, disqualifyMutation, submitTestMutation, toast, isMobileDevice]);
 
-  // Fullscreen enforcement after test started - ALWAYS enforce
+  // Fullscreen enforcement after test started - Skip on mobile devices
   useEffect(() => {
-    if (!hasStarted) return;
+    if (!hasStarted || !canUseFullscreen) return;
 
     const handleFullscreenChange = () => {
       if (!document.fullscreenElement && testStatusRef.current === 'in_progress') {
@@ -303,7 +374,7 @@ export default function TakeTestPage() {
     return () => {
       document.removeEventListener('fullscreenchange', handleFullscreenChange);
     };
-  }, [hasStarted, logViolation, violationCount]);
+  }, [hasStarted, logViolation, violationCount, canUseFullscreen]);
 
   // Cleanup fullscreen only on unmount
   useEffect(() => {
@@ -456,6 +527,19 @@ export default function TakeTestPage() {
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, [hasStarted, toast, logViolation]);
 
+  // Block right-click context menu (copy/paste/inspect is a proctoring concern)
+  useEffect(() => {
+    if (!hasStarted) return;
+
+    const handleContextMenu = (e: MouseEvent) => {
+      e.preventDefault();
+      logViolation('context_menu');
+    };
+
+    document.addEventListener('contextmenu', handleContextMenu);
+    return () => document.removeEventListener('contextmenu', handleContextMenu);
+  }, [hasStarted, logViolation]);
+
   // Prevent refresh - ALWAYS enforce
   useEffect(() => {
     if (!hasStarted) return;
@@ -572,6 +656,15 @@ export default function TakeTestPage() {
     return (
       <ParticipantLayout>
         <div className="p-4 md:p-8 max-w-3xl mx-auto">
+          {/* Mobile device notice */}
+          {isMobileDevice && (
+            <Alert className="mb-4 bg-blue-50 border-blue-200">
+              <AlertDescription className="text-blue-800">
+                📱 You're on a mobile device. The test will work without fullscreen mode.
+              </AlertDescription>
+            </Alert>
+          )}
+
           <Card>
             <CardHeader className="text-center">
               <CardTitle className="text-2xl">Ready to Start Test?</CardTitle>
@@ -587,12 +680,16 @@ export default function TakeTestPage() {
                   <ul className="list-disc list-inside mt-2 space-y-1">
                     <li>You have {attempt.round.duration} minutes to complete this test</li>
                     <li>Answer all {attempt.questions.length} questions</li>
-                    <li className="text-red-600 font-medium">You MUST stay in fullscreen mode</li>
-                    <li className="text-red-600 font-medium">Do NOT switch tabs or windows</li>
+                    {canUseFullscreen && (
+                      <li className="text-red-600 font-medium">You MUST stay in fullscreen mode</li>
+                    )}
+                    <li className="text-red-600 font-medium">Do NOT switch tabs or apps</li>
                     <li className="text-red-600 font-medium">Do NOT refresh the page</li>
-                    <li className="text-red-600 font-medium">All shortcuts (Alt+Tab, Ctrl+R, F5, etc.) are disabled</li>
+                    {!isMobileDevice && (
+                      <li className="text-red-600 font-medium">All shortcuts (Alt+Tab, Ctrl+R, F5, etc.) are disabled</li>
+                    )}
                     <li className="text-red-600 font-bold">
-                      ⚠️ WARNING: 3 violations will auto-eliminate you from the event
+                      ⚠️ WARNING: {isMobileDevice ? '2' : '3'} violations will auto-eliminate you from the event
                     </li>
                   </ul>
                 </AlertDescription>
@@ -614,7 +711,7 @@ export default function TakeTestPage() {
                   className="px-8"
                   data-testid="button-begin-test"
                 >
-                  Begin Test in Fullscreen
+                  {canUseFullscreen ? 'Begin Test in Fullscreen' : 'Begin Test'}
                 </Button>
                 <p className="text-sm text-gray-500 mt-3">
                   Click the button above to start your test
@@ -629,6 +726,30 @@ export default function TakeTestPage() {
 
   return (
     <ParticipantLayout>
+      {/* Paused Overlay - Blocking */}
+      {currentRound?.status === 'paused' && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center">
+          <Card className="max-w-md w-full mx-4 shadow-xl border-yellow-200 bg-yellow-50">
+            <CardHeader className="text-center">
+              <div className="mx-auto mb-4 h-16 w-16 rounded-full bg-yellow-100 flex items-center justify-center animate-pulse">
+                <Pause className="h-8 w-8 text-yellow-600" />
+              </div>
+              <CardTitle className="text-2xl text-yellow-900">Test Paused</CardTitle>
+              <CardDescription className="text-yellow-700 text-lg">
+                The admin has paused the test.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <p className="text-yellow-800 text-center font-medium">
+                Please wait patiently. The test will resume shortly.
+                <br />
+                Do not close this window.
+              </p>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
       {/* Fullscreen Violation Modal - Blocking */}
       {showFullscreenModal && (
         <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center">
@@ -768,25 +889,69 @@ export default function TakeTestPage() {
             </div>
           </CardHeader>
           <CardContent className="space-y-6">
-            <div className="text-lg" data-testid="text-question">
-              {String(currentQuestion.questionText || '')}
+            {/* Question Content */}
+            <div className="text-lg font-medium" data-testid="text-question">
+              {currentQuestion.questionText && (currentQuestion.questionText.includes('/uploads/') || currentQuestion.questionText.includes('uploads/')) ? (
+                <div className="space-y-4">
+                  {!(currentQuestion.questionText.trim().startsWith('/uploads/') || currentQuestion.questionText.trim().startsWith('uploads/')) && (
+                    <p className="text-lg font-medium whitespace-pre-wrap">{currentQuestion.questionText.replace(/(\/uploads\/[^\s]+|uploads\/[^\s]+)/g, '').trim()}</p>
+                  )}
+                  <p className="text-sm text-muted-foreground font-normal">
+                    {currentQuestion.questionType === 'image_mcq' ? 'Refer to the question image and choose an option below:' : 'View the image below and provide your answer:'}
+                  </p>
+                  <img
+                    src={(() => {
+                      const match = currentQuestion.questionText.match(/(\/uploads\/[^\s"'>]+|uploads\/[^\s"'>]+)/);
+                      const imgPath = match ? match[0] : currentQuestion.questionText;
+                      return imgPath.startsWith('/') ? imgPath : `/${imgPath}`;
+                    })()}
+                    alt={`Question ${currentQuestion.questionNumber}`}
+                    className="max-h-[400px] rounded-lg shadow-md mx-auto border object-contain bg-white"
+                    onError={(e) => {
+                      (e.target as HTMLImageElement).style.display = 'none';
+                      (e.target as HTMLImageElement).insertAdjacentHTML('afterend', '<p class="text-red-500 text-center text-sm py-2">Image failed to load</p>');
+                    }}
+                  />
+                </div>
+              ) : (
+                <p className="whitespace-pre-wrap">{String(currentQuestion.questionText || '')}</p>
+              )}
             </div>
 
 
-            {currentQuestion.questionType === 'multiple_choice' && Array.isArray(currentQuestion.options) && (
-              <RadioGroup
-                value={answers[currentQuestion.id] || ''}
-                onValueChange={(value) => handleAnswerChange(currentQuestion.id, value)}
-              >
-                {Array.isArray(currentQuestion.options) ? (currentQuestion.options as string[]).map((option: string, index: number) => (
-                  <div key={index} className="flex items-center space-x-2 p-3 rounded border hover:bg-gray-50">
-                    <RadioGroupItem value={String(option)} id={`option-${index}`} data-testid={`radio-option-${index}`} />
-                    <Label htmlFor={`option-${index}`} className="flex-1 cursor-pointer">
-                      {String(option)}
-                    </Label>
+            {/* MCQ Handler - inclusive of 'mcq' legacy type */}
+            {(currentQuestion.questionType === 'multiple_choice' || currentQuestion.questionType === 'mcq') && (
+              (Array.isArray(currentQuestion.options) && currentQuestion.options.length > 0) ? (
+                <RadioGroup
+                  value={answers[currentQuestion.id] || ''}
+                  onValueChange={(value) => handleAnswerChange(currentQuestion.id, value)}
+                >
+                  {(currentQuestion.options as string[]).map((option: string, index: number) => (
+                    <div key={index} className="flex items-center space-x-2 p-3 rounded border hover:bg-gray-50">
+                      <RadioGroupItem value={String(option)} id={`option-${index}`} data-testid={`radio-option-${index}`} />
+                      <Label htmlFor={`option-${index}`} className="flex-1 cursor-pointer">
+                        {String(option)}
+                      </Label>
+                    </div>
+                  ))}
+                </RadioGroup>
+              ) : (
+                <div className="space-y-4">
+                  <div className="p-3 bg-yellow-50 text-yellow-700 text-sm rounded border border-yellow-200">
+                    <p className="font-medium flex items-center">
+                      <AlertTriangle className="h-4 w-4 mr-2" />
+                      Please type your answer below:
+                    </p>
                   </div>
-                )) : null}
-              </RadioGroup>
+                  <Textarea
+                    placeholder="Type your answer here..."
+                    value={answers[currentQuestion.id] || ''}
+                    onChange={(e) => handleAnswerChange(currentQuestion.id, e.target.value)}
+                    className="min-h-[150px]"
+                    data-testid="input-answer-mcq-fallback"
+                  />
+                </div>
+              )
             )}
 
             {/* True/False */}
@@ -819,6 +984,96 @@ export default function TakeTestPage() {
                 className="min-h-[200px] font-mono"
                 data-testid="input-answer"
               />
+            )}
+
+            {/* Fill-in-the-blanks / Fill-up */}
+            {(currentQuestion.questionType === 'fill_blank' ||
+              currentQuestion.questionType === 'fill_in_the_blank' ||
+              currentQuestion.questionType === 'fill_in_blank' ||
+              currentQuestion.questionType === 'fill_up' ||
+              currentQuestion.questionType === 'fill') && (
+              <div className="space-y-3">
+                <p className="text-sm font-medium text-muted-foreground">Type your answer in the box below:</p>
+                <Input
+                  placeholder="Enter your answer..."
+                  value={answers[currentQuestion.id] || ''}
+                  onChange={(e) => handleAnswerChange(currentQuestion.id, e.target.value)}
+                  className="max-w-lg text-base h-11"
+                  data-testid="input-answer-fillup"
+                  autoFocus
+                />
+              </div>
+            )}
+
+            {/* Image Text - Text input for image-based questions */}
+            {currentQuestion.questionType === 'image_text' && (
+              <Textarea
+                placeholder="Type your answer here..."
+                value={answers[currentQuestion.id] || ''}
+                onChange={(e) => handleAnswerChange(currentQuestion.id, e.target.value)}
+                className="min-h-[150px]"
+                data-testid="input-answer-image"
+              />
+            )}
+
+            {/* Image MCQ - Shuffled image options */}
+            {currentQuestion.questionType === 'image_mcq' && Array.isArray(currentQuestion.options) && (
+              (() => {
+                const shuffledOptions = shuffleWithSeed(currentQuestion.options as string[], attemptId || '');
+                return (
+                  <div className="space-y-4">
+                    <p className="text-sm text-muted-foreground">Select one image as your answer:</p>
+                    <div className="grid grid-cols-2 gap-4">
+                      {shuffledOptions.map((imageUrl, index) => {
+                        const isSelected = answers[currentQuestion.id] === imageUrl;
+                        return (
+                          <button
+                            key={index}
+                            type="button"
+                            onClick={() => handleAnswerChange(currentQuestion.id, imageUrl)}
+                            className={`relative p-2 border-2 rounded-lg transition-all ${isSelected
+                              ? 'border-blue-500 bg-blue-50 ring-2 ring-blue-200'
+                              : 'border-gray-200 hover:border-gray-400'
+                              }`}
+                            data-testid={`image-option-${index}`}
+                          >
+                            <img
+                              src={imageUrl.startsWith('/') ? imageUrl : `/${imageUrl}`}
+                              alt={`Option ${index + 1}`}
+                              className="w-full h-40 object-contain rounded bg-gray-50"
+                              onError={(e) => {
+                                (e.target as HTMLImageElement).src = '/placeholder-image.png';
+                              }}
+                            />
+                            {isSelected && (
+                              <div className="absolute top-2 right-2 bg-blue-500 text-white rounded-full p-1">
+                                <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 20 20">
+                                  <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                                </svg>
+                              </div>
+                            )}
+                            <div className="mt-2 text-center text-sm font-medium">
+                              Option {index + 1}
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })()
+            {/* Fallback for any other custom or unhandled question type */}
+            {!['multiple_choice', 'mcq', 'true_false', 'short_answer', 'coding', 'image_text', 'image_mcq', 'fill_blank', 'fill_in_the_blank', 'fill_in_blank', 'fill_up', 'fill'].includes(currentQuestion.questionType) && (
+              <div className="space-y-3">
+                <p className="text-sm font-medium text-muted-foreground">Type your answer below:</p>
+                <Textarea
+                  placeholder="Type your answer here..."
+                  value={answers[currentQuestion.id] || ''}
+                  onChange={(e) => handleAnswerChange(currentQuestion.id, e.target.value)}
+                  className="min-h-[150px]"
+                  data-testid="input-answer-fallback"
+                />
+              </div>
             )}
 
             {/* Navigation Buttons */}

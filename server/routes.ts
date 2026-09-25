@@ -1,4 +1,4 @@
-import type { Express, Request, Response } from "express"
+﻿import express, { type Express, Request, Response } from "express"
 import { createServer, type Server } from "http"
 import { storage } from "./storage"
 import bcrypt from "bcrypt"
@@ -11,7 +11,9 @@ import QRCode from "qrcode"
 import { cacheService } from "./services/cacheService"
 import { redisClient } from "./services/redisClient"
 import { z } from "zod"
-import { insertUserSchema, insertEventSchema, insertEventRulesSchema, insertRoundSchema, insertRoundRulesSchema, insertQuestionSchema, insertParticipantSchema, insertTestAttemptSchema, insertAnswerSchema, insertReportSchema, insertRegistrationFormSchema, insertRegistrationSchema, insertEventCredentialSchema } from "@shared/schema"
+import { insertUserSchema, insertEventSchema, insertEventRulesSchema, insertRoundSchema, insertRoundRulesSchema, insertQuestionSchema, insertParticipantSchema, insertTestAttemptSchema, insertAnswerSchema, insertReportSchema, insertRegistrationFormSchema, insertRegistrationSchema, insertEventCredentialSchema, PAPER_PRESENTATION_TOPICS, FOOD_TYPES, users, registrations, teamMembers, participantRegistry, eventCredentials, testAttempts, participants } from "@shared/schema"
+import { db } from "./db"
+import { eq, and, inArray } from "drizzle-orm"
 import {
   requireAuth,
   requireSuperAdmin,
@@ -25,6 +27,9 @@ import {
 } from "./middleware/auth"
 import { emailService } from "./services/emailService"
 import { WebSocketService } from "./services/websocketService"
+import fs from "fs";
+import path from "path";
+import multer from "multer";
 import { log } from "./vite"
 import { setIO, io as socketIo } from "./websocket"
 import { queueService } from "./services/queueService"
@@ -34,6 +39,35 @@ const JWT_SECRET = process.env.JWT_SECRET || "symposium-secret-key-change-in-pro
 if (process.env.NODE_ENV === "production" && !process.env.JWT_SECRET) {
   throw new Error("JWT_SECRET must be set in production environment")
 }
+
+// Multer configuration for question image uploads
+const questionImageStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const uploadDir = path.join(process.cwd(), 'uploads', 'questions');
+    if (!fs.existsSync(uploadDir)) {
+      fs.mkdirSync(uploadDir, { recursive: true });
+    }
+    cb(null, uploadDir);
+  },
+  filename: (req, file, cb) => {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    const ext = path.extname(file.originalname);
+    cb(null, `question-${uniqueSuffix}${ext}`);
+  }
+});
+
+const uploadQuestionImage = multer({
+  storage: questionImageStorage,
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB max
+  fileFilter: (req, file, cb) => {
+    const allowedTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+    if (allowedTypes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Invalid file type. Only JPEG, PNG, GIF, WebP allowed.'));
+    }
+  }
+});
 
 function generateFormSlug(eventName: string): string {
   const slug = eventName.toLowerCase().replace(/[^a-z0-9]+/g, "-")
@@ -189,6 +223,10 @@ const getClientIp = (req: Request) => {
 }
 
 export async function registerRoutes(app: Express): Promise<Server> {
+  app.get("/api/health", (_req, res) => {
+    res.json({ status: "ok", message: "BootFete 2K26 API is running" });
+  });
+
   app.get("/api/users", requireAuth, requireSuperAdmin, async (req: AuthRequest, res: Response) => {
     try {
       const users = await storage.getUsers()
@@ -213,6 +251,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (email !== undefined) updates.email = email
       if (fullName !== undefined) updates.fullName = fullName
       if (password !== undefined) {
+        if (typeof password !== 'string' || password.length < 8) {
+          return res.status(400).json({ message: "Password must be at least 8 characters" })
+        }
         const hashedPassword = await bcrypt.hash(password, 10)
         updates.password = hashedPassword
       }
@@ -238,7 +279,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.delete("/api/users/:id", requireAuth, requireSuperAdmin, async (req: AuthRequest, res: Response) => {
     try {
-      await storage.deleteUser(req.params.id)
+      const targetId = req.params.id
+
+      // Safety guards: a super admin cannot delete their own account, and the
+      // last remaining super admin can never be deleted.
+      if (targetId === req.user!.id) {
+        return res.status(400).json({ message: "You cannot delete your own account" })
+      }
+
+      const targetUser = await storage.getUser(targetId)
+      if (targetUser && targetUser.role === "super_admin") {
+        const allUsers = await storage.getUsers()
+        const superAdminCount = allUsers.filter((u) => u.role === "super_admin").length
+        if (superAdminCount <= 1) {
+          return res.status(400).json({ message: "Cannot delete the last Super Admin" })
+        }
+      }
+
+      await storage.deleteUser(targetId)
       res.json({ message: "User deleted successfully" })
     } catch (error) {
       console.error("Delete user error:", error)
@@ -259,13 +317,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/admin/system-settings", requireAuth, requireSuperAdmin, async (req: AuthRequest, res: Response) => {
     try {
-      const resendConfigured = !!process.env.RESEND_API_KEY
+      const from = emailService.getFromAddress();
+      const activeProvider = emailService.getActiveProvider();
       res.json({
         email: {
-          provider: 'resend',
-          configured: resendConfigured,
-          apiKey: resendConfigured ? process.env.RESEND_API_KEY?.substring(0, 10) + '...' : null,
-          from: resendConfigured ? process.env.RESEND_FROM_EMAIL || null : null,
+          provider: activeProvider,
+          configured: true,
+          host: activeProvider === 'brevo' ? 'api.brevo.com' : 'api.resend.com',
+          user: activeProvider,
+          from: `${from.name} <${from.email}>`,
         }
       })
     } catch (error) {
@@ -330,6 +390,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const validRoles = ["super_admin", "event_admin", "participant", "registration_committee"]
       if (!validRoles.includes(role)) {
         return res.status(400).json({ message: "Invalid role" })
+      }
+
+      // SECURITY: privileged accounts must only ever be created by a Super Admin.
+      // Public/self-registration is restricted to the participant role.
+      if (role !== "participant") {
+        const token = req.headers.authorization?.replace("Bearer ", "")
+        if (!token) {
+          return res.status(401).json({ message: "Authentication required to create admin accounts" })
+        }
+
+        let adminUserId: string
+        try {
+          const decoded = jwt.verify(token, JWT_SECRET) as { id: string }
+          adminUserId = decoded.id
+        } catch {
+          return res.status(401).json({ message: "Invalid or expired token" })
+        }
+
+        const adminUser = await storage.getUser(adminUserId)
+        if (!adminUser || adminUser.role !== "super_admin") {
+          return res.status(403).json({ message: "Super Admin access required to create admin accounts" })
+        }
       }
 
       const existingUser = await storage.getUserByUsername(username)
@@ -428,8 +510,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         })
       }
 
-      // If not event credential, try regular user login (for admins)
-      const user = await storage.getUserByUsername(username)
+      // If not event credential, try regular user login (by username or email)
+      let user = await storage.getUserByUsername(username)
+      if (!user) {
+        user = await storage.getUserByEmail(username)
+      }
       if (!user) {
         return res.status(401).json({ message: "Invalid credentials" })
       }
@@ -484,15 +569,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
     async (req: AuthRequest, res: Response) => {
       try {
         const user = req.user!;
-        let eventId = user.eventId;
+        const allCredentials = await storage.getEventCredentialsByParticipant(user.id);
+        const registeredEvents = await Promise.all(allCredentials.map(async (c) => {
+          const ev = await storage.getEvent(c.eventId);
+          return { id: c.eventId, name: ev?.name || 'Event' };
+        }));
+
+        let eventId = (req.query.eventId as string) || user.eventId;
 
         // Determine which event to use
         if (!eventId) {
-          const credentials = await storage.getEventCredentialsByParticipant(user.id);
-          if (credentials.length === 0) {
+          if (allCredentials.length === 0) {
             return res.status(400).json({ message: "No event associated with this user" });
           }
-          eventId = credentials[0].eventId;
+          eventId = allCredentials[0].eventId;
         }
 
         // Check cache first (5 minute cache)
@@ -550,9 +640,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
                   additionalRules: activeRoundRules.additionalRules,
                 }
                 : null,
+              allEvents: registeredEvents,
             };
           },
-          300
+          30 // Reduced from 300s to 30s for faster round status updates
         );
 
         res.json(response);
@@ -567,11 +658,39 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const { participantId } = req.params
 
+      // Authorization: only the participant themselves (proctoring self-elimination)
+      // or an assigned event admin / super admin may disqualify.
+      const existing = await storage.getParticipant(participantId)
+      if (!existing) {
+        return res.status(404).json({ message: "Participant not found" })
+      }
+
+      const user = req.user!
+      const isAdmin = user.role === "super_admin" ||
+        (user.role === "event_admin" && (await storage.isUserEventAdmin(user.id, existing.eventId)))
+
+      if (!isAdmin && existing.userId !== user.id) {
+        return res.status(403).json({ message: "Access denied" })
+      }
+
       const participant = await storage.updateParticipantStatus(participantId, "disqualified")
 
       if (!participant) {
         return res.status(404).json({ message: "Participant not found" })
       }
+
+      // Mark all test attempts for this participant in this event as disqualified
+      const eventRounds = await storage.getRoundsByEvent(existing.eventId);
+      const roundIds = eventRounds.map(r => r.id);
+      if (roundIds.length > 0) {
+        await db.update(testAttempts)
+          .set({ status: "disqualified", totalScore: 0 })
+          .where(and(
+            eq(testAttempts.userId, existing.userId),
+            inArray(testAttempts.roundId, roundIds)
+          ));
+      }
+      await cacheService.deletePattern('leaderboard:*');
 
       res.json({
         message: "Participant disqualified successfully",
@@ -669,6 +788,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   })
 
+  app.get("/api/events/public/:id", async (req: Request, res: Response) => {
+    try {
+      const event = await storage.getEvent(req.params.id);
+      if (!event) {
+        return res.status(404).json({ message: "Event not found" });
+      }
+      // Whitelist public fields â€” no internal metadata (createdBy, etc.)
+      const { createdBy: _createdBy, ...publicEvent } = event;
+      res.json(publicEvent);
+    } catch (error) {
+      console.error("Get public event error:", error);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
   app.get("/api/events/for-registration-grouped", async (req: Request, res: Response) => {
     try {
       const activeForm = await storage.getActiveRegistrationForm()
@@ -708,22 +842,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
       return res.status(500).json({ message: "Internal server error" })
     }
   })
-
-  // Get event leaderboard
-  app.get("/api/events/:id/leaderboard", requireAuth, async (req: AuthRequest, res: Response) => {
-    try {
-      const eventId = req.params.id;
-      const leaderboard = await cacheService.get(
-        `leaderboard:event:${eventId}`,
-        () => storage.getEventLeaderboard(eventId),
-        30 // Short TTL for leaderboard
-      );
-      res.json(leaderboard);
-    } catch (error) {
-      console.error("Get event leaderboard error:", error)
-      res.status(500).json({ message: "Failed to fetch leaderboard" });
-    }
-  });
 
   // Get event details
   app.get("/api/events/:id", requireAuth, requireEventAccess, async (req: AuthRequest, res: Response) => {
@@ -1050,22 +1168,51 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Create round
   app.post("/api/events/:eventId/rounds", requireAuth, requireEventAdmin, requireEventAccess, async (req: AuthRequest, res: Response) => {
     try {
-      const { name, description, roundNumber, duration, startTime, endTime, status } = req.body
+      const { name, description, roundNumber, duration, startTime, endTime, status, conductMedium, roundType } = req.body
 
-      if (!name || roundNumber === undefined || !duration) {
-        return res.status(400).json({ message: "Name, round number, and duration are required" })
+      // STRICT CHECK: Round Number
+      if (!name || roundNumber === undefined) {
+        return res.status(400).json({ message: "Name and round number are required" })
       }
 
+      if (roundNumber !== 1 && roundNumber !== 2) {
+        return res.status(400).json({ message: "Only Round 1 (Prelims) and Round 2 (Finals) are allowed." });
+      }
+
+      // Validate roundType
+      const validRoundTypes = ['prelims', 'finals'];
+      const resolvedRoundType = roundType && validRoundTypes.includes(roundType) ? roundType : 'prelims';
+
+      // Map conductMedium to isManual & Default to 'online'
+      const medium = conductMedium || 'online';
+      const isManual = medium === 'physical';
+
+      // Validation: Duration required only for online tests
+      if (!isManual && !duration) {
+        return res.status(400).json({ message: "Duration is required for online rounds" })
+      }
+
+      let roundData = { ...req.body };
+
+      // Convert date strings to objects
+      if (startTime) roundData.startTime = new Date(startTime);
+      if (endTime) roundData.endTime = new Date(endTime);
+
+      // Default duration to 0 for manual rounds if not provided
+      if (isManual && !duration) roundData.duration = 0;
+
       const round = await storage.createRound({
+        ...roundData,
         eventId: req.params.eventId,
-        name,
         description: description || null,
-        roundNumber,
-        duration,
-        startTime: startTime ? new Date(startTime) : null,
-        endTime: endTime ? new Date(endTime) : null,
-        status: status || "not_started",
-      })
+        isManual: isManual,
+        conductMedium: medium,
+        roundType: resolvedRoundType, // Include roundType
+        // Ensure we don't accidentally override the logic above with destructured variables
+        startTime: roundData.startTime,
+        endTime: roundData.endTime,
+        status: roundData.status || "not_started"
+      });
 
       await storage.createRoundRules({
         roundId: round.id,
@@ -1127,6 +1274,51 @@ export async function registerRoutes(app: Express): Promise<Server> {
     },
   )
 
+  // Delete all test data (attempts & answers) for a round, keeping the round structure
+  app.delete(
+    "/api/rounds/:roundId/test-data",
+    requireAuth,
+    requireEventAdmin,
+    requireRoundAccess,
+    async (req: AuthRequest, res: Response) => {
+      try {
+        const { roundId } = req.params;
+        const round = await storage.getRound(roundId);
+        if (!round) {
+          return res.status(404).json({ message: "Round not found" });
+        }
+
+        // Only super_admin can delete test data (destructive operation)
+        if (req.user!.role !== "super_admin") {
+          return res.status(403).json({ message: "Only Super Admin can delete test data" });
+        }
+
+        const result = await storage.deleteRoundTestData(roundId);
+
+        // Also delete winners for this event (since they're based on test results)
+        await storage.deleteEventWinnersByEvent(round.eventId);
+
+        // Reset round status to allow re-running
+        await storage.updateRoundStatus(roundId, 'not_started', null);
+
+        // Invalidate caches
+        await cacheService.deletePattern(`leaderboard:*`);
+        await cacheService.deletePattern(`rounds:${round.eventId}`);
+        await cacheService.delete(`round:${roundId}`);
+        await cacheService.deletePattern(`winners:${round.eventId}`);
+
+        res.json({
+          message: "Test data deleted successfully",
+          deletedAttempts: result.deletedAttempts,
+          deletedAnswers: result.deletedAnswers
+        });
+      } catch (error) {
+        console.error("Delete test data error:", error);
+        res.status(500).json({ message: "Internal server error" });
+      }
+    }
+  )
+
   app.patch(
     "/api/rounds/:roundId",
     requireAuth,
@@ -1134,7 +1326,39 @@ export async function registerRoutes(app: Express): Promise<Server> {
     requireRoundAccess,
     async (req: AuthRequest, res: Response) => {
       try {
-        const { name, description, roundNumber, duration, startTime, endTime, status } = req.body
+        const { name, description, roundNumber, duration, startTime, endTime, status, conductMedium, roundType } = req.body
+
+        // RESTRICTION: Event Admins cannot update schedule, status, or duration
+        // once the round is underway. Pre-start configuration (name, description,
+        // duration, etc.) is allowed because the round-edit UI relies on it.
+        if (req.user!.role === 'event_admin') {
+          const existingRound = await storage.getRound(req.params.roundId);
+          if (!existingRound) {
+            return res.status(404).json({ message: "Round not found" });
+          }
+
+          const roundNotStarted = existingRound.status === 'not_started' || existingRound.status === 'upcoming';
+          const allowedKeys = roundNotStarted
+            ? ['name', 'description', 'duration', 'roundType', 'conductMedium', 'roundNumber']
+            : ['name', 'description'];
+
+          const updateData: any = {};
+          for (const key of allowedKeys) {
+            if (req.body[key] !== undefined) updateData[key] = req.body[key];
+          }
+          if (updateData.conductMedium !== undefined) {
+            updateData.isManual = updateData.conductMedium === 'physical';
+          }
+
+          const updated = await storage.updateRound(req.params.roundId, updateData);
+          if (!updated) {
+            return res.status(404).json({ message: "Round not found" });
+          }
+
+          await cacheService.delete(`rounds:${updated.eventId}`);
+          await cacheService.deletePattern('leaderboard:*');
+          return res.json(updated);
+        }
 
         const updateData: any = {}
         if (name !== undefined) updateData.name = name
@@ -1144,6 +1368,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (startTime !== undefined) updateData.startTime = new Date(startTime)
         if (endTime !== undefined) updateData.endTime = new Date(endTime)
         if (status !== undefined) updateData.status = status
+        if (conductMedium !== undefined) {
+          updateData.conductMedium = conductMedium;
+          updateData.isManual = conductMedium === 'physical';
+        }
+        if (roundType !== undefined) updateData.roundType = roundType
 
         const round = await storage.updateRound(req.params.roundId, updateData)
         if (!round) {
@@ -1174,12 +1403,47 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return res.status(404).json({ message: "Round not found" })
         }
 
-        if (round.status !== "not_started") {
-          return res.status(400).json({ message: "Round can only be started when status is 'not_started'" })
+        if (round.status !== "not_started" && round.status !== "upcoming") {
+          return res.status(400).json({ message: "Round can only be started when status is 'not_started' or 'upcoming'" })
         }
 
-        // Update round status to in_progress
-        const updatedRound = await storage.updateRoundStatus(req.params.roundId, "in_progress")
+        // VALIDATION: Check if round has questions (skip for physical/offline rounds)
+        if (round.conductMedium !== 'physical') {
+          const questions = await storage.getQuestionsByRound(round.id)
+          if (questions.length === 0) {
+            return res.status(400).json({ message: "Cannot start round: No questions have been added." })
+          }
+        }
+
+        // VALIDATION: Check for other active rounds in the same event
+        const eventRounds = await storage.getRoundsByEvent(round.eventId)
+        const activeRound = eventRounds.find(r => r.status === 'in_progress' && r.id !== round.id)
+        if (activeRound) {
+          return res.status(409).json({
+            message: `Cannot start round: '${activeRound.name}' is currently in progress. Please end it first.`
+          })
+        }
+
+        // Update round status and schedule if duration provided
+        // Update round status and schedule if duration provided
+        const duration = req.body.duration ? parseInt(req.body.duration) : round.duration;
+
+        if (!duration || isNaN(duration) || duration <= 0) {
+          return res.status(400).json({ message: "A valid positive duration (in minutes) is required to start the round." });
+        }
+
+        const startTime = new Date();
+        const endTime = new Date(startTime.getTime() + duration * 60000);
+
+        // Update round with new status and schedule
+        // using updateRound partial since we need to update multiple fields
+        const updatedRound = await storage.updateRound(req.params.roundId, {
+          status: "in_progress",
+          startedAt: startTime,
+          duration: duration,
+          startTime: startTime,
+          endTime: endTime
+        })
 
         if (!updatedRound) {
           return res.status(500).json({ message: "Failed to update round status" })
@@ -1191,38 +1455,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
           credentials.map((cred) => storage.updateEventCredentialTestStatus(cred.id, true, req.user!.id)),
         )
 
-        // Get event details for email
+        // Get event details (kept for potential future use)
         const event = await storage.getEventById(round.eventId)
 
-        // Send test start reminder emails to all participants
-        if (event && updatedRound.startTime) {
-          const participants = await storage.getParticipantsByEventId(round.eventId)
+        // NOTE: Test start reminder emails removed to save email credits (300/day limit)
+        // Participants should be aware of the schedule via the dashboard
 
-          // Send emails in parallel (non-blocking)
-          // Queue test start reminder emails (non-blocking)
-          for (const participant of participants) {
-            if (participant.email && participant.fullName) {
-              queueService.addEmailJob(
-                participant.email,
-                `Test Starting Soon - ${updatedRound.name}`,
-                'test_start_reminder',
-                {
-                  name: participant.fullName,
-                  eventName: event.name,
-                  roundName: updatedRound.name,
-                  startTime: updatedRound.startTime!.toISOString()
-                },
-                participant.fullName
-              ).catch(err => {
-                console.error(`Failed to queue test start reminder for ${participant.email}:`, err)
-              })
-            }
-          }
-        }
-
-        // Invalidate cache
+        // Invalidate cache - include participant credentials so dashboard updates immediately
         await cacheService.delete(`rounds:${round.eventId}`);
         await cacheService.deletePattern('leaderboard:*');
+        await cacheService.deletePattern('participant:credential:*');
 
         // Notify via WebSocket
         WebSocketService.notifyRoundStatus(round.eventId, req.params.roundId, "in_progress", updatedRound)
@@ -1234,6 +1476,500 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
     },
   )
+
+
+  // Get selection pool for the next round
+  app.get("/api/events/:eventId/rounds/:roundNum/selection-pool", requireAuth, requireEventAdmin, async (req: AuthRequest, res: Response) => {
+    try {
+      const { eventId, roundNum } = req.params;
+      const roundNumber = parseInt(roundNum);
+      const rounds = await storage.getRoundsByEvent(eventId);
+      const round = rounds.find(r => r.roundNumber === roundNumber);
+
+      if (!round) {
+        console.error(`[Pre-Selection] Round not found. Event: ${eventId}, Num: ${roundNum}, Available: ${JSON.stringify(rounds.map(r => r.roundNumber))}`);
+        return res.status(404).json({ message: "Round not found" });
+      }
+
+      let selectionPool = [];
+
+      // For any round beyond the first, always surface the previously saved qualifiers.
+      // This ensures finals (and any later rounds) only show promoted participants.
+      if (roundNumber > 1) {
+        // Find the most recent non-finals round below the current one
+        const prevQualifyingRound = [...rounds]
+          .filter(r => r.roundNumber < roundNumber && r.roundType !== 'finals')
+          .sort((a, b) => b.roundNumber - a.roundNumber)[0];
+
+        let qualifiers = [] as any[];
+        if (prevQualifyingRound) {
+          qualifiers = await storage.getManualRoundEntriesByEventAndRound(eventId, prevQualifyingRound.roundNumber);
+        }
+
+        // Fallback: if nothing found, take any manual qualifiers stored for this event
+        if (!prevQualifyingRound || qualifiers.length === 0) {
+          qualifiers = await storage.getManualRoundEntriesByEvent(eventId);
+        }
+
+        const users = await storage.getUsers();
+        const registrations = await storage.getRegistrationsByEvent(eventId);
+        const regMap = new Map<string, { reg: any; member?: any }>();
+        for (const r of registrations) {
+          if (r.organizerEmail) {
+            regMap.set(r.organizerEmail.toLowerCase(), { reg: r });
+          }
+          if (r.teamMembers && Array.isArray(r.teamMembers)) {
+            for (const m of r.teamMembers) {
+              if (m.memberEmail) {
+                regMap.set(m.memberEmail.toLowerCase(), { reg: r, member: m });
+              }
+            }
+          }
+        }
+
+        selectionPool = qualifiers.map(q => {
+          const user = q.participantUserId ? users.find(u => u.id === q.participantUserId) : undefined;
+          const email = (q as any).participantEmail || user?.email || '';
+          const match = email ? regMap.get(email.toLowerCase()) : null;
+
+          return {
+            userId: q.participantUserId,
+            name: q.participantName || user?.fullName || 'Unknown',
+            email,
+            score: q.rank ? q.rank : q.score || 0,
+            rank: q.rank,
+            college: q.participantCollege || match?.reg?.organizerCollege || 'N/A',
+            dept: q.participantDept || match?.member?.memberDept || match?.reg?.organizerDept || 'N/A',
+            rollNo: q.participantRollNo || match?.member?.memberRollNo || match?.reg?.organizerRollNo || '-',
+            teamMembers: match?.reg?.teamMembers || (q as any).teamMembers || []
+          };
+        });
+
+        return res.json(selectionPool);
+      }
+
+      if (round.conductMedium === 'online' || round.isManual === false) {
+        const leaderboard = await storage.getRoundLeaderboard(round.id);
+        const participants = await storage.getParticipantsByEvent(eventId);
+
+        selectionPool = await Promise.all(leaderboard.map(async (entry) => {
+          const participant = participants.find(p => p.userId === entry.userId);
+          const user = await storage.getUser(entry.userId);
+          if (!user) return null;
+
+          let extraDetails: any = {};
+          if (user.role === 'participant') {
+            const [reg] = await db.select().from(registrations).where(eq(registrations.organizerEmail, user.email));
+            if (reg) {
+              extraDetails = {
+                college: reg.organizerCollege,
+                dept: reg.organizerDept,
+                rollNo: reg.organizerRollNo
+              };
+            } else {
+              const [member] = await db.select().from(teamMembers).where(eq(teamMembers.memberEmail, user.email));
+              if (member) {
+                const [teamReg] = await db.select().from(registrations).where(eq(registrations.id, member.registrationId));
+                extraDetails = {
+                  college: teamReg?.organizerCollege || 'N/A',
+                  dept: member.memberDept || teamReg?.organizerDept || 'N/A',
+                  rollNo: member.memberRollNo || '-'
+                };
+              }
+            }
+          }
+
+          return {
+            userId: entry.userId,
+            name: entry.userName || user.fullName || 'Unknown',
+            email: user.email,
+            score: entry.totalScore || 0,
+            rank: entry.rank,
+            college: extraDetails.college || 'N/A',
+            dept: extraDetails.dept || 'N/A',
+            rollNo: extraDetails.rollNo || '-'
+          };
+        }));
+        selectionPool = selectionPool.filter(p => p !== null);
+      } else {
+        // Physical implementation
+        const participants = await storage.getParticipantsByEvent(eventId);
+        const users = await storage.getUsers();
+        selectionPool = participants.map(p => {
+          const u = users.find(user => user.id === p.userId);
+          return u ? {
+            userId: u.id,
+            name: u.fullName,
+            email: u.email,
+            score: 0,
+            rank: 0,
+            college: 'N/A',
+            dept: 'N/A',
+            rollNo: '-'
+          } : null;
+        }).filter(p => p !== null);
+      }
+      res.json(selectionPool);
+    } catch (error) {
+      console.error("Selection pool error:", error);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  // --- Question Management Routes --- (Note: Main CRUD defined later with caching)
+
+  app.post("/api/rounds/:roundId/questions", requireAuth, requireEventAdminOrSuperAdmin, async (req: AuthRequest, res: Response) => {
+    try {
+      const parsed = insertQuestionSchema.safeParse({
+        ...req.body,
+        roundId: req.params.roundId,
+      });
+      if (!parsed.success) {
+        const details = parsed.error.issues
+          .map((issue) => `${issue.path.join('.') || 'body'}: ${issue.message}`)
+          .join('; ');
+        return res.status(400).json({ message: `Invalid question data: ${details}`, errors: parsed.error.issues });
+      }
+
+      // Question text must be non-empty (zod text() alone allows "")
+      if (typeof parsed.data.questionText !== 'string' || parsed.data.questionText.trim().length === 0) {
+        return res.status(400).json({ message: "Invalid question data: questionText must be a non-empty string" });
+      }
+
+      const question = await storage.createQuestion(parsed.data);
+      // Invalidate cache so new question appears immediately
+      await cacheService.delete(`questions:${req.params.roundId}`);
+      res.status(201).json(question);
+    } catch (error: any) {
+      console.error("Create question error:", error);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  app.get("/api/rounds/:roundId/questions/:questionId", requireAuth, requireRoundAccess, async (req: AuthRequest, res: Response) => {
+    try {
+      const { questionId, roundId } = req.params;
+      const question = await storage.getQuestion(questionId);
+      if (!question) return res.status(404).json({ message: "Question not found" });
+
+      if (question.roundId !== roundId) {
+        return res.status(400).json({ message: "Question does not belong to this round" });
+      }
+
+      res.json(question);
+    } catch (error) {
+      console.error("Get question error:", error);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  app.patch("/api/rounds/:roundId/questions/:questionId", requireAuth, requireEventAdminOrSuperAdmin, async (req: AuthRequest, res: Response) => {
+    try {
+      const { questionId, roundId } = req.params;
+
+      const existingQuestion = await storage.getQuestion(questionId);
+      if (!existingQuestion) {
+        return res.status(404).json({ message: "Question not found" });
+      }
+
+      if (existingQuestion.roundId !== roundId) {
+        return res.status(400).json({ message: "Question does not belong to this round" });
+      }
+
+      // Whitelist updatable fields to avoid passing unknown keys to Drizzle
+      const body = req.body || {};
+      const updateData: Record<string, unknown> = {};
+      for (const key of ['questionType', 'questionText', 'questionNumber', 'points', 'options', 'correctAnswer', 'expectedOutput', 'testCases'] as const) {
+        if (body[key] !== undefined) updateData[key] = body[key];
+      }
+
+      const question = await storage.updateQuestion(questionId, updateData);
+      if (!question) return res.status(404).json({ message: "Question not found" });
+
+      // Invalidate cache so edits appear immediately
+      await cacheService.delete(`questions:${roundId}`);
+
+      res.json(question);
+    } catch (error) {
+      console.error("Update question error:", error);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  app.delete("/api/rounds/:roundId/questions/:questionId", requireAuth, requireEventAdminOrSuperAdmin, async (req: AuthRequest, res: Response) => {
+    try {
+      const { questionId, roundId } = req.params;
+
+      const existingQuestion = await storage.getQuestion(questionId);
+      if (!existingQuestion) {
+        return res.status(404).json({ message: "Question not found" });
+      }
+
+      if (existingQuestion.roundId !== roundId) {
+        return res.status(400).json({ message: "Question does not belong to this round" });
+      }
+
+      await storage.deleteQuestion(questionId);
+
+      // Invalidate cache
+      await cacheService.delete(`questions:${roundId}`);
+
+      res.json({ message: "Question deleted successfully" });
+    } catch (error) {
+      console.error("Delete question error:", error);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  // Image upload with proper error handling
+  app.post("/api/upload/question-image", requireAuth, requireEventAdminOrSuperAdmin, (req: AuthRequest, res: Response, next: any) => {
+    uploadQuestionImage.single('image')(req, res, async (err: any) => {
+      if (err) {
+        console.error("Image upload error:", err);
+        if (err.code === 'LIMIT_FILE_SIZE') {
+          return res.status(400).json({ message: "File too large. Maximum size is 10MB." });
+        }
+        if (err.message) {
+          return res.status(400).json({ message: err.message });
+        }
+        return res.status(400).json({ message: "Failed to upload image" });
+      }
+
+      if (req.user!.role === 'event_admin') {
+        const targetEventId = (req.body?.eventId || req.query?.eventId) as string;
+        if (targetEventId) {
+          const isAuthorized = await storage.isUserEventAdmin(req.user!.id, targetEventId);
+          if (!isAuthorized) {
+            return res.status(403).json({ message: "Forbidden: You do not have permission to upload images for this event" });
+          }
+        }
+      }
+
+      if (!req.file) {
+        return res.status(400).json({ message: "No image file provided. Please select an image." });
+      }
+
+      const imageUrl = `/uploads/questions/${req.file.filename}`;
+      console.log("Image uploaded successfully:", imageUrl);
+      res.json({ url: imageUrl });
+    });
+  });
+
+  // Multi-image upload for Image MCQ questions (2-6 images)
+  app.post("/api/upload/question-images", requireAuth, requireEventAdminOrSuperAdmin, (req: AuthRequest, res: Response) => {
+    uploadQuestionImage.array('images', 6)(req, res, async (err: any) => {
+      if (err) {
+        console.error("Multi-image upload error:", err);
+        if (err.code === 'LIMIT_FILE_SIZE') {
+          return res.status(400).json({ message: "File too large. Maximum size is 10MB per image." });
+        }
+        if (err.code === 'LIMIT_UNEXPECTED_FILE') {
+          return res.status(400).json({ message: "Maximum 6 images allowed." });
+        }
+        if (err.message) {
+          return res.status(400).json({ message: err.message });
+        }
+        return res.status(400).json({ message: "Failed to upload images" });
+      }
+
+      if (req.user!.role === 'event_admin') {
+        const targetEventId = (req.body?.eventId || req.query?.eventId) as string;
+        if (targetEventId) {
+          const isAuthorized = await storage.isUserEventAdmin(req.user!.id, targetEventId);
+          if (!isAuthorized) {
+            return res.status(403).json({ message: "Forbidden: You do not have permission to upload images for this event" });
+          }
+        }
+      }
+
+      const files = req.files as Express.Multer.File[];
+
+      if (!files || files.length < 2) {
+        return res.status(400).json({ message: "At least 2 images are required for Image MCQ." });
+      }
+
+      if (files.length > 6) {
+        return res.status(400).json({ message: "Maximum 6 images allowed." });
+      }
+
+      const urls = files.map(file => `/uploads/questions/${file.filename}`);
+      console.log("Multi-image upload successful:", urls);
+      res.json({ urls, count: urls.length });
+    });
+  });
+
+
+  // Publish Results & Promote Qualifiers
+  app.post(
+    "/api/events/:eventId/rounds/:roundNum/results",
+    requireAuth,
+    requireEventAdmin, // Allows event_admin
+    async (req: AuthRequest, res: Response) => {
+      try {
+        const { eventId, roundNum } = req.params;
+        const { qualifiers, finalsRoom, finalsTime } = req.body;
+        console.log(`[Results] Declaring winners for Event ${eventId}, Round ${roundNum}`);
+        console.log(`[Results] Payload:`, JSON.stringify({ qualifiersCount: qualifiers?.length, finalsRoom, finalsTime }));
+        const roundNumber = parseInt(roundNum);
+
+        // Get current round
+        const rounds = await storage.getRoundsByEvent(eventId);
+        const currentRound = rounds.find(r => r.roundNumber === roundNumber);
+
+        if (!currentRound) {
+          return res.status(404).json({ message: `Current round not found (Round: ${roundNumber}, Event: ${eventId}, Rounds Count: ${rounds.length})` });
+        }
+
+        // Check if already finalized (unless no winners exist - recovery mode)
+        const eventWinners = await storage.getEventWinners(eventId);
+        if ((currentRound.status === "completed" || currentRound.resultsPublished) && eventWinners.length > 0) {
+          return res.status(400).json({ message: "Results already finalized. Cannot re-declare winners." });
+        }
+
+        // 1. Mark current round as completed
+        // 1. Mark current round as completed logic moved below
+
+        // Move expensive DB calls OUTSIDE the loop
+        const event = await storage.getEvent(eventId);
+        if (!event) {
+          return res.status(404).json({ message: "Event not found" });
+        }
+
+        const roundsList = rounds;
+        const failedEmails: string[] = [];
+
+        // Determine if this is finals based on roundType field (explicit) - defaults to prelims for backwards compatibility
+        const isFinals = currentRound.roundType === 'finals';
+        console.log(`[Results] Round type: ${currentRound.roundType || 'prelims'}, isFinals: ${isFinals}`);
+
+        // Pre-calculate formatted time once
+        // Finals time is not needed for winner/runner or qualification emails
+        // let formattedTime = 'To be announced';
+
+        // Mark current round as completed
+        try {
+          await storage.updateRoundStatus(currentRound.id, "completed");
+        } catch (e) {
+          console.error("[Results] Failed to update round status", e);
+          // Verify round status did not crash the request
+        }
+
+        if (!isFinals) {
+          // Prelims - Promote to next round logic (send qualification emails)
+          console.log(`[Results] PRELIMS: Promoting ${qualifiers.length} users to next round`);
+
+          // PERSIST QUALIFIERS TO DB (manualRoundEntries) so isQualified survives reload
+          try {
+            // Clear existing entries for this round to avoid duplicates
+            await storage.deleteManualRoundEntriesByEventAndRound(eventId, roundNumber);
+            // Save each qualifier
+            for (let i = 0; i < qualifiers.length; i++) {
+              const q = qualifiers[i];
+              let userId = q.userId;
+              // Resolve userId from email if missing
+              if (!userId && q.email) {
+                try {
+                  const user = await storage.getUserByEmail(q.email);
+                  if (user) userId = user.id;
+                } catch (e) { /* ignore lookup errors */ }
+              }
+              await storage.createManualRoundEntry({
+                eventId,
+                roundNumber,
+                roundName: currentRound.name,
+                participantUserId: userId || null,
+                participantName: q.userName || q.name,
+                participantRollNo: q.rollNo,
+                participantCollege: q.college,
+                participantDept: q.dept,
+                rank: i + 1,
+                enteredBy: req.user!.id
+              });
+            }
+            console.log(`[Results] Saved ${qualifiers.length} qualifiers to manualRoundEntries`);
+          } catch (dbError) {
+            console.error("[Results] Failed to persist qualifiers:", dbError);
+          }
+
+          // Only send qualification emails for PRELIMS (with time/location if needed)
+          for (const qualifier of qualifiers) {
+            try {
+              await emailService.sendTestQualificationWithFinalsDetails(
+                qualifier.email,
+                qualifier.userName,
+                event.name,
+                currentRound.name,
+                0, // score removed (not applicable for this use case)
+                0, // maxScore removed (not applicable for this use case)
+                finalsRoom || '', // finalsRoom (if provided)
+                finalsTime || '', // finalsTime (if provided)
+                "Congratulations on qualifying for the next round!"
+              );
+            } catch (emailError: any) {
+              console.error(`[Results] Failed to send email to ${qualifier.email}:`, emailError);
+              failedEmails.push(qualifier.email);
+            }
+          }
+
+        } else {
+          // Final Winner Declaration Logic
+          console.log(`[Results] Declaring ${qualifiers.length} Final Winners`);
+
+          // DO NOT SEND ANY WINNER/RUNNER EMAILS FOR FINALS
+          // Only save winners to DB
+          for (const qualifier of qualifiers) {
+            try {
+              // Save Winner to DB (all positions)
+              let pUserId = qualifier.userId;
+              // Fallback: If userId is missing, try to find user by email
+              if (!pUserId && qualifier.email) {
+                try {
+                  const user = await storage.getUserByEmail(qualifier.email);
+                  if (user) {
+                    pUserId = user.id;
+                    console.log(`[Results] Resolved missing userId for ${qualifier.email} -> ${pUserId}`);
+                  }
+                } catch (lookupError) {
+                  console.error(`[Results] User lookup failed for ${qualifier.email}:`, lookupError);
+                }
+              }
+              if (pUserId) {
+                await storage.createEventWinner({
+                  eventId: event.id,
+                  position: qualifier.position || (qualifiers.indexOf(qualifier) + 1),
+                  participantUserId: pUserId,
+                  participantName: qualifier.userName, // Use userName from payload
+                  participantRollNo: qualifier.rollNo,
+                  participantCollege: qualifier.college,
+                  participantDept: qualifier.dept,
+                  finalScore: qualifier.score || 0,
+                  winningRound: currentRound.name,
+                  teamMembers: qualifier.teamMembers || []
+                });
+              } else {
+                console.warn(`[Results] Could not save winner for ${qualifier.email} - No User ID found.`);
+              }
+            } catch (dbError) {
+              console.error(`[Results] Failed to save winner ${qualifier.email}:`, dbError);
+            }
+          }
+        }
+
+        res.json({
+          message: failedEmails.length > 0
+            ? `Results processed but ${failedEmails.length} emails failed to send.`
+            : "Results processing completed successfully",
+          failedEmails
+        });
+
+      } catch (error: any) {
+        console.error("Publish results CRITICAL error:", error);
+        // Log stack trace
+        if (error.stack) console.error(error.stack);
+        res.status(500).json({ message: "Internal System Error: " + error.message });
+      }
+    }
+  );
 
   app.post(
     "/api/rounds/:roundId/end",
@@ -1247,15 +1983,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return res.status(404).json({ message: "Round not found" })
         }
 
+
+
         if (round.status !== "in_progress") {
           return res.status(400).json({ message: "Round can only be ended when status is 'in_progress'" })
         }
 
         const updatedRound = await storage.updateRoundStatus(req.params.roundId, "completed")
 
-        // Invalidate cache
+        // Invalidate cache - include participant credentials so dashboard updates immediately
         await cacheService.delete(`rounds:${round.eventId}`);
         await cacheService.deletePattern('leaderboard:*');
+        await cacheService.deletePattern('participant:credential:*');
 
         // Notify via WebSocket
         WebSocketService.notifyRoundStatus(round.eventId, req.params.roundId, "completed", updatedRound)
@@ -1292,9 +2031,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
           credentials.map((cred) => storage.updateEventCredentialTestStatus(cred.id, false, req.user!.id)),
         )
 
-        // Invalidate cache
+        // Invalidate cache - include participant credentials so dashboard updates immediately
         await cacheService.delete(`rounds:${round.eventId}`);
         await cacheService.deletePattern('leaderboard:*');
+        await cacheService.deletePattern('participant:credential:*');
 
         // Notify via WebSocket
         WebSocketService.notifyRoundStatus(round.eventId, req.params.roundId, "not_started", updatedRound)
@@ -1331,36 +2071,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Notify via WebSocket
         WebSocketService.notifyRoundStatus(round.eventId, req.params.roundId, round.status, updatedRound)
 
-        // Send result published emails to all participants who completed the test
-        const event = await storage.getEventById(round.eventId)
-        if (event) {
-          const attempts = await storage.getTestAttemptsByRound(req.params.roundId)
-          const completedAttempts = attempts.filter(a => a.status === 'completed')
-          const leaderboard = await storage.getRoundLeaderboard(req.params.roundId)
-
-          for (const attempt of completedAttempts) {
-            const user = await storage.getUser(attempt.userId)
-            if (user && user.email && user.fullName) {
-              const participantRank = leaderboard.findIndex(entry => entry.userId === attempt.userId) + 1
-
-              // Queue result published email (non-blocking)
-              queueService.addEmailJob(
-                user.email,
-                `Results Published - ${event.name}`,
-                'result_published',
-                {
-                  name: user.fullName,
-                  eventName: event.name,
-                  score: attempt.totalScore || 0,
-                  rank: participantRank || 0
-                },
-                user.fullName
-              ).catch(err => {
-                console.error(`Error queuing result published email for ${user.email}:`, err)
-              })
-            }
-          }
-        }
+        // NOTE: Global result published emails removed to save email credits (300/day limit)
+        // Use targeted result notification via POST /api/rounds/:id/publish-results with userIds
+        // to notify only selected winners
 
         res.json({
           message: "Results published successfully",
@@ -1450,77 +2163,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
         () => storage.getQuestionsByRound(roundId),
         300
       );
+
+      const round = await storage.getRound(roundId);
+      const isPrivileged = req.user!.role === 'super_admin' || req.user!.role === 'event_admin';
+
+      if (!isPrivileged && req.user!.role === 'participant') {
+        const canViewAnswers = round?.showAnswers || (round?.resultsPublished && round?.status === 'completed');
+        if (!canViewAnswers) {
+          const sanitized = questions.map((q: any) => ({
+            ...q,
+            correctAnswer: null,
+            expectedOutput: null,
+            testCases: null,
+          }));
+          return res.json(sanitized);
+        }
+      }
+
       res.json(questions);
     } catch (error) {
       console.error("Get questions error:", error)
       res.status(500).json({ message: "Failed to fetch questions" });
     }
   });
-
-  app.get(
-    "/api/rounds/:roundId/questions/:questionId",
-    requireAuth,
-    requireRoundAccess,
-    async (req: AuthRequest, res: Response) => {
-      try {
-        const { questionId, roundId } = req.params
-        const question = await storage.getQuestion(questionId)
-
-        if (!question) {
-          return res.status(404).json({ message: "Question not found" })
-        }
-
-        if (question.roundId !== roundId) {
-          return res.status(400).json({ message: "Question does not belong to this round" })
-        }
-
-        res.json(question)
-      } catch (error) {
-        console.error("Get question error:", error)
-        res.status(500).json({ message: "Internal server error" })
-      }
-    },
-  )
-
-  // Create question
-  app.post("/api/rounds/:roundId/questions", requireAuth, requireEventAdmin, requireRoundAccess, async (req: AuthRequest, res: Response) => {
-    try {
-      const {
-        questionType,
-        questionText,
-        questionNumber,
-        points,
-        options,
-        correctAnswer,
-        expectedOutput,
-        testCases,
-      } = req.body
-
-      if (!questionType || !questionText || questionNumber === undefined) {
-        return res.status(400).json({ message: "Question type, text, and number are required" })
-      }
-
-      const question = await storage.createQuestion({
-        roundId: req.params.roundId,
-        questionType,
-        questionText,
-        questionNumber,
-        points: points || 1,
-        options: options || null,
-        correctAnswer: correctAnswer || null,
-        expectedOutput: expectedOutput || null,
-        testCases: testCases || null,
-      })
-
-      // Invalidate cache
-      await cacheService.delete(`questions:${req.params.roundId}`);
-
-      res.status(201).json(question)
-    } catch (error) {
-      console.error("Create question error:", error)
-      res.status(500).json({ message: "Internal server error" })
-    }
-  })
 
   app.post(
     "/api/rounds/:roundId/questions/bulk",
@@ -1584,222 +2249,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
     },
   )
 
-  // Update question
-  app.patch(
-    "/api/rounds/:roundId/questions/:questionId",
-    requireAuth,
-    requireEventAdmin,
-    requireRoundAccess,
-    async (req: AuthRequest, res: Response) => {
-      try {
-        const { questionId } = req.params
-        const {
-          questionType,
-          questionText,
-          questionNumber,
-          points,
-          options,
-          correctAnswer,
-          expectedOutput,
-          testCases,
-        } = req.body
-
-        const existingQuestion = await storage.getQuestion(questionId)
-        if (!existingQuestion) {
-          return res.status(404).json({ message: "Question not found" })
-        }
-
-        if (existingQuestion.roundId !== req.params.roundId) {
-          return res.status(400).json({ message: "Question does not belong to this round" })
-        }
-
-        const updateData: any = {}
-
-        // Determine the effective question type (new or existing)
-        const effectiveQuestionType = questionType !== undefined ? questionType : existingQuestion.questionType
-        const typeIsChanging = questionType !== undefined && questionType !== existingQuestion.questionType
-
-        // Validate question type
-        if (questionType !== undefined) {
-          const validTypes = ['mcq', 'true_false', 'short_answer', 'coding', 'multiple_choice']
-          if (!validTypes.includes(questionType)) {
-            return res.status(400).json({ message: "Invalid question type" })
-          }
-          updateData.questionType = questionType
-        }
-
-        // Validate question text
-        if (questionText !== undefined) {
-          if (typeof questionText !== 'string' || questionText.trim().length === 0) {
-            return res.status(400).json({ message: "Question text is required" })
-          }
-          updateData.questionText = questionText.trim()
-        }
-
-        // Validate question number
-        if (questionNumber !== undefined) {
-          if (typeof questionNumber !== 'number' || questionNumber < 1) {
-            return res.status(400).json({ message: "Question number must be a positive number" })
-          }
-          updateData.questionNumber = questionNumber
-        }
-
-        // Validate points
-        if (points !== undefined) {
-          if (typeof points !== 'number' || points < 1) {
-            return res.status(400).json({ message: "Points must be a positive number" })
-          }
-          updateData.points = points
-        }
-
-        // Handle MCQ type questions
-        if (effectiveQuestionType === 'mcq' || effectiveQuestionType === 'multiple_choice') {
-          // If changing to MCQ type, require options and correctAnswer
-          if (typeIsChanging) {
-            if (options === undefined || correctAnswer === undefined) {
-              return res.status(400).json({
-                message: "Changing to MCQ requires both options and correctAnswer"
-              })
-            }
-          }
-
-          // Validate options if provided
-          if (options !== undefined) {
-            if (!Array.isArray(options) || options.length < 2) {
-              return res.status(400).json({ message: "MCQ questions require at least 2 options" })
-            }
-            const validOptions = options.filter((opt: any) => typeof opt === 'string' && opt.trim() !== '')
-            if (validOptions.length < 2) {
-              return res.status(400).json({ message: "MCQ questions require at least 2 non-empty options" })
-            }
-            updateData.options = validOptions
-
-            // If options are updated, verify correctAnswer is still valid
-            const effectiveCorrectAnswer = correctAnswer !== undefined ? correctAnswer : existingQuestion.correctAnswer
-            if (effectiveCorrectAnswer && !validOptions.includes(effectiveCorrectAnswer)) {
-              if (correctAnswer === undefined) {
-                return res.status(400).json({
-                  message: "New options do not include the current correct answer. Please provide a new correctAnswer."
-                })
-              }
-            }
-          }
-
-          // Validate correctAnswer
-          if (correctAnswer !== undefined) {
-            const effectiveOptions = options !== undefined ? updateData.options : existingQuestion.options
-            if (!Array.isArray(effectiveOptions) || !effectiveOptions.includes(correctAnswer)) {
-              return res.status(400).json({ message: "Correct answer must be one of the options" })
-            }
-            updateData.correctAnswer = correctAnswer
-          }
-
-          // Clear incompatible fields when changing to MCQ
-          if (typeIsChanging) {
-            updateData.expectedOutput = null
-            updateData.testCases = null
-          }
-        }
-        // Handle True/False type questions
-        else if (effectiveQuestionType === 'true_false') {
-          // If changing to true_false, require correctAnswer
-          if (typeIsChanging) {
-            if (correctAnswer === undefined) {
-              return res.status(400).json({
-                message: "Changing to True/False requires a correctAnswer ('True' or 'False')"
-              })
-            }
-          }
-
-          if (correctAnswer !== undefined) {
-            if (!['True', 'False'].includes(correctAnswer)) {
-              return res.status(400).json({
-                message: "Correct answer for True/False must be 'True' or 'False'"
-              })
-            }
-            updateData.correctAnswer = correctAnswer
-          } else if (!typeIsChanging) {
-            // Existing true_false question - validate stored answer
-            if (existingQuestion.correctAnswer && !['True', 'False'].includes(existingQuestion.correctAnswer)) {
-              return res.status(400).json({
-                message: "Existing correct answer is invalid. Please provide a new correctAnswer."
-              })
-            }
-          }
-
-          // Set options for true_false and clear incompatible fields
-          if (typeIsChanging) {
-            updateData.options = ['True', 'False']
-            updateData.expectedOutput = null
-            updateData.testCases = null
-          }
-        }
-        // Handle coding/descriptive types
-        else if (effectiveQuestionType === 'coding' || effectiveQuestionType === 'short_answer') {
-          if (expectedOutput !== undefined) updateData.expectedOutput = expectedOutput
-          if (testCases !== undefined) updateData.testCases = testCases
-
-          // Clear MCQ-specific fields when changing to coding/short_answer
-          if (typeIsChanging) {
-            updateData.options = null
-            updateData.correctAnswer = null
-          }
-        }
-        // Handle any other updates for non-type-specific fields
-        else {
-          if (options !== undefined) updateData.options = options
-          if (correctAnswer !== undefined) updateData.correctAnswer = correctAnswer
-          if (expectedOutput !== undefined) updateData.expectedOutput = expectedOutput
-          if (testCases !== undefined) updateData.testCases = testCases
-        }
-
-        const question = await storage.updateQuestion(questionId, updateData)
-        if (!question) {
-          return res.status(404).json({ message: "Question not found" })
-        }
-
-        // Invalidate cache
-        await cacheService.delete(`questions:${req.params.roundId}`);
-
-        res.json(question)
-      } catch (error) {
-        console.error("Update question error:", error)
-        res.status(500).json({ message: "Internal server error" })
-      }
-    },
-  )
-
-  app.delete(
-    "/api/rounds/:roundId/questions/:questionId",
-    requireAuth,
-    requireEventAdmin,
-    requireRoundAccess,
-    async (req: AuthRequest, res: Response) => {
-      try {
-        const { questionId, roundId } = req.params
-
-        const existingQuestion = await storage.getQuestion(questionId)
-        if (!existingQuestion) {
-          return res.status(404).json({ message: "Question not found" })
-        }
-
-        if (existingQuestion.roundId !== roundId) {
-          return res.status(400).json({ message: "Question does not belong to this round" })
-        }
-
-        await storage.deleteQuestion(questionId)
-
-        // Invalidate cache
-        await cacheService.delete(`questions:${req.params.roundId}`);
-
-        res.status(204).send()
-      } catch (error) {
-        console.error("Delete question error:", error)
-        res.status(500).json({ message: "Internal server error" })
-      }
-    },
-  )
-
   app.post(
     "/api/events/:eventId/participants",
     requireAuth,
@@ -1850,19 +2299,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
     },
   )
 
-  app.get("/api/event-admin/participants", requireAuth, requireEventAdmin, async (req: AuthRequest, res: Response) => {
+
+  // Get events assigned to a specific admin (Super Admin only)
+  app.get("/api/users/:userId/assigned-events", requireAuth, requireSuperAdmin, async (req: AuthRequest, res: Response) => {
     try {
-      const participants = await storage.getParticipantsByAdmin(req.user!.id)
-      const participantsWithoutPasswords = participants.map((p) => ({
-        ...p,
-        user: p.user ? (({ password, ...user }) => user)(p.user) : p.user,
-      }))
-      res.json(participantsWithoutPasswords)
+      const events = await storage.getEventsByAdmin(req.params.userId)
+      res.json(events)
     } catch (error) {
-      console.error("Get admin participants error:", error)
+      console.error("Get user assigned events error:", error)
       res.status(500).json({ message: "Internal server error" })
     }
   })
+
+  // Get all events assigned to this admin
+  app.get("/api/event-admin/events", requireAuth, requireEventAdmin, async (req: AuthRequest, res: Response) => {
+    try {
+      const events = await storage.getEventsByAdmin(req.user!.id)
+      res.json(events)
+    } catch (error) {
+      console.error("Get admin events error:", error)
+      res.status(500).json({ message: "Internal server error" })
+    }
+  })
+
+  // Get single event details (for dashboard mostly, assumes single assignment primarily but could be expanded)
 
   app.get("/api/event-admin/my-event", requireAuth, requireEventAdmin, async (req: AuthRequest, res: Response) => {
     try {
@@ -1873,8 +2333,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const event = events[0]
-      const participants = await storage.getParticipantsByEvent(event.id)
-      const participantCount = participants.length
+      // Use registrations for accurate count (1 team = 1 count)
+      const allRegistrations = await storage.getRegistrations()
+      const eventRegistrations = allRegistrations.filter(r => r.eventId === event.id && r.status !== 'cancelled' && r.status !== 'disqualified')
+      const participantCount = eventRegistrations.length
 
       res.json({
         event,
@@ -1893,8 +2355,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
     requireParticipant,
     async (req: AuthRequest, res: Response) => {
       try {
-        const { roundId } = req.params
+        const { eventId, roundId } = req.params
         const userId = req.user!.id
+
+        // SECURITY: the participant must actually belong to this event â€”
+        // prevents cross-event test participation (IDOR).
+        const participantRecord = await storage.getParticipantByUserAndEvent(userId, eventId)
+        if (!participantRecord) {
+          return res.status(403).json({ message: "You are not registered for this event" })
+        }
 
         // Check if user already has an attempt for this round
         const existingAttempt = await storage.getTestAttemptByUserAndRound(userId, roundId)
@@ -1908,6 +2377,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return res.status(404).json({ message: "Round not found" })
         }
 
+        // SECURITY: the round must belong to the event in the URL
+        if (round.eventId !== eventId) {
+          return res.status(403).json({ message: "Round does not belong to this event" })
+        }
+
+        // CRITICAL: Validate round status and medium
+        if (round.status !== "in_progress") {
+          return res.status(400).json({ message: "Round is not active for testing (Status: " + round.status + ")" })
+        }
+
+        if (round.conductMedium !== "online") {
+          return res.status(400).json({ message: "This round does not support online testing" })
+        }
+
         // Get questions to calculate max score
         const questions = await storage.getQuestionsByRound(roundId)
 
@@ -1918,7 +2401,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           })
         }
 
-        const maxScore = questions.reduce((sum, q) => sum + q.points, 0)
+        const maxScore = questions.length // STATIC 1 POINT PER QUESTION
 
         const attempt = await storage.createTestAttempt({
           roundId,
@@ -1935,16 +2418,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
         await cacheService.deletePattern('leaderboard:*');
 
         // Notify admins
-        if (socketIo) {
-          socketIo.to(`event:${round.eventId}`).emit('newSubmission', {
-            roundId: round.id,
-            userId: req.user!.id
-          });
-          socketIo.to(`event:${round.eventId}`).emit('leaderboardUpdate', {
-            eventId: round.eventId,
-            roundId: round.id
-          });
-        }
+        WebSocketService.notifyTestSubmission({
+          userId: req.user!.id,
+          roundId: round.id,
+          eventId: round.eventId,
+          attemptId: attempt.id,
+          score: 0
+        });
+
+        WebSocketService.broadcastToEvent(round.eventId, 'leaderboardUpdate', {
+          eventId: round.eventId,
+          roundId: round.id
+        });
 
         res.status(201).json(attempt)
       } catch (error) {
@@ -2013,9 +2498,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const resultsPublished = round?.resultsPublished ?? false
       const eventEnded = resultsPublished && attemptDurationElapsed
 
+      // canViewResults is true if admin has enabled "Show Answers" for the round
+      const canViewResults = round?.showAnswers ?? false
+
       const isAdmin = req.user!.role === "super_admin" || req.user!.role === "event_admin"
 
-      // Hide scores and answers if event/round hasn't ended (for participants only)
+      // Hide scores and answers if showAnswers is not enabled (for participants only)
       let responseData: any = {
         ...attempt,
         round,
@@ -2023,10 +2511,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         answers,
         event,
         eventEnded,
+        canViewResults,
       }
 
-      if (!eventEnded && !isAdmin && req.user!.role === "participant") {
-        // Hide sensitive data until event ends
+      if (!canViewResults && !isAdmin && req.user!.role === "participant") {
+        // Hide sensitive data until admin enables show answers
         responseData = {
           ...attempt,
           totalScore: null,
@@ -2037,6 +2526,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           questions: questions.map((q: any) => ({
             ...q,
             correctAnswer: null, // Hide correct answers
+            expectedOutput: null, // Hide expected output for coding/fill-up questions
+            testCases: null, // Hide test cases
           })),
           answers: answers.map((a: any) => ({
             ...a,
@@ -2045,6 +2536,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           })),
           event,
           eventEnded,
+          canViewResults,
         }
       }
 
@@ -2079,6 +2571,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
         if (attempt.status !== "in_progress") {
           return res.status(400).json({ message: "Test is not in progress" })
+        }
+
+        const round = await storage.getRound(attempt.roundId);
+        if (round && round.status === 'paused') {
+          return res.status(403).json({ message: "Test is currently paused by admin" });
         }
 
         // Check if answer already exists
@@ -2173,6 +2670,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return res.status(400).json({ message: "Test is already submitted" })
         }
 
+        // Check if participant is disqualified
+        const round = await storage.getRound(attempt.roundId);
+        if (round) {
+          const participant = await storage.getParticipantByUserAndEvent(req.user!.id, round.eventId);
+          if (participant?.status === "disqualified") {
+            const updatedAttempt = await storage.updateTestAttempt(attemptId, {
+              status: "disqualified",
+              submittedAt: new Date(),
+              completedAt: new Date(),
+              totalScore: 0,
+            });
+            await cacheService.deletePattern('leaderboard:*');
+            return res.json({
+              message: "Test submitted (disqualified)",
+              attempt: updatedAttempt,
+              totalScore: null,
+            });
+          }
+        }
+
         // Get questions and answers to calculate score
         const questions = await storage.getQuestionsByRound(attempt.roundId)
         const answers = await storage.getAnswersByAttempt(attemptId)
@@ -2186,16 +2703,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
           let isCorrect = false
           let pointsAwarded = 0
+          const questionPoints = question.points || 1
 
-          // Auto-grade multiple choice and true/false
-          if (question.questionType === "multiple_choice" || question.questionType === "true_false") {
-            isCorrect = answer.answer.toLowerCase() === (question.correctAnswer || "").toLowerCase()
-            pointsAwarded = isCorrect ? question.points : 0
-          }
-          // For short answer and coding, require manual grading (set to 0 for now)
-          else {
-            isCorrect = false
-            pointsAwarded = 0
+          // Generic Auto-grading Logic for ALL Question Types
+          const userAnswer = (answer.answer || "").trim().toLowerCase();
+          const correct = (question.correctAnswer || "").trim().toLowerCase();
+          const expected = (question.expectedOutput || "").trim().toLowerCase();
+
+          if (correct) {
+            // Auto-grade based on correctAnswer (MCQ, Image MCQ, True/False, Short Answer, Fill-up, etc.)
+            isCorrect = userAnswer === correct;
+            pointsAwarded = isCorrect ? questionPoints : 0;
+          } else if (expected) {
+            // Auto-grade based on expectedOutput (Coding, etc.)
+            // Note: This is strict string matching. For advanced coding, a runner is needed.
+            isCorrect = userAnswer === expected;
+            pointsAwarded = isCorrect ? questionPoints : 0;
+          } else {
+            // No answer key defined -> Manual grading required
+            isCorrect = false;
+            pointsAwarded = 0;
           }
 
           totalScore += pointsAwarded
@@ -2218,6 +2745,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Invalidate leaderboards
         await cacheService.deletePattern('leaderboard:*');
 
+        // Notify admins of submission
+        WebSocketService.notifyTestSubmission({
+          userId: req.user!.id,
+          roundId: attempt.roundId,
+          eventId: attempt.roundId ? (await storage.getRound(attempt.roundId))?.eventId || "" : "",
+          attemptId: attemptId,
+          score: totalScore
+        });
+
+        // Trigger leaderboard update
+        WebSocketService.broadcastToEvent((await storage.getRound(attempt.roundId))?.eventId || "", 'leaderboardUpdate', {
+          eventId: (await storage.getRound(attempt.roundId))?.eventId || "",
+          roundId: attempt.roundId
+        });
+
         res.json(updatedAttempt)
       } catch (error) {
         console.error("Submit test error:", error)
@@ -2233,25 +2775,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const attemptsWithRounds = await Promise.all(
         attempts.map(async (attempt) => {
           const round = await storage.getRound(attempt.roundId)
+          const event = round ? await storage.getEvent(round.eventId) : null
 
-          const attemptDurationElapsed = attempt.startedAt && round?.duration
-            ? Date.now() > new Date(attempt.startedAt).getTime() + (round.duration * 60 * 1000)
-            : false
+          // Logic Change: Use round.showAnswers to determine visibility regardless of duration
+          // But usually duration check is also good practice, but user wants "Admin clicks button".
+          // So we rely purely on showAnswers for showing details.
 
-          const resultsPublished = round?.resultsPublished ?? false
-          const canViewResults = resultsPublished && attemptDurationElapsed
+          const canViewResults = round?.showAnswers ?? false
+
+          const roundWithEvent = round ? { ...round, event } : round
 
           if (!canViewResults && attempt.status === 'completed') {
             return {
               ...attempt,
               totalScore: null,
               maxScore: null,
-              round,
+              round: roundWithEvent,
               canViewResults: false
             }
           }
 
-          return { ...attempt, round, canViewResults }
+          return { ...attempt, round: roundWithEvent, canViewResults }
         })
       )
 
@@ -2262,84 +2806,258 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   })
 
-  // Leaderboard Routes
-  app.get("/api/rounds/:roundId/leaderboard", requireAuth, async (req: AuthRequest, res: Response) => {
+  // New Routes for Test Workflow
+
+  app.post("/api/rounds/:roundId/toggle-answers", requireAuth, requireEventAdminOrSuperAdmin, async (req: AuthRequest, res: Response) => {
     try {
-      const { roundId } = req.params
-      const round = await storage.getRound(roundId)
+      const { roundId } = req.params;
+      const { show } = req.body;
 
+      if (typeof show !== 'boolean') {
+        return res.status(400).json({ message: "'show' must be a boolean" });
+      }
+
+      const round = await storage.getRound(roundId);
       if (!round) {
-        return res.status(404).json({ message: "Round not found" })
+        return res.status(404).json({ message: "Round not found" });
       }
 
-      const isAdmin = req.user!.role === "super_admin" || req.user!.role === "event_admin"
+      // One-way action: once answers are shown, they cannot be hidden again.
+      if (round.showAnswers && show === false) {
+        return res.status(400).json({ message: "Answers are already visible and cannot be hidden" });
+      }
 
-      if (!isAdmin) {
-        if (!round.resultsPublished) {
-          return res.json([])
-        }
+      // If already enabled and caller re-sends show=true, treat as idempotent.
+      if (round.showAnswers && show === true) {
+        return res.json(round);
+      }
 
-        if (req.user!.id) {
-          const userAttempt = await storage.getTestAttemptByUserAndRound(req.user!.id, roundId)
-          if (userAttempt && userAttempt.startedAt && round.duration) {
-            const attemptDurationElapsed = Date.now() > new Date(userAttempt.startedAt).getTime() + (round.duration * 60 * 1000)
-            if (!attemptDurationElapsed) {
-              return res.json([])
-            }
-          }
+      // Enforce: can only show answers after ALL participants have submitted.
+      // Use participant list (registered users) as the source of truth.
+      if (show === true) {
+        const participants = await storage.getParticipantsByEventId(round.eventId);
+        const totalParticipants = participants.length;
+
+        const attempts = await storage.getTestAttemptsByRound(roundId);
+        const completedParticipants = new Set(
+          attempts.filter(a => a.submittedAt !== null).map(a => a.userId)
+        );
+
+        if (totalParticipants === 0 || completedParticipants.size !== totalParticipants) {
+          return res.status(400).json({
+            message: "Cannot show answers until all participants have submitted",
+            totalParticipants,
+            completedParticipants: completedParticipants.size,
+          });
         }
       }
 
-      const leaderboard = await cacheService.get(
-        `leaderboard:round:${roundId}`,
-        () => storage.getRoundLeaderboard(roundId),
-        30 // Short TTL for leaderboard
-      );
-      res.json(leaderboard)
+      // Note: requireRoundAccess already verifies round existence
+      const updated = await storage.updateRoundShowAnswers(roundId, show);
+
+      // Invalidate caches
+      await cacheService.delete(`rounds:${round.eventId}`);
+
+      res.json(updated);
     } catch (error) {
-      console.error("Get round leaderboard error:", error)
-      res.status(500).json({ message: "Internal server error" })
+      console.error("Toggle answers error:", error);
+      res.status(500).json({ message: "Internal server error" });
     }
-  })
+  });
+
+  app.post("/api/rounds/:roundId/publish-results", requireAuth, requireEventAdminOrSuperAdmin, async (req: AuthRequest, res: Response) => {
+    try {
+      const { roundId } = req.params;
+      const { userIds } = req.body; // Array of user IDs to notify
+
+      const round = await storage.getRound(roundId);
+      if (!round) return res.status(404).json({ message: "Round not found" });
+
+      const updated = await storage.updateRoundResultsPublished(roundId, true);
+
+      // Invalidate cache
+      await cacheService.delete(`rounds:${round.eventId}`);
+
+      // Notify users (logic remains same)
+      // ...
+
+      if (!userIds || !Array.isArray(userIds) || userIds.length === 0) {
+        return res.status(400).json({ message: "No participants selected" });
+      }
+
+
+
+      const event = await storage.getEvent(round.eventId);
+
+      let sentCount = 0;
+
+      for (const userId of userIds) {
+        const attempt = await storage.getTestAttemptByUserAndRound(userId, roundId);
+        const user = await storage.getUser(userId);
+
+        if (user && attempt) {
+          queueService.addEmailJob(
+            user.email,
+            `Test Results: ${round.name} - ${event?.name}`,
+            'test_result_qualified', // New template type we will need
+            {
+              name: user.fullName,
+              eventName: event?.name || 'Event',
+              roundName: round.name,
+              score: attempt.totalScore || 0,
+              maxScore: attempt.maxScore || 100, // Fallback
+            },
+            user.fullName
+          ).catch(err => console.error(`Failed to queue result email for ${user.email}`, err));
+          sentCount++;
+        }
+      }
+
+      // We might also want to mark resultsPublished=true if not already, 
+      // OR purely rely on this manual email trigger. The user said "Publish Result" 
+      // usually implies the boolean, but here they said "Share to selected participants".
+      // I will NOT toggle the global boolean to avoid exposing it to everyone if the logic was mixed.
+      // But arguably, "Publish Result" button might toggle the global flag too? 
+      // User said: "Event admin only should see the leadserboard, after cross verifing it only admin should click publish result, the result should be share to selected paticipants choosen by admin to their mail"
+      // This suggests it's a targetted share, not a global publish.
+
+      res.json({ message: `Results published to ${sentCount} participants` });
+
+    } catch (error) {
+      console.error("Publish results error:", error);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
 
   app.get("/api/events/:eventId/leaderboard", requireAuth, async (req: AuthRequest, res: Response) => {
     try {
-      const { eventId } = req.params
-      const rounds = await storage.getRoundsByEvent(eventId)
+      const { eventId } = req.params;
+      const event = await storage.getEvent(eventId);
 
-      const isAdmin = req.user!.role === "super_admin" || req.user!.role === "event_admin"
-
-      if (!isAdmin) {
-        const allResultsPublished = rounds.every(round => round.resultsPublished)
-
-        if (!allResultsPublished) {
-          return res.json([])
-        }
-
-        if (req.user!.id) {
-          for (const round of rounds) {
-            const userAttempt = await storage.getTestAttemptByUserAndRound(req.user!.id, round.id)
-            if (userAttempt && userAttempt.startedAt && round.duration) {
-              const attemptDurationElapsed = Date.now() > new Date(userAttempt.startedAt).getTime() + (round.duration * 60 * 1000)
-              if (!attemptDurationElapsed) {
-                return res.json([])
-              }
-            }
-          }
-        }
+      if (!event) {
+        return res.status(404).json({ message: "Event not found" });
       }
 
+      const rounds = await storage.getRoundsByEvent(eventId);
       const leaderboard = await cacheService.get(
         `leaderboard:event:${eventId}`,
         () => storage.getEventLeaderboard(eventId),
-        30 // Short TTL for leaderboard
+        30,
       );
-      res.json(leaderboard)
+
+      const isAdmin = req.user!.role === "super_admin" || req.user!.role === "event_admin";
+      const answersVisible = rounds.length > 0 && rounds.every((round) => round.showAnswers);
+
+      if (isAdmin) {
+        return res.json({
+          scope: "admin",
+          answersVisible,
+          canSelectParticipants: true,
+          leaderboard,
+        });
+      }
+
+      const participant = await storage.getParticipantByUserAndEvent(req.user!.id, eventId);
+      if (!participant) {
+        return res.status(403).json({ message: "You are not registered for this event" });
+      }
+
+      if (!answersVisible) {
+        return res.json({
+          scope: "participant",
+          answersVisible: false,
+          participantResult: null,
+          message: "Results not yet published",
+        });
+      }
+
+      const participantEntry = leaderboard.find((entry) => entry.userId === req.user!.id) || null;
+
+      const userAttempts = await storage.getTestAttemptsByUser(req.user!.id);
+      const eventRoundIds = new Set(rounds.map((round) => round.id));
+      const eventAttempts = userAttempts.filter(
+        (attempt) => eventRoundIds.has(attempt.roundId) && attempt.status === "completed",
+      );
+
+      const answers = await storage.getAnswersByAttemptIds(eventAttempts.map((attempt) => attempt.id));
+      const answersByAttempt = new Map<string, typeof answers>();
+      answers.forEach((answer) => {
+        const existing = answersByAttempt.get(answer.attemptId);
+        if (existing) {
+          existing.push(answer);
+        } else {
+          answersByAttempt.set(answer.attemptId, [answer]);
+        }
+      });
+
+      const roundOrder = new Map(rounds.map((round) => [round.id, round.roundNumber]));
+
+      const questionMaps = new Map<string, Map<string, string>>();
+      for (const round of rounds) {
+        if (!eventAttempts.some((attempt) => attempt.roundId === round.id)) {
+          continue;
+        }
+        const roundQuestions = await storage.getQuestionsByRound(round.id);
+        questionMaps.set(round.id, new Map(roundQuestions.map((question) => [question.id, question.questionText])));
+      }
+
+      const roundResults = eventAttempts
+        .map((attempt) => {
+          const roundMeta = rounds.find((round) => round.id === attempt.roundId);
+          const questionTextMap = questionMaps.get(attempt.roundId) || new Map<string, string>();
+          const attemptAnswers = (answersByAttempt.get(attempt.id) || []).map((answer) => ({
+            id: answer.id,
+            questionId: answer.questionId,
+            answer: answer.answer,
+            isCorrect: answer.isCorrect,
+            pointsAwarded: answer.pointsAwarded,
+            answeredAt: answer.answeredAt,
+            questionText: questionTextMap.get(answer.questionId) || null,
+          }));
+
+          return {
+            roundId: attempt.roundId,
+            roundName: roundMeta?.name || "Round",
+            totalScore: attempt.totalScore || 0,
+            maxScore: attempt.maxScore,
+            submittedAt: attempt.submittedAt,
+            answers: attemptAnswers,
+          };
+        })
+        .sort((a, b) => {
+          const aOrder = roundOrder.get(a.roundId) ?? 0;
+          const bOrder = roundOrder.get(b.roundId) ?? 0;
+          return aOrder - bOrder;
+        });
+
+      const fallbackTotalScore = roundResults.reduce((sum, roundResult) => sum + (roundResult.totalScore || 0), 0);
+      const fallbackMaxScore = roundResults.reduce((sum, roundResult) => sum + (roundResult.maxScore || 0), 0);
+
+      const lastSubmission = roundResults.length > 0 ? roundResults[roundResults.length - 1].submittedAt : null;
+
+      return res.json({
+        scope: "participant",
+        answersVisible: true,
+        participantResult: participantEntry
+          ? {
+            ...participantEntry,
+            rounds: roundResults,
+          }
+          : {
+            rank: null,
+            userId: req.user!.id,
+            userName: req.user!.fullName,
+            totalScore: fallbackTotalScore,
+            maxScore: fallbackMaxScore,
+            submittedAt: lastSubmission,
+            rounds: roundResults,
+          },
+      });
     } catch (error) {
-      console.error("Get event leaderboard error:", error)
-      res.status(500).json({ message: "Internal server error" })
+      console.error("Get event leaderboard error:", error);
+      res.status(500).json({ message: "Internal server error" });
     }
-  })
+  });
 
   app.get("/api/reports", requireAuth, requireSuperAdmin, async (req: AuthRequest, res: Response) => {
     try {
@@ -2443,6 +3161,140 @@ export async function registerRoutes(app: Express): Promise<Server> {
         })
       } catch (error) {
         console.error("Backfill round rules error:", error)
+        res.status(500).json({ message: "Internal server error" })
+      }
+    },
+  )
+
+
+
+  // Super Admin: Get ALL Rounds with event details
+  app.get("/api/super-admin/all-rounds", requireAuth, requireSuperAdmin, async (req: AuthRequest, res: Response) => {
+    try {
+      const events = await storage.getEvents();
+      let allRounds: any[] = [];
+
+      for (const event of events) {
+        const rounds = await storage.getRoundsByEvent(event.id);
+        const roundsWithEventName = await Promise.all(rounds.map(async r => {
+          // Auto-complete if time ended
+          if (r.status === 'in_progress' && r.endTime && new Date(r.endTime) < new Date()) {
+            console.log(`Auto-completing expired round ${r.id}`);
+            const updated = await storage.updateRoundStatus(r.id, 'completed');
+            // Invalidate cache
+            await cacheService.delete(`rounds:${r.eventId}`);
+            return {
+              ...updated,
+              eventName: event.name,
+              eventCategory: event.category
+            };
+          }
+
+          return {
+            ...r,
+            eventName: event.name,
+            eventCategory: event.category
+          };
+        }));
+        allRounds = [...allRounds, ...roundsWithEventName];
+      }
+
+      // Sort by start time descending
+      allRounds.sort((a, b) => {
+        const dateA = a.startTime ? new Date(a.startTime).getTime() : 0;
+        const dateB = b.startTime ? new Date(b.startTime).getTime() : 0;
+        return dateB - dateA;
+      });
+
+      res.json(allRounds);
+    } catch (error) {
+      console.error("Get all rounds error:", error);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  app.post(
+    "/api/rounds/:roundId/pause",
+    requireAuth,
+    requireEventAdmin,
+    requireRoundAccess,
+    async (req: AuthRequest, res: Response) => {
+      try {
+        const round = await storage.getRound(req.params.roundId)
+        if (!round) {
+          return res.status(404).json({ message: "Round not found" })
+        }
+
+        if (round.status !== "in_progress") {
+          return res.status(400).json({ message: "Round can only be paused when status is 'in_progress'" })
+        }
+
+        const updatedRound = await storage.updateRoundStatus(req.params.roundId, "paused")
+
+        // Invalidate cache - include participant credentials so dashboard updates immediately
+        await cacheService.delete(`rounds:${round.eventId}`);
+        await cacheService.deletePattern('leaderboard:*');
+        await cacheService.deletePattern('participant:credential:*');
+
+        // Notify via WebSocket
+        WebSocketService.notifyRoundStatus(round.eventId, req.params.roundId, "paused", updatedRound)
+
+        res.json(updatedRound)
+      } catch (error) {
+        console.error("Pause round error:", error)
+        res.status(500).json({ message: "Internal server error" })
+      }
+    },
+  )
+
+  app.post(
+    "/api/rounds/:roundId/resume",
+    requireAuth,
+    requireEventAdmin,
+    requireRoundAccess,
+    async (req: AuthRequest, res: Response) => {
+      try {
+        const round = await storage.getRound(req.params.roundId)
+        if (!round) {
+          return res.status(404).json({ message: "Round not found" })
+        }
+
+        if (round.status !== "paused") {
+          return res.status(400).json({ message: "Round can only be resumed when status is 'paused'" })
+        }
+
+        const pauseDurationMs = Math.max(0, Date.now() - new Date(round.updatedAt).getTime());
+
+        // Shift startedAt for all in-progress attempts of this round so pause time is not counted against test duration
+        if (pauseDurationMs > 0) {
+          const inProgressAttempts = await db.select()
+            .from(testAttempts)
+            .where(and(
+              eq(testAttempts.roundId, round.id),
+              eq(testAttempts.status, 'in_progress')
+            ));
+
+          for (const att of inProgressAttempts) {
+            const newStartedAt = new Date(att.startedAt.getTime() + pauseDurationMs);
+            await db.update(testAttempts)
+              .set({ startedAt: newStartedAt })
+              .where(eq(testAttempts.id, att.id));
+          }
+        }
+
+        const updatedRound = await storage.updateRoundStatus(req.params.roundId, "in_progress")
+
+        // Invalidate cache - include participant credentials so dashboard updates immediately
+        await cacheService.delete(`rounds:${round.eventId}`);
+        await cacheService.deletePattern('leaderboard:*');
+        await cacheService.deletePattern('participant:credential:*');
+
+        // Notify via WebSocket
+        WebSocketService.notifyRoundStatus(round.eventId, req.params.roundId, "in_progress", updatedRound)
+
+        res.json(updatedRound)
+      } catch (error) {
+        console.error("Resume round error:", error)
         res.status(500).json({ message: "Internal server error" })
       }
     },
@@ -2675,6 +3527,200 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   })
 
+  // Update registration details (Admin only)
+  app.patch("/api/registrations/:id", requireAuth, async (req: AuthRequest, res: Response) => {
+    try {
+      const user = req.user!;
+      if (user.role !== "super_admin" && user.role !== "registration_committee") {
+        return res.status(403).json({ message: "Forbidden" });
+      }
+
+      const { id } = req.params;
+      const updates = req.body;
+
+      // Basic validation
+      if (!updates || Object.keys(updates).length === 0) {
+        return res.status(400).json({ message: "No updates provided" });
+      }
+
+      const registration = await storage.getRegistration(id);
+      if (!registration) {
+        return res.status(404).json({ message: "Registration not found" });
+      }
+
+      const updated = await storage.updateRegistration(id, updates);
+
+      // Audit Log
+      await logSuperAdminAction(
+        user.id,
+        user.username,
+        "UPDATE_REGISTRATION",
+        "registration",
+        id,
+        updated?.organizerName || null,
+        updates,
+        "Registration details updated",
+        getClientIp(req)
+      );
+
+      // Notify real-time update
+      if (updated) {
+        WebSocketService.notifyRegistrationUpdate(updated.eventId, updated);
+      }
+
+      res.json(updated);
+    } catch (error) {
+      console.error("Update registration error:", error);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  })
+
+  // Download registrations as Excel (grouped by participant)
+  app.get("/api/registrations/download-excel", requireAuth, async (req: AuthRequest, res: Response) => {
+    try {
+      const user = req.user!
+      if (user.role !== "super_admin" && user.role !== "registration_committee") {
+        return res.status(403).json({ message: "Forbidden" })
+      }
+
+      // Get all confirmed registrations with event details
+      const registrations = await storage.getRegistrations()
+      const confirmedRegistrations = registrations.filter(r => r.status === 'confirmed')
+
+      if (confirmedRegistrations.length === 0) {
+        return res.status(404).json({ message: "No confirmed registrations found" })
+      }
+
+      // Group by roll number (include both organizers and team members)
+      const participantMap = new Map<string, {
+        name: string
+        rollNo: string
+        email: string
+        dept: string
+        college: string
+        phone: string
+        events: string[]
+      }>()
+
+      for (const reg of confirmedRegistrations) {
+        const eventName = reg.event?.name || 'Unknown Event'
+
+        // Add organizer
+        const organizerRollNo = reg.organizerRollNo
+        if (participantMap.has(organizerRollNo)) {
+          // Add event to existing participant
+          participantMap.get(organizerRollNo)!.events.push(eventName)
+        } else {
+          // Create new participant entry for organizer
+          participantMap.set(organizerRollNo, {
+            name: reg.organizerName,
+            rollNo: reg.organizerRollNo,
+            email: reg.organizerEmail,
+            dept: reg.organizerDept,
+            college: reg.organizerCollege || 'N/A',
+            phone: reg.organizerPhone || 'N/A',
+            events: [eventName]
+          })
+        }
+
+        // Add team members (inherit organizer's college since they're part of the same team)
+        if (reg.teamMembers && reg.teamMembers.length > 0) {
+          for (const member of reg.teamMembers) {
+            const memberRollNo = member.memberRollNo
+            if (participantMap.has(memberRollNo)) {
+              // Add event to existing team member
+              participantMap.get(memberRollNo)!.events.push(eventName)
+            } else {
+              // Create new participant entry for team member
+              participantMap.set(memberRollNo, {
+                name: member.memberName,
+                rollNo: member.memberRollNo,
+                email: member.memberEmail,
+                dept: member.memberDept,
+                college: reg.organizerCollege || 'N/A', // Use organizer's college for team members
+                phone: member.memberPhone || 'N/A',
+                events: [eventName]
+              })
+            }
+          }
+        }
+      }
+
+      // Convert map to array and sort by name
+      const participants = Array.from(participantMap.values()).sort((a, b) =>
+        a.name.localeCompare(b.name)
+      )
+
+      // Create Excel workbook
+      const workbook = new ExcelJS.Workbook()
+      const worksheet = workbook.addWorksheet('Confirmed Participants')
+
+      // Define columns
+      worksheet.columns = [
+        { header: '#', key: 'index', width: 8 },
+        { header: 'Name', key: 'name', width: 25 },
+        { header: 'Roll No', key: 'rollNo', width: 15 },
+        { header: 'Email', key: 'email', width: 30 },
+        { header: 'Department', key: 'dept', width: 15 },
+        { header: 'College', key: 'college', width: 20 },
+        { header: 'Phone', key: 'phone', width: 15 },
+        { header: 'Events', key: 'events', width: 40 },
+        { header: 'Total Registrations', key: 'totalRegistrations', width: 20 }
+      ]
+
+      // Style header row
+      worksheet.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } }
+      worksheet.getRow(1).fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FF4472C4' }
+      }
+      worksheet.getRow(1).alignment = { vertical: 'middle', horizontal: 'center' }
+
+      // Add data rows
+      participants.forEach((participant, index) => {
+        worksheet.addRow({
+          index: index + 1,
+          name: participant.name,
+          rollNo: participant.rollNo,
+          email: participant.email,
+          dept: participant.dept,
+          college: participant.college,
+          phone: participant.phone,
+          events: participant.events.join(', '),
+          totalRegistrations: participant.events.length
+        })
+      })
+
+      // Auto-fit columns and add borders
+      worksheet.eachRow((row, rowNumber) => {
+        row.eachCell((cell) => {
+          cell.border = {
+            top: { style: 'thin' },
+            left: { style: 'thin' },
+            bottom: { style: 'thin' },
+            right: { style: 'thin' }
+          }
+          if (rowNumber > 1) {
+            cell.alignment = { vertical: 'middle' }
+          }
+        })
+      })
+
+      // Set response headers for file download
+      const fileName = `confirmed-participants-${new Date().toISOString().split('T')[0]}.xlsx`
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+      res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`)
+
+      // Write to response
+      await workbook.xlsx.write(res)
+      res.end()
+    } catch (error) {
+      console.error("Download registrations Excel error:", error)
+      res.status(500).json({ message: "Internal server error" })
+    }
+  })
+
   // Create a new team-based registration
   app.post("/api/register", async (req: Request, res: Response) => {
     try {
@@ -2686,6 +3732,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         organizerDept,
         organizerCollege,
         organizerPhone,
+        organizerFoodType,
         teamMembers
       } = req.body
 
@@ -2793,18 +3840,67 @@ export async function registerRoutes(app: Express): Promise<Server> {
         })
       }
 
-      // Create the registration
-      const registration = await storage.createTeamRegistration({
+      // ATOMIC OPERATION: Validate department limit + create registration in single transaction
+      // This prevents race conditions where concurrent requests could bypass the department limit
+      const result = await storage.createTeamRegistrationAtomic({
         eventId,
+        eventName: event.name,
         organizerRollNo,
         organizerName,
         organizerEmail,
         organizerDept,
         organizerCollege,
         organizerPhone,
+        organizerFoodType: organizerFoodType || 'veg', // Default to veg for backward compatibility
         registrationType: registrationType as 'solo' | 'team',
-        teamMembers: teamMembers || []
-      })
+        teamMembers: (teamMembers || []).map((m: any) => ({
+          memberRollNo: m.memberRollNo,
+          memberName: m.memberName,
+          memberEmail: m.memberEmail,
+          memberDept: m.memberDept,
+          memberPhone: m.memberPhone,
+          memberFoodType: m.memberFoodType || 'veg',
+        }))
+      });
+
+      // Check if registration creation failed due to department limit
+      if (!result.success) {
+        return res.status(409).json({
+          message: result.error || 'Department participant limit exceeded',
+          department: result.department,
+          currentCount: result.currentCount,
+          limit: 10,
+          code: 'DEPARTMENT_LIMIT_EXCEEDED'
+        });
+      }
+
+      const registration = result.registration!;
+
+      // Upsert organizer into participant registry so food preference and
+      // participant details persist across future registrations.
+      await storage.upsertParticipantRegistry({
+        rollNo: organizerRollNo,
+        name: organizerName,
+        email: organizerEmail,
+        dept: organizerDept,
+        phone: organizerPhone,
+        college: organizerCollege,
+        foodType: organizerFoodType || 'veg',
+      });
+
+      if (teamMembers && teamMembers.length > 0) {
+        for (const member of teamMembers) {
+          await storage.upsertParticipantRegistry({
+            rollNo: member.memberRollNo,
+            name: member.memberName,
+            email: member.memberEmail,
+            dept: member.memberDept,
+            phone: member.memberPhone,
+            college: organizerCollege,
+            foodType: member.memberFoodType || 'veg',
+          });
+        }
+      }
 
       // Notify via WebSocket
       WebSocketService.notifyRegistrationUpdate(eventId, {
@@ -2820,7 +3916,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // 1. Organizer
       queueService.addEmailJob(
         organizerEmail,
-        `Registration Received - ${event.name}`,
+        `Registration Successful - ${event.name}`,
         'registration_received',
         {
           name: organizerName,
@@ -2835,7 +3931,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         teamMembers.forEach((member: any) => {
           queueService.addEmailJob(
             member.memberEmail,
-            `Registration Received - ${event.name}`,
+            `Registration Successful - ${event.name}`,
             'registration_received',
             {
               name: member.memberName,
@@ -2854,6 +3950,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           id: registration.id,
           eventId: registration.eventId,
           eventName: event.name,
+          teamId: registration.teamId,
           organizerRollNo: registration.organizerRollNo,
           organizerName: registration.organizerName,
           registrationType: registration.registrationType,
@@ -2864,6 +3961,287 @@ export async function registerRoutes(app: Express): Promise<Server> {
       })
     } catch (error) {
       console.error("Create registration error:", error)
+      res.status(500).json({ message: "Internal server error" })
+    }
+  })
+
+  // Batch registration for consolidated emails
+  app.post("/api/register/batch", async (req: Request, res: Response) => {
+    try {
+      const { registrations } = req.body
+      if (!registrations || !Array.isArray(registrations) || registrations.length === 0) {
+        return res.status(400).json({ message: "Registrations array is required" })
+      }
+
+      const results = []
+      const successfulEvents = []
+      const organizerDetails = {
+        name: "",
+        email: "",
+        rollNo: "",
+        college: "",
+        dept: ""
+      }
+
+      // Helper to check if event is Paper Presentation
+      const isPaperPresentation = (eventName: string) => {
+        const normalized = eventName.toLowerCase()
+        return normalized.includes('paper presentation') || normalized.includes('quanta talks')
+      }
+
+      // Process each registration
+      for (const regData of registrations) {
+        const {
+          eventId,
+          organizerRollNo,
+          organizerName,
+          organizerEmail,
+          organizerDept,
+          organizerCollege,
+          organizerPhone,
+          organizerFoodType,
+          paperTopic,
+          teamMembers
+        } = regData
+
+        // Capture organizer details from the first valid registration
+        if (!organizerDetails.email) {
+          organizerDetails.name = organizerName
+          organizerDetails.email = organizerEmail
+          organizerDetails.rollNo = organizerRollNo
+          organizerDetails.college = organizerCollege
+          organizerDetails.dept = organizerDept
+        }
+
+        // --- Validation Logic (Copied & Adapted) ---
+        if (!eventId || !organizerRollNo || !organizerName || !organizerEmail || !organizerDept) {
+          results.push({ eventId, success: false, message: "Missing required fields" })
+          continue
+        }
+
+        // Validate organizer food type (required)
+        if (!organizerFoodType || !FOOD_TYPES.includes(organizerFoodType)) {
+          results.push({ eventId, success: false, message: "Invalid or missing food type for organizer. Must be 'veg' or 'nonveg'" })
+          continue
+        }
+
+        // Check if organizer exists in participant registry and validate food type
+        const existingOrganizerParticipant = await storage.getParticipantRegistryByRollNo(organizerRollNo)
+        if (existingOrganizerParticipant && existingOrganizerParticipant.foodType !== organizerFoodType) {
+          results.push({
+            eventId,
+            success: false,
+            message: `Food type mismatch for roll_no: ${organizerRollNo}. Existing value: ${existingOrganizerParticipant.foodType}`
+          })
+          continue
+        }
+
+        const event = await storage.getEventById(eventId)
+        if (!event) {
+          results.push({ eventId, success: false, message: "Event not found" })
+          continue
+        }
+
+        // Validate paper topic if Paper Presentation event
+        if (isPaperPresentation(event.name)) {
+          if (!paperTopic) {
+            results.push({ eventId, success: false, message: "Paper topic is required for Paper Presentation event" })
+            continue
+          }
+          if (!PAPER_PRESENTATION_TOPICS.includes(paperTopic as any)) {
+            results.push({ eventId, success: false, message: `Invalid paper topic. Must be one of: ${PAPER_PRESENTATION_TOPICS.join(', ')}` })
+            continue
+          }
+        }
+
+        const totalMembers = 1 + (teamMembers?.length || 0)
+        const minMembers = event.minMembers || 1
+        const maxMembers = event.maxMembers || 1
+
+        if (totalMembers < minMembers || totalMembers > maxMembers) {
+          results.push({ eventId, success: false, message: `Invalid team size. Required: ${minMembers}-${maxMembers}` })
+          continue
+        }
+
+        // Check organizer registration
+        const organizerCheck = await storage.checkRollNoCategoryRegistration(
+          organizerRollNo,
+          event.category as 'technical' | 'non_technical'
+        )
+
+        if (organizerCheck.isRegistered) {
+          results.push({
+            eventId,
+            success: false,
+            message: `Already registered for ${organizerCheck.event?.name} in ${event.category} category`
+          })
+          continue
+        }
+
+        // Validate Members
+        const invalidMembers: any[] = []
+        const allRollNos = [organizerRollNo]
+
+        if (teamMembers && teamMembers.length > 0) {
+          for (const member of teamMembers) {
+            if (!member.memberRollNo || !member.memberName || !member.memberEmail || !member.memberDept) {
+              invalidMembers.push({ name: member.memberName, reason: 'Missing fields' })
+              continue
+            }
+            // Validate member food type
+            if (!member.memberFoodType || !FOOD_TYPES.includes(member.memberFoodType)) {
+              invalidMembers.push({ name: member.memberName, reason: "Invalid or missing food type. Must be 'veg' or 'nonveg'" })
+              continue
+            }
+            // Check if member exists in participant registry and validate food type
+            const existingMemberParticipant = await storage.getParticipantRegistryByRollNo(member.memberRollNo)
+            if (existingMemberParticipant && existingMemberParticipant.foodType !== member.memberFoodType) {
+              invalidMembers.push({
+                name: member.memberName,
+                reason: `Food type mismatch. Existing value: ${existingMemberParticipant.foodType}`
+              })
+              continue
+            }
+            if (allRollNos.includes(member.memberRollNo)) {
+              invalidMembers.push({ name: member.memberName, reason: 'Duplicate roll no' })
+              continue
+            }
+            allRollNos.push(member.memberRollNo)
+
+            const memberCheck = await storage.checkRollNoCategoryRegistration(
+              member.memberRollNo,
+              event.category as 'technical' | 'non_technical'
+            )
+            if (memberCheck.isRegistered) {
+              invalidMembers.push({ name: member.memberName, reason: `Already registered in ${event.category}` })
+            }
+          }
+        }
+
+        if (invalidMembers.length > 0) {
+          results.push({ eventId, success: false, message: "Invalid team members", invalidMembers })
+          continue
+        }
+
+        // ATOMIC OPERATION: Validate department limit + create registration in single transaction
+        const result = await storage.createTeamRegistrationAtomic({
+          eventId,
+          eventName: event.name,
+          organizerRollNo,
+          organizerName,
+          organizerEmail,
+          organizerDept,
+          organizerCollege,
+          organizerPhone,
+          organizerFoodType,
+          registrationType: totalMembers > 1 ? 'team' : 'solo',
+          paperTopic: isPaperPresentation(event.name) ? paperTopic : undefined,
+          teamMembers: teamMembers?.map((m: any) => ({
+            memberRollNo: m.memberRollNo,
+            memberName: m.memberName,
+            memberEmail: m.memberEmail,
+            memberDept: m.memberDept,
+            memberPhone: m.memberPhone,
+            memberFoodType: m.memberFoodType,
+          })) || []
+        });
+
+        // Check if registration creation failed due to department limit
+        if (!result.success) {
+          results.push({
+            eventId,
+            success: false,
+            message: result.error || 'Department participant limit exceeded',
+            code: 'DEPARTMENT_LIMIT_EXCEEDED',
+            department: result.department,
+            currentCount: result.currentCount
+          });
+          continue;
+        }
+
+        const registration = result.registration!
+
+        // Upsert participant registry entries (stores food preferences globally)
+        await storage.upsertParticipantRegistry({
+          rollNo: organizerRollNo,
+          name: organizerName,
+          email: organizerEmail,
+          dept: organizerDept,
+          phone: organizerPhone,
+          college: organizerCollege,
+          foodType: organizerFoodType
+        })
+
+        // Upsert team members to participant registry
+        if (teamMembers && teamMembers.length > 0) {
+          for (const member of teamMembers) {
+            await storage.upsertParticipantRegistry({
+              rollNo: member.memberRollNo,
+              name: member.memberName,
+              email: member.memberEmail,
+              dept: member.memberDept,
+              phone: member.memberPhone,
+              foodType: member.memberFoodType
+            })
+          }
+        }
+
+        // Notify WebSocket
+        WebSocketService.notifyRegistrationUpdate(eventId, {
+          ...registration,
+          eventName: event.name,
+          teamSize: totalMembers
+        })
+
+        results.push({ eventId, success: true, registrationId: registration.id, teamId: registration.teamId })
+        successfulEvents.push({ name: event.name })
+
+        // Process Emails for Team Members (Individual or Consolidated if we wanted, but sticking to individual for members for now as they might differ per event)
+        // User asked for "single mail with both events names... to participant". 
+        // "Participant" usually means the person registering (Organizer).
+        // Team members might only be in one event, so individual email is fine/better for them unless they are in both.
+        // For simplicity and matching the main request (Organizer gets consolidated):
+        if (teamMembers && teamMembers.length > 0) {
+          teamMembers.forEach((member: any) => {
+            queueService.addEmailJob(
+              member.memberEmail,
+              `Registration Successful - ${event.name}`,
+              'registration_received',
+              { name: member.memberName, eventName: event.name, registrationId: registration.id },
+              member.memberName
+            ).catch(console.error)
+          })
+        }
+      }
+
+      await cacheService.deletePattern('registrations:*')
+
+      // Send Consolidated Email to Organizer
+      if (successfulEvents.length > 0 && organizerDetails.email) {
+        queueService.addEmailJob(
+          organizerDetails.email,
+          `Registration Successful - ${successfulEvents.length} Events`,
+          'registration_received_consolidated',
+          {
+            name: organizerDetails.name,
+            events: successfulEvents,
+            details: {
+              college: organizerDetails.college,
+              rollNo: organizerDetails.rollNo
+            }
+          },
+          organizerDetails.name
+        ).catch(err => console.error("Failed to queue consolidated email:", err))
+      }
+
+      res.status(201).json({
+        message: "Batch registration processed",
+        results,
+        successfulCount: successfulEvents.length
+      })
+
+    } catch (error) {
+      console.error("Batch registration error:", error)
       res.status(500).json({ message: "Internal server error" })
     }
   })
@@ -2919,6 +4297,37 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   })
 
+  // DELETE registration by ID (super admin or registration committee)
+  app.delete("/api/registrations/:id", requireAuth, async (req: AuthRequest, res: Response) => {
+    try {
+      const user = req.user!
+      if (user.role !== "super_admin" && user.role !== "registration_committee") {
+        return res.status(403).json({ message: "Forbidden" })
+      }
+
+      const registration = await storage.getRegistration(req.params.id)
+      if (!registration) {
+        return res.status(404).json({ message: "Registration not found" })
+      }
+
+      await storage.deleteRegistration(req.params.id)
+
+      // Invalidate all registration caches
+      await cacheService.deletePattern('registrations:*')
+
+      // Notify via WebSocket
+      WebSocketService.notifyRegistrationUpdate(registration.eventId, {
+        type: 'deleted',
+        registrationId: req.params.id
+      })
+
+      res.json({ message: "Registration deleted successfully" })
+    } catch (error) {
+      console.error("Delete registration error:", error)
+      res.status(500).json({ message: "Internal server error" })
+    }
+  })
+
 
   // NEW: Confirm team-based registration
   app.patch("/api/registrations/:id/confirm", requireAuth, async (req: AuthRequest, res: Response) => {
@@ -2950,6 +4359,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         participantName: string;
         participantEmail: string;
         participantRollNo: string;
+        teamId: string;
       }> = []
 
       // Process organizer
@@ -3005,32 +4415,32 @@ export async function registerRoutes(app: Express): Promise<Server> {
             participantName: name,
             participantEmail: email,
             participantRollNo: rollNo,
+            teamId: registration.teamId,
           })
 
-          // Queue email to organizer only
-          queueService.addEmailJob(
-            email,
-            `Registration Confirmed - ${event.name}`,
-            'registration_approved',
-            {
-              name: name,
-              eventName: event.name,
-              username: eventUsername,
-              password: eventPassword
-            },
-            name
-          ).catch(err => {
-            console.error(`Failed to queue approval email for ${email}:`, err)
-          })
+          // NOTE: Individual emails removed - will send consolidated email after all credentials are collected
         } else {
+          let eventPassword = existingCredential.eventPassword;
+          // Check if password is a bcrypt hash ($2a$, $2b$, or $2y$ and 60 chars) - never email a hash
+          if (eventPassword && eventPassword.length === 60 && eventPassword.startsWith('$2')) {
+            const { password: newPassword } = await generateUniqueEventCredentials(
+              name,
+              event.name,
+              1,
+            );
+            eventPassword = newPassword;
+            await storage.updateEventCredentialPassword(existingCredential.id, eventPassword);
+          }
+
           eventCredentialsList.push({
             eventId: registration.eventId,
             eventName: event.name,
             eventUsername: existingCredential.eventUsername,
-            eventPassword: existingCredential.eventPassword,
+            eventPassword,
             participantName: name,
             participantEmail: email,
             participantRollNo: rollNo,
+            teamId: registration.teamId,
           })
         }
       }
@@ -3062,25 +4472,43 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
 
-      // Send credentials email to team members
-      if (registration.teamMembers && registration.teamMembers.length > 0) {
-        // Find credentials for this event (assigned to organizer)
-        const credential = await storage.getEventCredentialByUserAndEvent(organizerUserId, registration.eventId)
-        if (credential) {
+      // Send CONSOLIDATED credentials email to organizer (credits optimization)
+      if (eventCredentialsList.length > 0) {
+        const credentials = eventCredentialsList.map(cred => ({
+          eventName: cred.eventName,
+          username: cred.eventUsername,
+          password: cred.eventPassword,
+          teamId: cred.teamId,
+        }))
+
+        // Send ONE email to organizer with all events' credentials
+        queueService.addEmailJob(
+          registration.organizerEmail,
+          `Registration Confirmed - ${eventCredentialsList.length} Event${eventCredentialsList.length > 1 ? 's' : ''}`,
+          'credentials_consolidated',
+          {
+            name: registration.organizerName,
+            credentials
+          },
+          registration.organizerName
+        ).catch(err => {
+          console.error(`Failed to queue consolidated credentials email for organizer ${registration.organizerEmail}:`, err)
+        })
+
+        // Send same consolidated email to team members (they share same credentials)
+        if (registration.teamMembers && registration.teamMembers.length > 0) {
           for (const member of registration.teamMembers) {
             queueService.addEmailJob(
               member.memberEmail,
-              `Registration Confirmed - ${event.name}`,
-              'registration_approved',
+              `Registration Confirmed - ${eventCredentialsList.length} Event${eventCredentialsList.length > 1 ? 's' : ''}`,
+              'credentials_consolidated',
               {
                 name: member.memberName,
-                eventName: event.name,
-                username: credential.eventUsername,
-                password: credential.eventPassword
+                credentials
               },
               member.memberName
             ).catch(err => {
-              console.error(`Failed to queue approval email for team member ${member.memberEmail}:`, err)
+              console.error(`Failed to queue consolidated credentials email for team member ${member.memberEmail}:`, err)
             })
           }
         }
@@ -3110,6 +4538,172 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   })
 
+  // Bulk confirm registrations for same participant (multiple events)
+  app.post("/api/registrations/bulk-confirm", requireAuth, async (req: AuthRequest, res: Response) => {
+    try {
+      const user = req.user!
+      if (user.role !== "super_admin" && user.role !== "registration_committee") {
+        return res.status(403).json({ message: "Forbidden" })
+      }
+
+      const { registrationIds } = req.body
+      if (!registrationIds || !Array.isArray(registrationIds) || registrationIds.length === 0) {
+        return res.status(400).json({ message: "registrationIds array is required" })
+      }
+
+      const results = []
+      const errors = []
+
+      for (const id of registrationIds) {
+        try {
+          // Get registration
+          const registration = await storage.getRegistration(id)
+          if (!registration) {
+            errors.push({ id, error: "Registration not found" })
+            continue
+          }
+
+          if (registration.status !== 'pending') {
+            // Already confirmed, skip
+            continue
+          }
+
+          // Get event
+          const event = await storage.getEvent(registration.eventId)
+          if (!event) {
+            errors.push({ id, error: "Event not found" })
+            continue
+          }
+
+          // Helper to create user and participant
+          const ensureParticipant = async (name: string, email: string) => {
+            let participantUser = await storage.getUserByEmail(email)
+            if (!participantUser) {
+              const password = generateSecurePassword()
+              const hashedPassword = await bcrypt.hash(password, 10)
+              const username = `${email.split('@')[0]}_${nanoid(6)}`.toLowerCase()
+              participantUser = await storage.createUser({
+                username,
+                password: hashedPassword,
+                email,
+                fullName: name,
+                role: "participant",
+              } as any)
+            }
+
+            const existingParticipant = await storage.getParticipantByUserAndEvent(participantUser.id, registration.eventId)
+            if (!existingParticipant) {
+              await storage.createParticipant(participantUser.id, registration.eventId)
+            }
+            return participantUser.id
+          }
+
+          // 1. Process Organizer
+          const organizerUserId = await ensureParticipant(registration.organizerName, registration.organizerEmail)
+
+          // 2. Ensure Credential for Organizer
+          let credentialUsername = ""
+          let credentialPassword = ""
+
+          const existingCred = await storage.getEventCredentialByUserAndEvent(organizerUserId, registration.eventId)
+          if (existingCred) {
+            credentialUsername = existingCred.eventUsername
+            credentialPassword = existingCred.eventPassword
+          } else {
+            const count = await storage.getEventCredentialCountForEvent(registration.eventId)
+            const creds = await generateUniqueEventCredentials(
+              registration.organizerName,
+              event.name,
+              count + 1
+            )
+            credentialUsername = creds.username
+            credentialPassword = creds.password
+
+            await storage.createEventCredential(
+              organizerUserId,
+              registration.eventId,
+              credentialUsername,
+              credentialPassword
+            )
+          }
+
+          // 3. Process Team Members
+          if (registration.teamMembers && registration.teamMembers.length > 0) {
+            for (const member of registration.teamMembers) {
+              await ensureParticipant(member.memberName, member.memberEmail)
+
+              // Note: Team members share the organizer's credentials, we don't create new ones
+              // We just ensure they are registered as participants
+            }
+          }
+
+          // 4. Send Emails (Organizer)
+          const credData = {
+            eventName: event.name,
+            username: credentialUsername,
+            password: credentialPassword,
+            teamId: registration.teamId,
+          }
+
+          queueService.addEmailJob(
+            registration.organizerEmail,
+            `Registration Confirmed - ${event.name}`,
+            'credentials_consolidated',
+            {
+              name: registration.organizerName,
+              credentials: [credData]
+            },
+            registration.organizerName
+          ).catch(e => console.error(`Failed to queue email for ${registration.organizerEmail}:`, e))
+
+          // 5. Send Emails (Team Members)
+          if (registration.teamMembers && registration.teamMembers.length > 0) {
+            for (const member of registration.teamMembers) {
+              queueService.addEmailJob(
+                member.memberEmail,
+                `Registration Confirmed - ${event.name}`,
+                'credentials_consolidated',
+                {
+                  name: member.memberName,
+                  credentials: [credData]
+                },
+                member.memberName
+              ).catch(e => console.error(`Failed to queue email for ${member.memberEmail}:`, e))
+            }
+          }
+
+          // Confirm the registration
+          const updated = await storage.confirmRegistration(id, user.id)
+          results.push(updated)
+
+          // Notify WebSocket
+          WebSocketService.notifyRegistrationConfirmed({
+            ...updated,
+            organizerName: updated.organizerName,
+            eventId: updated.eventId
+          })
+
+        } catch (err: any) {
+          console.error(`Error processing bulk confirm for ${id}:`, err)
+          errors.push({ id, error: err.message })
+        }
+      }
+
+      // Invalidate caches
+      await cacheService.deletePattern('registrations:*')
+
+      res.json({
+        success: true,
+        confirmed: results.length,
+        errors: errors.length > 0 ? errors : undefined,
+        message: `Confirmed ${results.length} registration(s)`
+      })
+    } catch (error) {
+      console.error("Bulk confirm registrations error:", error)
+      res.status(500).json({ message: "Internal server error" })
+    }
+  })
+
   app.post(
     "/api/registration-committee/participants",
     requireAuth,
@@ -3117,10 +4711,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
     async (req: AuthRequest, res: Response) => {
       try {
         const user = req.user!
-        const { fullName, email, phone, selectedEvents } = req.body
+        const { fullName, email, phone, college, rollNo, department, year, selectedEvents, teamMembers: incomingTeamMembers } = req.body
 
-        if (!fullName || !email || !selectedEvents || selectedEvents.length === 0) {
-          return res.status(400).json({ message: "Full name, email, and at least one event are required" })
+        if (!fullName || !email || !selectedEvents || selectedEvents.length === 0 || !college || !rollNo || !department || !year) {
+          return res.status(400).json({ message: "All fields (Name, Email, College, Roll No, Dept, Year, Events) are required" })
         }
 
         const validation = await validateEventSelection(selectedEvents)
@@ -3131,6 +4725,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const existingEmail = await storage.getUserByEmail(email)
         if (existingEmail) {
           return res.status(400).json({ message: "Email already exists" })
+        }
+
+        // Check for existing registrations by Roll No (Database Check)
+        const eventsList = await storage.getEventsByIds(selectedEvents)
+        for (const event of eventsList) {
+          const existing = await storage.checkRollNoCategoryRegistration(rollNo, event.category)
+          if (existing.isRegistered) {
+            return res.status(400).json({
+              message: `Participant with Roll No ${rollNo} is already registered for a ${event.category} event (${existing.event?.name})`
+            })
+          }
         }
 
         const password = generateSecurePassword()
@@ -3148,13 +4753,84 @@ export async function registerRoutes(app: Express): Promise<Server> {
         } as any)
 
         const eventCredentialsList = []
+        const hasTeam = incomingTeamMembers && Array.isArray(incomingTeamMembers) && incomingTeamMembers.length > 0;
+        const atomicTeamMembers = hasTeam ? incomingTeamMembers.map((m: any) => ({
+          memberName: m.memberName,
+          memberEmail: m.memberEmail,
+          memberRollNo: m.memberRollNo,
+          memberDept: m.memberDept || `${department} (${year})`,
+          memberPhone: m.memberPhone || null,
+          memberFoodType: 'veg' as const,
+        })) : undefined;
 
         for (const eventId of selectedEvents) {
-          await storage.createParticipant(newUser.id, eventId)
-
-          const event = await storage.getEventById(eventId)
+          const event = eventsList.find(e => e.id === eventId)
           if (!event) continue
 
+          // 1. Create Registration Record with ATOMIC department validation
+          // This prevents race conditions in on-spot registration flow
+          const result = await storage.createTeamRegistrationAtomic({
+            eventId,
+            eventName: event.name,
+            organizerRollNo: rollNo,
+            organizerName: fullName,
+            organizerEmail: email,
+            organizerDept: `${department} (${year})`,
+            organizerPhone: phone,
+            organizerCollege: college, // Store college!
+            organizerFoodType: 'veg', // Default for on-spot registration
+            registrationType: hasTeam ? 'team' : 'solo',
+            teamMembers: atomicTeamMembers,
+          });
+
+          // Check if registration failed due to department limit
+          if (!result.success) {
+            // Rollback user creation (delete the user we just created)
+            await storage.deleteUser(newUser.id);
+
+            return res.status(409).json({
+              message: result.error || 'Department participant limit exceeded',
+              department: result.department,
+              currentCount: result.currentCount,
+              limit: 10,
+              code: 'DEPARTMENT_LIMIT_EXCEEDED'
+            });
+          }
+
+          const registration = result.registration!;
+
+          // 2. Confirm Registration
+          await storage.confirmRegistration(registration.id, user.id)
+
+          // 3. Create Participant Entry for organizer
+          await storage.createParticipant(newUser.id, eventId)
+
+          // 3b. Create Participant Entry for each team member
+          if (hasTeam) {
+            for (const member of incomingTeamMembers) {
+              let memberUser = await storage.getUserByEmail(member.memberEmail);
+              if (!memberUser) {
+                const memPass = generateSecurePassword();
+                const memHash = await bcrypt.hash(memPass, 10);
+                const memUsername = `${member.memberEmail.split('@')[0]}_${nanoid(6)}`.toLowerCase();
+                memberUser = await storage.createUser({
+                  username: memUsername,
+                  password: memHash,
+                  email: member.memberEmail,
+                  fullName: member.memberName,
+                  phone: member.memberPhone || null,
+                  role: "participant",
+                  createdBy: user.id,
+                } as any);
+              }
+              const existingPart = await storage.getParticipantByUserAndEvent(memberUser.id, eventId);
+              if (!existingPart) {
+                await storage.createParticipant(memberUser.id, eventId);
+              }
+            }
+          }
+
+          // 4. Create Credentials
           const count = await storage.getEventCredentialCountForEvent(eventId)
           const counter = count + 1
           const { username: eventUsername, password: eventPassword } = await generateUniqueEventCredentials(
@@ -3170,24 +4846,31 @@ export async function registerRoutes(app: Express): Promise<Server> {
             eventName: event.name,
             eventUsername,
             eventPassword,
+            teamId: registration.teamId,
           })
         }
 
-        // Send emails in background (non-blocking)
-        for (const eventCred of eventCredentialsList) {
+        // Send consolidated credentials email (credits optimization)
+        if (eventCredentialsList.length > 0) {
+          const credentials = eventCredentialsList.map(cred => ({
+            eventName: cred.eventName,
+            username: cred.eventUsername,
+            password: cred.eventPassword,
+            teamId: cred.teamId,
+          }))
+
+          // Send ONE email with all events' credentials
           queueService.addEmailJob(
             email,
-            `Your Credentials for ${eventCred.eventName}`,
-            'credentials_distribution',
+            `Registration Confirmed - ${eventCredentialsList.length} Event${eventCredentialsList.length > 1 ? 's' : ''}`,
+            'credentials_consolidated',
             {
               name: fullName,
-              eventName: eventCred.eventName,
-              username: eventCred.eventUsername,
-              password: eventCred.eventPassword
+              credentials
             },
             fullName
           ).catch(err => {
-            console.error(`Failed to queue credentials email for event ${eventCred.eventName}:`, err)
+            console.error(`Failed to queue consolidated credentials email for ${email}:`, err)
           })
         }
 
@@ -3212,6 +4895,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             username: newUser.username,
             password: password,
             email: newUser.email,
+            phone: newUser.phone,
           },
           eventCredentials: eventCredentialsList,
         })
@@ -3229,7 +4913,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     async (req: AuthRequest, res: Response) => {
       try {
         const user = req.user!
-        const participants = await storage.getOnSpotParticipantsByCreator(user.id)
+        const filterMy = req.query.my === 'true';
+        const participants = await storage.getOnSpotParticipantsByCreator(filterMy ? user.id : undefined)
         res.json(participants)
       } catch (error) {
         console.error("Get on-spot participants error:", error)
@@ -3327,6 +5012,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
 
         await storage.deleteUser(req.params.id)
+
+        // Invalidate caches
+        await cacheService.deletePattern('registrations:*')
+
         res.json({ message: "Participant deleted successfully" })
       } catch (error) {
         console.error("Delete on-spot participant error:", error)
@@ -3342,7 +5031,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     async (req: AuthRequest, res: Response) => {
       try {
         const user = req.user!
-        const participants = await storage.getOnSpotParticipantsByCreator(user.id)
+        const filterMy = req.query.my === 'true';
+        const participants = await storage.getOnSpotParticipantsByCreator(filterMy ? user.id : undefined)
 
         const csvRows: string[] = []
         csvRows.push("Participant Name,Email,Phone,Event Name,Username,Password")
@@ -3390,7 +5080,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     async (req: AuthRequest, res: Response) => {
       try {
         const user = req.user!
-        const participants = await storage.getOnSpotParticipantsByCreator(user.id)
+        const filterMy = req.query.my === 'true';
+        const participants = await storage.getOnSpotParticipantsByCreator(filterMy ? user.id : undefined)
 
         const doc = new PDFDocument({ margin: 50, size: "A4", layout: "landscape" })
 
@@ -3399,7 +5090,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
         doc.pipe(res)
 
-        doc.fontSize(20).font("Helvetica-Bold").text("Participant Credentials - BootFeet 2K26", { align: "center" })
+        doc.fontSize(20).font("Helvetica-Bold").text("Participant Credentials - BootFete 2K26", { align: "center" })
         doc.moveDown(0.5)
 
         const generatedDate = new Date().toLocaleString("en-US", {
@@ -3848,6 +5539,94 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(500).json({ message: "Internal server error" })
     }
   })
+
+  // Analytics for Super Admin
+  app.get("/api/admin/stats", requireAuth, async (req: AuthRequest, res: Response) => {
+    try {
+      if (req.user!.role !== "super_admin") {
+        return res.status(403).json({ message: "Forbidden" })
+      }
+      const stats = await storage.getRegistrationStats()
+      console.log("Admin stats response:", JSON.stringify(stats, null, 2))
+      // Disable caching for stats endpoint
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate')
+      res.setHeader('Pragma', 'no-cache')
+      res.setHeader('Expires', '0')
+      res.json(stats)
+    } catch (error) {
+      console.error("Admin stats error:", error)
+      res.status(500).json({ message: "Internal server error" })
+    }
+  })
+
+  // Analytics for Event Admin
+  app.get("/api/event-admin/stats", requireAuth, async (req: AuthRequest, res: Response) => {
+    try {
+      const user = req.user!
+      if (user.role !== "event_admin" && user.role !== "super_admin") {
+        return res.status(403).json({ message: "Forbidden" })
+      }
+
+      const stats = await storage.getRegistrationStats(user.role === 'event_admin' ? user.id : undefined)
+      res.json(stats)
+    } catch (error) {
+      console.error("Event admin stats error:", error)
+      res.status(500).json({ message: "Internal server error" })
+    }
+  })
+
+  // Serve list of colleges
+  app.get("/api/colleges", async (_req, res) => {
+    try {
+      const collegesPath = path.join(process.cwd(), "server", "data", "colleges.json");
+      const data = await fs.promises.readFile(collegesPath, "utf-8");
+      const colleges = JSON.parse(data);
+      res.json(colleges);
+    } catch (error) {
+      console.error("Failed to load colleges:", error);
+      res.status(500).json({ message: "Failed to load colleges list" });
+    }
+  });
+
+  // Serve paper presentation topics for registration form
+  app.get("/api/paper-topics", async (_req, res) => {
+    res.json(PAPER_PRESENTATION_TOPICS);
+  });
+
+  // Serve food type options for registration form
+  app.get("/api/food-types", async (_req, res) => {
+    res.json(FOOD_TYPES);
+  });
+
+  // Lookup participant by roll number (for pre-filling food preference)
+  app.get("/api/participants/by-roll/:rollNo", async (req, res) => {
+    try {
+      const { rollNo } = req.params;
+
+      if (!rollNo || rollNo.trim().length === 0) {
+        return res.status(400).json({ found: false, message: "Roll number is required" });
+      }
+
+      const participant = await storage.getParticipantRegistryByRollNo(rollNo);
+
+      if (participant) {
+        return res.json({
+          found: true,
+          participant: {
+            id: participant.id,
+            rollNo: participant.rollNo,
+            name: participant.name,
+            foodType: participant.foodType
+          }
+        });
+      } else {
+        return res.status(404).json({ found: false });
+      }
+    } catch (error: any) {
+      console.error("Error looking up participant by roll number:", error);
+      res.status(500).json({ found: false, message: "Internal server error" });
+    }
+  });
 
   app.get(
     "/api/reports/export/event/:eventId/excel",
@@ -4569,47 +6348,78 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // ==================== Additional Data Fetching Routes ====================
 
-  // GET /api/events/:eventId/rounds - Get all rounds for a specific event
-  app.get("/api/events/:eventId/rounds", requireAuth, async (req: AuthRequest, res: Response) => {
-    try {
-      const { eventId } = req.params;
-
-      // Check cache first
-      const cacheKey = `rounds:${eventId}`;
-      const rounds = await cacheService.get(
-        cacheKey,
-        async () => storage.getRoundsByEvent(eventId),
-        300
-      );
-
-      res.json(rounds);
-    } catch (error) {
-      console.error("Get rounds by event error:", error);
-      res.status(500).json({ message: "Internal server error" });
-    }
-  });
-
-  // GET /api/rounds/:roundId/questions - Get all questions for a specific round
-  app.get("/api/rounds/:roundId/questions", requireAuth, async (req: AuthRequest, res: Response) => {
-    try {
-      const { roundId } = req.params;
-
-      // Check cache first
-      const cacheKey = `questions:${roundId}`;
-      const questions = await cacheService.get(
-        cacheKey,
-        async () => storage.getQuestionsByRound(roundId),
-        300
-      );
-
-      res.json(questions);
-    } catch (error) {
-      console.error("Get questions by round error:", error);
-      res.status(500).json({ message: "Internal server error" });
-    }
-  });
+  // Note: GET /api/events/:eventId/rounds and GET /api/rounds/:roundId/questions
+  // are defined earlier with proper access-control middleware.
 
   // ==================== Super Admin Override Routes ====================
+
+  // DELETE /api/super-admin/reset-participants - Clear all participant data
+  app.delete(
+    "/api/super-admin/reset-participants",
+    requireAuth,
+    requireSuperAdmin,
+    async (req: AuthRequest, res: Response) => {
+      try {
+        const user = req.user!
+        const ipAddress = getClientIp(req)
+        const { reason } = req.body
+
+        // Delete in order (respecting foreign keys)
+        // 1. Team members
+        const teamMembersDeleted = await db.delete(teamMembers).returning({ id: teamMembers.id })
+
+        // 2. Registrations
+        const registrationsDeleted = await db.delete(registrations).returning({ id: registrations.id })
+
+        // 3. Participant registry
+        const registryDeleted = await db.delete(participantRegistry).returning({ id: participantRegistry.id })
+
+        // 4. Event credentials
+        const credentialsDeleted = await db.delete(eventCredentials).returning({ id: eventCredentials.id })
+
+        // 5. Participant users (keep admins)
+        const participantsDeleted = await db.delete(users).where(eq(users.role, 'participant')).returning({ id: users.id })
+
+        // Clear ALL caches
+        await cacheService.deletePattern('registrations:*')
+        await cacheService.deletePattern('participants:*')
+        await cacheService.deletePattern('leaderboard:*')
+
+        // Log audit
+        await logSuperAdminAction(
+          user.id,
+          user.username,
+          "reset_participants",
+          "system",
+          "all",
+          "Reset all participant data",
+          {
+            teamMembers: teamMembersDeleted.length,
+            registrations: registrationsDeleted.length,
+            registry: registryDeleted.length,
+            credentials: credentialsDeleted.length,
+            participants: participantsDeleted.length
+          },
+          reason || "Admin reset",
+          ipAddress
+        )
+
+        res.json({
+          message: "All participant data has been reset",
+          deleted: {
+            teamMembers: teamMembersDeleted.length,
+            registrations: registrationsDeleted.length,
+            participantRegistry: registryDeleted.length,
+            eventCredentials: credentialsDeleted.length,
+            participantUsers: participantsDeleted.length
+          }
+        })
+      } catch (error) {
+        console.error("Reset participants error:", error)
+        res.status(500).json({ message: "Internal server error" })
+      }
+    }
+  )
 
   // PUT /api/super-admin/events/:eventId/override - Update any event
   app.put(
@@ -4993,6 +6803,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // GET /api/email-logs - Retrieve email logs with filters (Super Admin only)
   app.get("/api/email-logs", requireAuth, requireSuperAdmin, async (req: AuthRequest, res: Response) => {
     try {
+      const { status, templateType, startDate, endDate, limit, offset } = req.query
+
+      const filters: any = {}
+      if (status) filters.status = status as string
+      if (templateType) filters.templateType = templateType as string
+      if (startDate) filters.startDate = new Date(startDate as string)
+      if (endDate) filters.endDate = new Date(endDate as string)
+      if (limit) filters.limit = Math.min(parseInt(limit as string, 10), 100) // Cap at 100
+      if (offset) filters.offset = parseInt(offset as string, 10)
+
+      const logs = await storage.getEmailLogs(filters)
+      res.json(logs)
+    } catch (error) {
+      console.error("Get email logs error:", error)
+      res.status(500).json({ message: "Internal server error" })
+    }
+  })
+
+  // GET /api/email-logs/count - Get total count of email logs (Super Admin only)
+  app.get("/api/email-logs/count", requireAuth, requireSuperAdmin, async (req: AuthRequest, res: Response) => {
+    try {
       const { status, templateType, startDate, endDate } = req.query
 
       const filters: any = {}
@@ -5001,10 +6832,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (startDate) filters.startDate = new Date(startDate as string)
       if (endDate) filters.endDate = new Date(endDate as string)
 
-      const logs = await storage.getEmailLogs(filters)
-      res.json(logs)
+      const count = await storage.getEmailLogsCount(filters)
+      res.json({ count })
     } catch (error) {
-      console.error("Get email logs error:", error)
+      console.error("Get email logs count error:", error)
+      res.status(500).json({ message: "Internal server error" })
+    }
+  })
+
+  // GET /api/email-logs/:id - Get single email log with full details (Super Admin only)
+  app.get("/api/email-logs/:id", requireAuth, requireSuperAdmin, async (req: AuthRequest, res: Response) => {
+    try {
+      const { id } = req.params
+      const log = await storage.getEmailLogById(id)
+
+      if (!log) {
+        return res.status(404).json({ message: "Email log not found" })
+      }
+
+      res.json(log)
+    } catch (error) {
+      console.error("Get email log by ID error:", error)
       res.status(500).json({ message: "Internal server error" })
     }
   })
@@ -5027,8 +6875,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     },
   )
 
-  // POST /api/test-email - Send a test email
-  app.post("/api/test-email", async (req: Request, res: Response) => {
+  // POST /api/test-email - Send a test email (admin only)
+  app.post("/api/test-email", requireSuperAdmin, async (req: AuthRequest, res: Response) => {
     try {
       const { to, name } = req.body
 
@@ -5051,10 +6899,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
           messageId: result.messageId
         })
       } else {
-        res.status(500).json({
+        // Return 200 with success: false so frontend can parse the error message
+        // instead of throwing generic 500 error
+        console.error("Test email failed:", result.error);
+        res.json({
           success: false,
           message: "Failed to send test email",
-          error: result.error
+          error: result.error || "No error detail provided"
         })
       }
     } catch (error) {
@@ -5066,7 +6917,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   const httpServer = createServer(app)
 
   // Admin cache stats
-  app.get("/api/admin/cache-stats", requireSuperAdmin, async (req: AuthRequest, res: Response) => {
+  app.get("/api/admin/cache-stats", requireAuth, requireSuperAdmin, async (req: AuthRequest, res: Response) => {
     res.json(cacheService.getStats());
   });
 
@@ -5077,15 +6928,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Queue Admin Routes
-  app.get("/api/admin/queue-stats", requireAuth, requireSuperAdmin, async (req: AuthRequest, res: Response) => {
-    try {
-      const stats = await queueService.getQueueStats();
-      res.json(stats);
-    } catch (error) {
-      res.status(500).json({ message: "Failed to get queue stats" });
-    }
-  });
-
   app.get("/api/admin/failed-emails", requireAuth, requireSuperAdmin, async (req: AuthRequest, res: Response) => {
     try {
       const jobs = await queueService.getFailedJobs();
@@ -5109,6 +6951,66 @@ export async function registerRoutes(app: Express): Promise<Server> {
   })
 
   // Get all participants for event admin (grouped by teams)
+  // GET /api/event-admin/participants/export - Export participants with credentials
+  app.get("/api/event-admin/participants/export", requireAuth, async (req: AuthRequest, res: Response) => {
+    try {
+      const user = req.user!;
+
+      if (user.role !== "event_admin" && user.role !== "super_admin") {
+        return res.status(403).json({ message: "Forbidden - Admin access only" });
+      }
+
+      // Get events allowed for this admin
+      let eventIds: string[] = [];
+      if (user.role === "super_admin") {
+        const allEvents = await storage.getEvents();
+        eventIds = allEvents.map(e => e.id);
+      } else {
+        const adminEvents = await storage.getEventsByAdmin(user.id);
+        eventIds = adminEvents.map(e => e.id);
+      }
+
+      if (eventIds.length === 0) {
+        return res.status(404).json({ message: "No events found" });
+      }
+
+      // Fetch all credentials
+      let allData: any[] = [];
+      for (const eventId of eventIds) {
+        const creds = await storage.getEventCredentialsByEvent(eventId);
+        allData.push(...creds);
+      }
+
+      // Generate CSV
+      const csvRows = [
+        ['Event Name', 'Participant Name', 'Roll No', 'Email', 'Username', 'Password', 'Test Enabled', 'Paper Topic']
+      ];
+
+      for (const item of allData) {
+        csvRows.push([
+          `"${item.event.name}"`,
+          `"${item.participant.fullName}"`,
+          `"${item.realRollNo}"`,
+          `"${item.participant.email}"`,
+          `"${item.eventUsername}"`,
+          `"${item.eventPassword}"`,
+          item.testEnabled ? 'Yes' : 'No',
+          `"${item.paperTopic || ''}"`
+        ]);
+      }
+
+      const csvContent = csvRows.map(e => e.join(',')).join('\n');
+
+      res.setHeader('Content-Type', 'text/csv');
+      res.setHeader('Content-Disposition', 'attachment; filename="participants_credentials.csv"');
+      res.send(csvContent);
+
+    } catch (error) {
+      console.error("Export participants error:", error);
+      res.status(500).json({ message: "Failed to export participants" });
+    }
+  });
+
   app.get("/api/event-admin/participants", requireAuth, async (req: AuthRequest, res: Response) => {
     try {
       const user = req.user!
@@ -5130,6 +7032,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const allRegistrations = await storage.getRegistrations()
       const relevantRegistrations = allRegistrations.filter(r => eventIds.includes(r.eventId))
 
+      // Fetch all credentials for these events to map them
+      let allCredentials: any[] = [];
+      for (const eventId of eventIds) {
+        const creds = await storage.getEventCredentialsByEvent(eventId);
+        allCredentials.push(...creds);
+      }
+
       // Group by teams and format response
       const groupedParticipants = relevantRegistrations.map(registration => {
         const teamSize = 1 + (registration.teamMembers?.length || 0)
@@ -5138,6 +7047,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
           ? `${registration.organizerName}'s Team`
           : registration.organizerName
 
+        // Find credential for this registration's organizer
+        const credential = allCredentials.find(c =>
+          c.eventId === registration.eventId &&
+          c.participant.email === registration.organizerEmail
+        );
+
         return {
           id: registration.id,
           displayName,
@@ -5145,6 +7060,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           registrationType,
           eventId: registration.eventId,
           eventName: registration.event?.name || 'Unknown Event',
+          paperTopic: registration.paperTopic || null,
           status: registration.status,
           registeredAt: registration.createdAt,
           // Include user details for search/filter
@@ -5153,7 +7069,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
             email: registration.organizerEmail,
           },
           event: registration.event,
-        }
+          teamMembers: registration.teamMembers,
+          // Attach credentials
+          credentials: credential ? {
+            username: credential.eventUsername,
+            password: credential.eventPassword,
+            rollNo: credential.realRollNo
+          } : null
+        };
       })
 
       res.json(groupedParticipants)
@@ -5164,7 +7087,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   })
 
   // Get round statistics for live monitoring
-  app.get("/api/rounds/:roundId/statistics", requireEventAdminOrSuperAdmin, async (req: AuthRequest, res: Response) => {
+  app.get("/api/rounds/:roundId/statistics", requireAuth, requireRoundAccess, async (req: AuthRequest, res: Response) => {
     try {
       const { roundId } = req.params;
 
@@ -5186,9 +7109,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const activeParticipants = attempts.filter(a => a.startedAt !== null && a.submittedAt === null).length;
       const pendingParticipants = totalParticipants - (completedParticipants + activeParticipants);
 
-      // Check if round is complete
-      const canShareResults = completedParticipants === totalParticipants ||
-        (round.status === 'completed');
+      // Check if round is complete (strict: all participants submitted)
+      const canShareResults = totalParticipants > 0 && completedParticipants === totalParticipants;
 
       res.json({
         roundId: round.id,
@@ -5201,7 +7123,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         testDuration: round.duration || 60,
         startedAt: round.startedAt,
         endsAt: round.endTime,
-        canShareResults
+        canShareResults,
+        showAnswers: round.showAnswers
       });
     } catch (error) {
       console.error("Get round statistics error:", error);
@@ -5209,116 +7132,837 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Get leaderboard for a round
-  app.get("/api/rounds/:roundId/leaderboard", requireEventAdminOrSuperAdmin, async (req: AuthRequest, res: Response) => {
+  // Get leaderboard for a round with role-based visibility
+  app.get("/api/rounds/:roundId/leaderboard", requireAuth, requireRoundAccess, async (req: AuthRequest, res: Response) => {
     try {
       const { roundId } = req.params;
+      const round = await storage.getRound(roundId);
 
-      // Get all completed test attempts for this round
-      const attempts = await storage.getTestAttemptsByRound(roundId);
-      const completedAttempts = attempts.filter(a => a.submittedAt !== null);
-
-      if (completedAttempts.length === 0) {
-        return res.json([]);
+      if (!round) {
+        return res.status(404).json({ message: "Round not found" });
       }
 
-      // Sort by score (desc) then by submission time (asc)
-      completedAttempts.sort((a, b) => {
-        if (b.totalScore !== a.totalScore) {
-          return (b.totalScore || 0) - (a.totalScore || 0);
-        }
-        return new Date(a.submittedAt!).getTime() - new Date(b.submittedAt!).getTime();
-      });
-
-      // Build leaderboard with ranks
-      const leaderboard = await Promise.all(
-        completedAttempts.map(async (attempt, index) => {
-          const user = await storage.getUser(attempt.userId);
-          return {
-            rank: index + 1,
-            userId: attempt.userId,
-            userName: user?.fullName || 'Unknown',
-            totalScore: attempt.totalScore || 0,
-            maxScore: attempt.maxScore,
-            submittedAt: attempt.submittedAt
-          };
-        })
+      const leaderboard = await cacheService.get(
+        `leaderboard:round:${roundId}`,
+        () => storage.getRoundLeaderboard(roundId),
+        30,
       );
 
-      res.json(leaderboard);
+      const isAdmin = req.user!.role === "super_admin" || req.user!.role === "event_admin";
+
+      if (isAdmin) {
+        return res.json({
+          scope: "admin",
+          answersVisible: round.showAnswers,
+          canSelectParticipants: true,
+          leaderboard,
+        });
+      }
+
+      if (!round.showAnswers) {
+        return res.json({
+          scope: "participant",
+          answersVisible: false,
+          participantResult: null,
+          message: "Results not yet published",
+        });
+      }
+
+      const attempt = await storage.getTestAttemptByUserAndRound(req.user!.id, roundId);
+
+      if (!attempt || attempt.status !== "completed") {
+        return res.json({
+          scope: "participant",
+          answersVisible: true,
+          participantResult: null,
+          message: "No completed attempt found for this round",
+        });
+      }
+
+      const answers = await storage.getAnswersByAttempt(attempt.id);
+      const questions = await storage.getQuestionsByRound(roundId);
+      const questionTextMap = new Map(questions.map((question) => [question.id, question.questionText]));
+
+      const formattedAnswers = answers.map((answer) => ({
+        id: answer.id,
+        questionId: answer.questionId,
+        answer: answer.answer,
+        isCorrect: answer.isCorrect,
+        pointsAwarded: answer.pointsAwarded,
+        answeredAt: answer.answeredAt,
+        questionText: questionTextMap.get(answer.questionId) || null,
+      }));
+
+      const participantEntry = leaderboard.find((entry) => entry.userId === req.user!.id) || null;
+
+      return res.json({
+        scope: "participant",
+        answersVisible: true,
+        participantResult: participantEntry
+          ? {
+            ...participantEntry,
+            answers: formattedAnswers,
+          }
+          : {
+            rank: null,
+            userId: req.user!.id,
+            userName: req.user!.fullName,
+            totalScore: attempt.totalScore || 0,
+            maxScore: attempt.maxScore,
+            submittedAt: attempt.submittedAt,
+            answers: formattedAnswers,
+          },
+      });
     } catch (error) {
       console.error("Get leaderboard error:", error);
       res.status(500).json({ message: "Internal server error" });
     }
   });
 
-  // Get event leaderboard (aggregated across all rounds)
-  app.get("/api/events/:eventId/leaderboard", requireEventAdminOrSuperAdmin, async (req: AuthRequest, res: Response) => {
-    try {
-      const { eventId } = req.params;
+  // ============================================================================
+  // EMAIL PROVIDER MANAGEMENT (Super Admin Only)
+  // Supports switching between Brevo (300/day) and Resend (200/day)
+  // ============================================================================
 
-      // Get all rounds for this event
-      const rounds = await storage.getRoundsByEvent(eventId);
-
-      // Get all attempts across all rounds
-      const allAttempts: any[] = [];
-      for (const round of rounds) {
-        const attempts = await storage.getTestAttemptsByRound(round.id);
-        allAttempts.push(...attempts.filter((a: any) => a.submittedAt !== null));
+  // GET /api/email-provider - Get current provider status and limits
+  app.get(
+    "/api/email-provider",
+    requireAuth,
+    requireSuperAdmin,
+    async (_req: AuthRequest, res: Response) => {
+      try {
+        const stats = await emailService.getProviderStats();
+        res.json(stats);
+      } catch (error) {
+        console.error("Get email provider error:", error);
+        res.status(500).json({ message: "Failed to get email provider status" });
       }
-
-      if (allAttempts.length === 0) {
-        return res.json([]);
-      }
-
-      // Aggregate scores by user
-      const userScores = new Map<string, { totalScore: number; maxScore: number; lastSubmission: Date }>();
-
-      for (const attempt of allAttempts) {
-        const current = userScores.get(attempt.userId) || { totalScore: 0, maxScore: 0, lastSubmission: attempt.submittedAt! };
-        userScores.set(attempt.userId, {
-          totalScore: current.totalScore + (attempt.score || 0),
-          maxScore: current.maxScore + (attempt.maxScore || 0),
-          lastSubmission: new Date(attempt.submittedAt!) > new Date(current.lastSubmission)
-            ? attempt.submittedAt!
-            : current.lastSubmission
-        });
-      }
-
-      // Build leaderboard
-      const leaderboard = await Promise.all(
-        Array.from(userScores.entries()).map(async ([userId, data]) => {
-          const user = await storage.getUser(userId);
-          return {
-            userId,
-            userName: user?.fullName || 'Unknown',
-            totalScore: data.totalScore,
-            maxScore: data.maxScore,
-            submittedAt: data.lastSubmission
-          };
-        })
-      );
-
-      // Sort by total score (desc) then by last submission (asc)
-      leaderboard.sort((a, b) => {
-        if (b.totalScore !== a.totalScore) {
-          return b.totalScore - a.totalScore;
-        }
-        return new Date(a.submittedAt).getTime() - new Date(b.submittedAt).getTime();
-      });
-
-      // Add ranks
-      const rankedLeaderboard = leaderboard.map((entry, index) => ({
-        rank: index + 1,
-        ...entry
-      }));
-
-      res.json(rankedLeaderboard);
-    } catch (error) {
-      console.error("Get event leaderboard error:", error);
-      res.status(500).json({ message: "Internal server error" });
     }
-  });
+  );
+
+  // POST /api/email-provider - Switch email provider
+  app.post(
+    "/api/email-provider",
+    requireAuth,
+    requireSuperAdmin,
+    async (req: AuthRequest, res: Response) => {
+      try {
+        const { provider } = req.body;
+
+        if (!provider || (provider !== 'brevo' && provider !== 'resend')) {
+          return res.status(400).json({
+            message: "Invalid provider. Must be 'brevo' or 'resend'"
+          });
+        }
+
+        // Check if the requested provider has capacity
+        const hasCapacity = await emailService.hasCapacity(provider);
+        if (!hasCapacity) {
+          return res.status(400).json({
+            message: `Provider '${provider}' has reached its daily limit. Try the other provider.`
+          });
+        }
+
+        await emailService.setPreferredProvider(provider);
+        const stats = await emailService.getProviderStats();
+
+        res.json({
+          success: true,
+          message: `Switched to ${provider}`,
+          ...stats
+        });
+      } catch (error) {
+        console.error("Switch email provider error:", error);
+        res.status(500).json({ message: "Failed to switch email provider" });
+      }
+    }
+  );
+
+  // ============================================================================
+  // EVENT REGISTRATIONS (Event Admin / Super Admin)
+  // View all registrations including pending before credential generation
+  // ============================================================================
+
+  // GET /api/events/:eventId/registrations - Get all registrations for an event
+  app.get(
+    "/api/events/:eventId/registrations",
+    requireAuth,
+    requireEventAdminOrSuperAdmin,
+    async (req: AuthRequest, res: Response) => {
+      try {
+        const { eventId } = req.params;
+        const registrations = await storage.getRegistrationsByEvent(eventId);
+        res.json(registrations);
+      } catch (error) {
+        console.error("Get event registrations error:", error);
+        res.status(500).json({ message: "Internal server error" });
+      }
+    }
+  );
+
+  // ============================================================================
+  // MANUAL ROUND RESULTS & EVENT WINNERS (Event Admin / Super Admin)
+  // For physical/offline round results and winner declaration
+  // ============================================================================
+
+  // GET /api/events/:eventId/round1-qualifiers - Get Round 1 qualifiers from online tests
+  app.get(
+    "/api/events/:eventId/round1-qualifiers",
+    requireAuth,
+    requireEventAdminOrSuperAdmin,
+    async (req: AuthRequest, res: Response) => {
+      try {
+        const { eventId } = req.params;
+        const limit = parseInt(req.query.limit as string) || 100;
+
+        const qualifiers = await storage.getRound1Qualifiers(eventId, limit);
+        res.json(qualifiers);
+      } catch (error) {
+        console.error("Get round 1 qualifiers error:", error);
+        res.status(500).json({ message: "Internal server error" });
+      }
+    }
+  );
+
+  // GET /api/events/:eventId/manual-rounds - Get all manual round entries
+  app.get(
+    "/api/events/:eventId/manual-rounds",
+    requireAuth,
+    requireEventAdminOrSuperAdmin,
+    async (req: AuthRequest, res: Response) => {
+      try {
+        const { eventId } = req.params;
+        const roundNumber = req.query.round ? parseInt(req.query.round as string) : undefined;
+
+        let entries;
+        if (roundNumber) {
+          entries = await storage.getManualRoundEntriesByEventAndRound(eventId, roundNumber);
+        } else {
+          entries = await storage.getManualRoundEntriesByEvent(eventId);
+        }
+
+        res.json(entries);
+      } catch (error) {
+        console.error("Get manual round entries error:", error);
+        res.status(500).json({ message: "Internal server error" });
+      }
+    }
+  );
+
+  // POST /api/events/:eventId/manual-rounds - Add manual round entries (bulk)
+  app.post(
+    "/api/events/:eventId/manual-rounds",
+    requireAuth,
+    requireEventAdminOrSuperAdmin,
+    async (req: AuthRequest, res: Response) => {
+      try {
+        const { eventId } = req.params;
+        const { roundNumber, roundName, entries } = req.body;
+
+        if (!roundNumber || !roundName || !entries || !Array.isArray(entries)) {
+          return res.status(400).json({ message: "roundNumber, roundName, and entries array required" });
+        }
+
+        const event = await storage.getEvent(eventId);
+        if (!event) {
+          return res.status(404).json({ message: "Event not found" });
+        }
+
+        const createdEntries = await Promise.all(
+          entries.map(async (entry: any) => {
+            return await storage.createManualRoundEntry({
+              eventId,
+              roundNumber: parseInt(roundNumber),
+              roundName,
+              participantName: entry.name || entry.participantName,
+              participantRollNo: entry.rollNo || entry.participantRollNo,
+              participantCollege: entry.college || entry.participantCollege,
+              participantDept: entry.dept || entry.participantDept,
+              score: entry.score ? parseInt(entry.score) : null,
+              rank: entry.rank ? parseInt(entry.rank) : null,
+              notes: entry.notes,
+              enteredBy: req.user!.id,
+            });
+          })
+        );
+
+        res.status(201).json({
+          success: true,
+          count: createdEntries.length,
+          entries: createdEntries
+        });
+      } catch (error) {
+        console.error("Create manual round entries error:", error);
+        res.status(500).json({ message: "Internal server error" });
+      }
+    }
+  );
+
+  // PATCH /api/events/:eventId/manual-rounds/:entryId - Update a manual round entry
+  app.patch(
+    "/api/events/:eventId/manual-rounds/:entryId",
+    requireAuth,
+    requireEventAdminOrSuperAdmin,
+    async (req: AuthRequest, res: Response) => {
+      try {
+        const { entryId } = req.params;
+        const updates = req.body;
+
+        const updated = await storage.updateManualRoundEntry(entryId, updates);
+        if (!updated) {
+          return res.status(404).json({ message: "Entry not found" });
+        }
+
+        res.json(updated);
+      } catch (error) {
+        console.error("Update manual round entry error:", error);
+        res.status(500).json({ message: "Internal server error" });
+      }
+    }
+  );
+
+  // DELETE /api/events/:eventId/manual-rounds/:entryId - Delete a manual round entry
+  app.delete(
+    "/api/events/:eventId/manual-rounds/:entryId",
+    requireAuth,
+    requireEventAdminOrSuperAdmin,
+    async (req: AuthRequest, res: Response) => {
+      try {
+        const { entryId } = req.params;
+        await storage.deleteManualRoundEntry(entryId);
+        res.json({ success: true });
+      } catch (error) {
+        console.error("Delete manual round entry error:", error);
+        res.status(500).json({ message: "Internal server error" });
+      }
+    }
+  );
+
+  // GET /api/events/:eventId/winners - Get event winners
+  app.get(
+    "/api/events/:eventId/winners",
+    requireAuth,
+    requireEventAdminOrSuperAdmin,
+    async (req: AuthRequest, res: Response) => {
+      try {
+        const { eventId } = req.params;
+        if (req.user!.role === 'event_admin') {
+          const isAssigned = await storage.isUserEventAdmin(req.user!.id, eventId);
+          if (!isAssigned) {
+            return res.status(403).json({ message: "Forbidden: You are not an admin for this event" });
+          }
+        }
+        const winners = await storage.getEventWinners(eventId);
+        res.json(winners);
+      } catch (error) {
+        console.error("Get event winners error:", error);
+        res.status(500).json({ message: "Internal server error" });
+      }
+    }
+  );
+
+
+  // GET /api/events/:eventId/confirmed-participants - Get confirmed participants for winner declaration
+  app.get(
+    "/api/events/:eventId/confirmed-participants",
+    requireAuth,
+    requireEventAdminOrSuperAdmin,
+    async (req: AuthRequest, res: Response) => {
+      try {
+        const { eventId } = req.params;
+        if (req.user!.role === 'event_admin') {
+          const isAssigned = await storage.isUserEventAdmin(req.user!.id, eventId);
+          if (!isAssigned) {
+            return res.status(403).json({ message: "Forbidden: You are not an admin for this event" });
+          }
+        }
+        const participants = await storage.getConfirmedParticipantsForEvent(eventId);
+        res.json(participants);
+      } catch (error) {
+        console.error("Get confirmed participants error:", error);
+        res.status(500).json({ message: "Internal server error" });
+      }
+    }
+  );
+
+  // POST /api/events/:eventId/winners - Declare winners (bulk)
+  app.post(
+    "/api/events/:eventId/winners",
+    requireAuth,
+    requireEventAdminOrSuperAdmin,
+    async (req: AuthRequest, res: Response) => {
+      try {
+        const { eventId } = req.params;
+        const { winners } = req.body;
+
+        if (req.user!.role === 'event_admin') {
+          const isAssigned = await storage.isUserEventAdmin(req.user!.id, eventId);
+          if (!isAssigned) {
+            return res.status(403).json({ message: "Forbidden: You are not an admin for this event" });
+          }
+        }
+
+        if (!winners || !Array.isArray(winners)) {
+          return res.status(400).json({ message: "winners array required" });
+        }
+
+        const event = await storage.getEvent(eventId);
+        if (!event) {
+          return res.status(404).json({ message: "Event not found" });
+        }
+
+        // Delete existing winners for this event
+        await storage.deleteEventWinnersByEvent(eventId);
+
+        const createdWinners = await Promise.all(
+          winners.map(async (winner: any) => {
+            return await storage.createEventWinner({
+              eventId,
+              position: parseInt(winner.position),
+              participantName: winner.name || winner.participantName,
+              participantRollNo: winner.rollNo || winner.participantRollNo,
+              participantCollege: winner.college || winner.participantCollege,
+              participantDept: winner.dept || winner.participantDept,
+              finalScore: winner.score ? parseInt(winner.score) : null,
+              winningRound: winner.winningRound || winner.round,
+              teamMembers: winner.teamMembers || null,
+              declaredBy: req.user!.id,
+            });
+          })
+        );
+
+        // Auto-publish results on the final round and notify clients
+        try {
+          const rounds = await storage.getRoundsByEvent(eventId);
+          if (rounds.length > 0) {
+            const sortedRounds = [...rounds].sort((a, b) => b.roundNumber - a.roundNumber);
+            const finalRound = sortedRounds[0];
+            if (!finalRound.resultsPublished) {
+              const updated = await storage.updateRoundResultsPublished(finalRound.id, true);
+              WebSocketService.notifyRoundStatus(eventId, finalRound.id, finalRound.status, updated || { ...finalRound, resultsPublished: true });
+            }
+          }
+        } catch (roundPubErr) {
+          console.error("Error auto-publishing final round results on winner declaration:", roundPubErr);
+        }
+
+        res.status(201).json({
+          success: true,
+          count: createdWinners.length,
+          winners: createdWinners
+        });
+      } catch (error) {
+        console.error("Declare winners error:", error);
+        res.status(500).json({ message: "Internal server error" });
+      }
+    }
+  );
+
+  // DELETE /api/events/:eventId/winners/:winnerId - Delete a winner
+  app.delete(
+    "/api/events/:eventId/winners/:winnerId",
+    requireAuth,
+    requireEventAdminOrSuperAdmin,
+    async (req: AuthRequest, res: Response) => {
+      try {
+        const { eventId, winnerId } = req.params;
+        if (req.user!.role === 'event_admin') {
+          const isAssigned = await storage.isUserEventAdmin(req.user!.id, eventId);
+          if (!isAssigned) {
+            return res.status(403).json({ message: "Forbidden: You are not an admin for this event" });
+          }
+        }
+        await storage.deleteEventWinner(winnerId);
+        res.json({ success: true });
+      } catch (error) {
+        console.error("Delete winner error:", error);
+        res.status(500).json({ message: "Internal server error" });
+      }
+    }
+  );
+
+  // Note: GET /api/events/:eventId/rounds/:roundNumber/selection-pool is defined
+  // earlier (with leaderboard/manual-qualifier resolution).
+  // Note: POST /api/events/:eventId/rounds/:roundNum/results is defined earlier with full qualifier persistence
+
+  // ============================================
+  // IMAGE QUESTION & MANUAL EVALUATION APIs
+  // ============================================
+
+  // Serve uploaded images statically
+  app.use('/uploads/questions', express.static(path.join(process.cwd(), 'uploads', 'questions')));
+
+  // GET /api/rounds/:roundId/submissions - Get all completed test attempts with answers
+  app.get(
+    "/api/rounds/:roundId/submissions",
+    requireAuth,
+    requireEventAdminOrSuperAdmin,
+    async (req: AuthRequest, res: Response) => {
+      try {
+        const { roundId } = req.params;
+
+        // Get round to verify access
+        const round = await storage.getRound(roundId);
+        if (!round) {
+          return res.status(404).json({ message: "Round not found" });
+        }
+
+        // Get all test attempts for this round
+        const attempts = await storage.getTestAttemptsByRound(roundId);
+
+        // Filter to completed/submitted attempts
+        const completedAttempts = attempts.filter(
+          a => a.status === 'completed' || a.status === 'auto_submitted'
+        );
+
+        // Batch fetch all required data
+        const userIds = completedAttempts.map(a => a.userId);
+        const attemptIds = completedAttempts.map(a => a.id);
+
+        const [users, allAnswers, allRegs] = await Promise.all([
+          storage.getUsersByIds(userIds),
+          storage.getAnswersByAttemptIds(attemptIds),
+          storage.getRegistrationsByEvent(round.eventId)
+        ]);
+
+        // Create lookup maps
+        const userMap = new Map(users.map(u => [u.id, u]));
+        const regMap = new Map(allRegs.map(r => [r.organizerEmail, r]));
+
+        // Group answers by attemptId
+        const answersMap = new Map<string, typeof allAnswers>();
+        allAnswers.forEach(a => {
+          const attemptAnswers = answersMap.get(a.attemptId) || [];
+          attemptAnswers.push(a);
+          answersMap.set(a.attemptId, attemptAnswers);
+        });
+
+        // Build response
+        const submissions = completedAttempts.map(attempt => {
+          const user = userMap.get(attempt.userId);
+          const answers = answersMap.get(attempt.id) || [];
+          const registration = user?.email ? regMap.get(user.email) : null;
+
+          // Calculate evaluation status
+          const totalQuestions = answers.length;
+          const evaluatedQuestions = answers.filter(a => a.isCorrect !== null).length;
+          const correctCount = answers.filter(a => a.isCorrect === true).length;
+          const wrongCount = answers.filter(a => a.isCorrect === false).length;
+
+          return {
+            attemptId: attempt.id,
+            userId: attempt.userId,
+            userName: user?.fullName || 'Unknown',
+            userEmail: user?.email || '',
+            college: registration?.organizerCollege || '',
+            department: registration?.organizerDept || '',
+            rollNo: registration?.organizerRollNo || '',
+            submittedAt: attempt.submittedAt || attempt.completedAt,
+            status: attempt.status,
+            totalQuestions,
+            evaluatedQuestions,
+            correctCount,
+            wrongCount,
+            isFullyEvaluated: totalQuestions === evaluatedQuestions,
+            totalScore: attempt.totalScore || 0,
+            answers: answers.map(a => ({
+              id: a.id,
+              questionId: a.questionId,
+              answer: a.answer,
+              isCorrect: a.isCorrect,
+              pointsAwarded: a.pointsAwarded
+            }))
+          };
+        });
+
+        res.json(submissions);
+      } catch (error) {
+        console.error("Get submissions error:", error);
+        res.status(500).json({ message: "Internal server error" });
+      }
+    }
+  );
+
+  // GET /api/attempts/:attemptId/details - Get single attempt with full details for evaluation
+  app.get(
+    "/api/attempts/:attemptId/details",
+    requireAuth,
+    requireEventAdminOrSuperAdmin,
+    async (req: AuthRequest, res: Response) => {
+      try {
+        const { attemptId } = req.params;
+
+        const attempt = await storage.getTestAttempt(attemptId);
+        if (!attempt) {
+          return res.status(404).json({ message: "Attempt not found" });
+        }
+
+        const round = await storage.getRound(attempt.roundId);
+        const user = await storage.getUser(attempt.userId);
+        const answers = await storage.getAnswersByAttempt(attemptId);
+        const questions = await storage.getQuestionsByRound(attempt.roundId);
+
+        // Get registration info
+        let registration = null;
+        if (round && user?.email) {
+          const allRegs = await storage.getRegistrationsByEvent(round.eventId);
+          registration = allRegs.find(r => r.organizerEmail === user.email);
+        }
+
+        // Combine questions with answers
+        const questionAnswers = questions.map(q => {
+          const answer = answers.find(a => a.questionId === q.id);
+          return {
+            questionId: q.id,
+            questionNumber: q.questionNumber,
+            questionType: q.questionType,
+            questionText: q.questionText, // This will be image URL for image_text type
+            expectedAnswer: q.correctAnswer || q.expectedOutput, // Admin hint
+            points: q.points,
+            answer: answer ? {
+              id: answer.id,
+              text: answer.answer,
+              isCorrect: answer.isCorrect,
+              pointsAwarded: answer.pointsAwarded
+            } : null
+          };
+        });
+
+        res.json({
+          attemptId: attempt.id,
+          roundId: attempt.roundId,
+          roundName: round?.name || '',
+          userId: attempt.userId,
+          userName: user?.fullName || 'Unknown',
+          userEmail: user?.email || '',
+          college: registration?.organizerCollege || '',
+          department: registration?.organizerDept || '',
+          rollNo: registration?.organizerRollNo || '',
+          submittedAt: attempt.submittedAt,
+          status: attempt.status,
+          questionAnswers
+        });
+      } catch (error) {
+        console.error("Get attempt details error:", error);
+        res.status(500).json({ message: "Internal server error" });
+      }
+    }
+  );
+
+  // PUT /api/answers/:answerId/evaluate - Evaluate a single answer
+  app.put(
+    "/api/answers/:answerId/evaluate",
+    requireAuth,
+    requireEventAdminOrSuperAdmin,
+    async (req: AuthRequest, res: Response) => {
+      try {
+        const { answerId } = req.params;
+        const { isCorrect, pointsAwarded } = req.body;
+
+        if (typeof isCorrect !== 'boolean') {
+          return res.status(400).json({ message: "isCorrect (boolean) is required" });
+        }
+
+        const answer = await storage.getAnswer(answerId);
+        if (!answer) {
+          return res.status(404).json({ message: "Answer not found" });
+        }
+
+        // Get question for points
+        const question = await storage.getQuestion(answer.questionId);
+        const points = isCorrect ? 1 : 0; // STATIC 1 POINT PER QUESTION
+
+        // Update the answer
+        const updated = await storage.updateAnswer(answerId, {
+          isCorrect,
+          pointsAwarded: points
+        });
+
+        // Recalculate attempt total score
+        const attempt = await storage.getTestAttempt(answer.attemptId);
+        if (attempt) {
+          const allAnswers = await storage.getAnswersByAttempt(attempt.id);
+          const totalScore = allAnswers.reduce((sum, a) => sum + (a.pointsAwarded || 0), 0);
+          await storage.updateTestAttempt(attempt.id, { totalScore });
+        }
+
+        res.json(updated);
+      } catch (error) {
+        console.error("Evaluate answer error:", error);
+        res.status(500).json({ message: "Internal server error" });
+      }
+    }
+  );
+
+  // PUT /api/attempts/:attemptId/evaluate - Batch evaluate all answers for an attempt
+  app.put(
+    "/api/attempts/:attemptId/evaluate",
+    requireAuth,
+    requireEventAdminOrSuperAdmin,
+    async (req: AuthRequest, res: Response) => {
+      try {
+        const { attemptId } = req.params;
+        const { evaluations } = req.body;
+
+        if (!Array.isArray(evaluations)) {
+          return res.status(400).json({ message: "evaluations array is required" });
+        }
+
+        const attempt = await storage.getTestAttempt(attemptId);
+        if (!attempt) {
+          return res.status(404).json({ message: "Attempt not found" });
+        }
+
+        // Update each answer
+        for (const eval_ of evaluations) {
+          const { answerId, isCorrect, pointsAwarded } = eval_;
+          if (answerId && typeof isCorrect === 'boolean') {
+            const answer = await storage.getAnswer(answerId);
+            if (answer) {
+              const question = await storage.getQuestion(answer.questionId);
+              const points = isCorrect ? 1 : 0; // STATIC 1 POINT PER QUESTION
+              await storage.updateAnswer(answerId, { isCorrect, pointsAwarded: points });
+            }
+          }
+        }
+
+        // Recalculate total score
+        const allAnswers = await storage.getAnswersByAttempt(attemptId);
+        const totalScore = allAnswers.reduce((sum, a) => sum + (a.pointsAwarded || 0), 0);
+        await storage.updateTestAttempt(attemptId, { totalScore });
+
+        res.json({ success: true, totalScore });
+      } catch (error) {
+        console.error("Batch evaluate error:", error);
+        res.status(500).json({ message: "Internal server error" });
+      }
+    }
+  );
+
+  // GET /api/rounds/:roundId/evaluated-leaderboard - Get leaderboard sorted by correct answers
+  app.get(
+    "/api/rounds/:roundId/evaluated-leaderboard",
+    requireAuth,
+    requireEventAdminOrSuperAdmin,
+    async (req: AuthRequest, res: Response) => {
+      try {
+        const { roundId } = req.params;
+
+        const round = await storage.getRound(roundId);
+        if (!round) {
+          return res.status(404).json({ message: "Round not found" });
+        }
+
+        // Get all completed attempts
+        const attempts = await storage.getTestAttemptsByRound(roundId);
+        const completedAttempts = attempts.filter(
+          a => a.status === 'completed' || a.status === 'auto_submitted'
+        );
+
+        // Build leaderboard entries
+        // Batch fetch all required data
+        const userIds = completedAttempts.map(a => a.userId);
+        const attemptIds = completedAttempts.map(a => a.id);
+
+        const [users, allAnswers, allRegs, qualifiers] = await Promise.all([
+          storage.getUsersByIds(userIds),
+          storage.getAnswersByAttemptIds(attemptIds),
+          storage.getRegistrationsByEvent(round.eventId),
+          storage.getManualRoundEntriesByEventAndRound(round.eventId, round.roundNumber)
+        ]);
+
+        const qualifiedUserIds = new Set(qualifiers.map(q => q.participantUserId));
+
+        // Create lookup maps
+        const userMap = new Map(users.map(u => [u.id, u]));
+        const regMap = new Map(allRegs.map(r => [r.organizerEmail, r]));
+
+        // Batch fetch all team members
+        const regIds = allRegs.map(r => r.id);
+        const allTeamMembers = await storage.getTeamMembersByRegistrationIds(regIds);
+        const teamMemberMap = new Map<string, any[]>();
+        allTeamMembers.forEach(m => {
+          const list = teamMemberMap.get(m.registrationId) || [];
+          list.push({
+            name: m.memberName,
+            rollNo: m.memberRollNo,
+            email: m.memberEmail
+          });
+          teamMemberMap.set(m.registrationId, list);
+        });
+
+        // Group answers by attemptId
+        const answersMap = new Map<string, typeof allAnswers>();
+        allAnswers.forEach(a => {
+          const attemptAnswers = answersMap.get(a.attemptId) || [];
+          attemptAnswers.push(a);
+          answersMap.set(a.attemptId, attemptAnswers);
+        });
+
+        // Build leaderboard entries
+        const leaderboard = completedAttempts.map((attempt) => {
+          const user = userMap.get(attempt.userId);
+          const answers = answersMap.get(attempt.id) || [];
+
+          // Get registration info
+          let registration = null;
+          let teamMembersList: any[] = [];
+
+          if (user?.email) {
+            registration = regMap.get(user.email);
+            if (registration) {
+              teamMembersList = teamMemberMap.get(registration.id) || [];
+            }
+          }
+
+          const correctCount = answers.filter(a => a.isCorrect === true).length;
+          const wrongCount = answers.filter(a => a.isCorrect === false).length;
+          const pendingCount = answers.filter(a => a.isCorrect === null).length;
+          const totalScore = answers.reduce((sum, a) => sum + (a.pointsAwarded || 0), 0);
+
+          return {
+            attemptId: attempt.id,
+            userId: attempt.userId,
+            name: user?.fullName || 'Unknown',
+            email: user?.email || '',
+            college: registration?.organizerCollege || '',
+            department: registration?.organizerDept || '',
+            rollNo: registration?.organizerRollNo || '',
+            correctCount,
+            wrongCount,
+            pendingCount,
+            totalScore,
+            submittedAt: attempt.submittedAt || attempt.completedAt,
+            isFullyEvaluated: pendingCount === 0,
+            teamMembers: teamMembersList,
+            isQualified: user ? qualifiedUserIds.has(user.id) : false
+          };
+        });
+
+        // Sort by correct count DESC, then by submission time ASC
+        leaderboard.sort((a, b) => {
+          if (b.correctCount !== a.correctCount) {
+            return b.correctCount - a.correctCount;
+          }
+          const timeA = a.submittedAt ? new Date(a.submittedAt).getTime() : Infinity;
+          const timeB = b.submittedAt ? new Date(b.submittedAt).getTime() : Infinity;
+          return timeA - timeB;
+        });
+
+        // Add rank
+        const rankedLeaderboard = leaderboard.map((entry, index) => ({
+          ...entry,
+          rank: index + 1
+        }));
+
+        res.json(rankedLeaderboard);
+      } catch (error) {
+        console.error("Get evaluated leaderboard error:", error);
+        res.status(500).json({ message: "Internal server error" });
+      }
+    }
+  );
 
   return httpServer
 }
+

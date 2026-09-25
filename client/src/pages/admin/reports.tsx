@@ -1,5 +1,7 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { apiRequest } from '@/lib/queryClient';
+
 import { useLocation } from 'wouter';
 import AdminLayout from '@/components/layouts/AdminLayout';
 import { Button } from '@/components/ui/button';
@@ -23,19 +25,10 @@ export default function ReportsPage() {
     try {
       setDownloadingId(report.id);
 
-      const response = await fetch(`/api/reports/${report.id}/download`, {
-        method: 'GET',
-        credentials: 'include',
-        headers: {
-          'Accept': 'application/json',
-        },
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to download report');
-      }
-
+      // Use apiRequest for consistent token handling
+      const response = await apiRequest('GET', `/api/reports/${report.id}/download`);
       const data = await response.json();
+
       const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -62,6 +55,7 @@ export default function ReportsPage() {
   };
 
   return (
+
     <AdminLayout>
       <div className="p-4 md:p-8">
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">

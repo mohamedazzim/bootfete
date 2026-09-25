@@ -12,7 +12,9 @@ import {
   LayoutDashboard,
   LogOut,
   Circle,
-  Menu
+  Menu,
+  ChevronLeft,
+  ChevronRight
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useWebSocket } from '@/contexts/WebSocketContext';
@@ -32,39 +34,14 @@ export default function EventAdminLayout({ children }: EventAdminLayoutProps) {
   const [location, setLocation] = useLocation();
   const { isConnected } = useWebSocket();
   const [open, setOpen] = useState(false);
+  const [isCollapsed, setIsCollapsed] = useState(false);
 
-  const NavContent = () => (
-    <nav className="space-y-1">
-      {navigation.map((item) => {
-        const Icon = item.icon;
-        const isActive = location === item.href || location.startsWith(item.href + '/');
+  // Removed nested NavContent component to prevent remounting issues
 
-        return (
-          <button
-            key={item.name}
-            onClick={() => {
-              setLocation(item.href);
-              setOpen(false);
-            }}
-            data-testid={`nav-${item.name.toLowerCase().replace(' ', '-')}`}
-            className={cn(
-              'w-full flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors',
-              isActive
-                ? 'bg-indigo-50 text-indigo-700'
-                : 'text-gray-700 hover:bg-gray-100 hover:text-gray-900'
-            )}
-          >
-            <Icon className="h-5 w-5" />
-            {item.name}
-          </button>
-        );
-      })}
-    </nav>
-  );
 
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col">
-      <header className="bg-white border-b border-gray-200 sticky top-0 z-10">
+      <header className="bg-white border-b border-gray-200">
         <div className="px-4 md:px-6 py-3 md:py-4 flex justify-between items-center">
           <div className="flex items-center gap-3 md:gap-4">
             <Sheet open={open} onOpenChange={setOpen}>
@@ -76,16 +53,41 @@ export default function EventAdminLayout({ children }: EventAdminLayoutProps) {
               </SheetTrigger>
               <SheetContent side="left" className="w-64 p-4 pt-10">
                 <div className="mb-6 px-2">
-                  <h2 className="text-lg font-bold text-gray-900">Symposium</h2>
+                  <h2 className="text-lg font-bold text-gray-900">BOOTFETE 2K26</h2>
                   <p className="text-sm text-gray-500">Event Admin</p>
                 </div>
-                <NavContent />
+                <nav className="space-y-1">
+                  {navigation.map((item) => {
+                    const Icon = item.icon;
+                    const isActive = location === item.href || location.startsWith(item.href + '/');
+
+                    return (
+                      <button
+                        key={item.name}
+                        onClick={() => {
+                          setLocation(item.href);
+                          setOpen(false);
+                        }}
+                        data-testid={`nav-${item.name.toLowerCase().replace(' ', '-')}`}
+                        className={cn(
+                          'w-full flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors',
+                          isActive
+                            ? 'bg-indigo-50 text-indigo-700'
+                            : 'text-gray-700 hover:bg-gray-100 hover:text-gray-900'
+                        )}
+                      >
+                        <Icon className="h-5 w-5 mr-2" />
+                        {item.name}
+                      </button>
+                    );
+                  })}
+                </nav>
               </SheetContent>
             </Sheet>
 
             <div className="flex items-center gap-2 md:gap-4">
               <h1 className="text-lg md:text-xl font-bold text-gray-900 truncate max-w-[150px] md:max-w-none">
-                Symposium <span className="hidden sm:inline">Management</span>
+                BOOTFETE <span className="hidden sm:inline">2K26</span>
               </h1>
               <span className="hidden md:inline text-sm text-gray-500">|</span>
               <span className="hidden md:inline text-sm text-gray-600">Event Admin</span>
@@ -126,9 +128,56 @@ export default function EventAdminLayout({ children }: EventAdminLayoutProps) {
       </header>
 
       <div className="flex flex-1 overflow-hidden">
-        <aside className="hidden md:block w-64 bg-white border-r border-gray-200 overflow-y-auto">
-          <div className="p-4">
-            <NavContent />
+        <aside
+          className={cn(
+            "hidden md:flex flex-col bg-white border-r border-gray-200 transition-all duration-300 ease-in-out relative",
+            isCollapsed ? "w-20" : "w-64"
+          )}
+        >
+          <div className="p-4 flex-1 overflow-y-auto">
+            <nav className="space-y-1">
+              {navigation.map((item) => {
+                const Icon = item.icon;
+                const isActive = location === item.href || location.startsWith(item.href + '/');
+
+                return (
+                  <button
+                    key={item.name}
+                    onClick={() => {
+                      setLocation(item.href);
+                      setOpen(false);
+                    }}
+                    data-testid={`nav-${item.name.toLowerCase().replace(' ', '-')}`}
+                    className={cn(
+                      'w-full flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors',
+                      isCollapsed ? 'justify-center px-2' : '',
+                      isActive
+                        ? 'bg-indigo-50 text-indigo-700'
+                        : 'text-gray-700 hover:bg-gray-100 hover:text-gray-900'
+                    )}
+                  >
+                    <Icon className={cn("h-5 w-5", isCollapsed ? "" : "mr-2")} />
+                    {!isCollapsed && item.name}
+                  </button>
+                );
+              })}
+            </nav>
+          </div>
+
+          <div className="p-4 border-t border-gray-100">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="w-full flex items-center justify-center text-gray-500 hover:text-gray-900"
+              onClick={() => setIsCollapsed(!isCollapsed)}
+            >
+              {isCollapsed ? <ChevronRight className="h-4 w-4" /> : (
+                <div className="flex items-center gap-2">
+                  <ChevronLeft className="h-4 w-4" />
+                  <span className="text-xs uppercase font-semibold tracking-wider">Collapse</span>
+                </div>
+              )}
+            </Button>
           </div>
         </aside>
 

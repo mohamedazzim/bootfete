@@ -56,7 +56,14 @@ export default function Login() {
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100 p-4">
       <Card className="w-full max-w-md">
         <CardHeader className="space-y-1">
-          <CardTitle className="text-2xl font-bold text-center" data-testid="heading-login">Symposium Management</CardTitle>
+          <div className="flex flex-col items-center justify-center mb-6" data-testid="heading-login">
+            <h1 className="text-4xl font-black text-transparent bg-clip-text bg-gradient-to-r from-purple-400 to-pink-600 tracking-tighter">
+              BOOTFETE 2K26
+            </h1>
+            <h2 className="text-xl font-bold text-cyan-400 tracking-[0.2em] mt-2 drop-shadow-[0_0_8px_rgba(34,211,238,0.8)]">
+              QUANTEK
+            </h2>
+          </div>
           <CardDescription className="text-center">
             Sign in to access your dashboard
           </CardDescription>
@@ -64,11 +71,11 @@ export default function Login() {
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-4" data-testid="form-login">
             <div className="space-y-2">
-              <Label htmlFor="username">Username</Label>
+              <Label htmlFor="username">Username or Email</Label>
               <Input
                 id="username"
                 type="text"
-                placeholder="Enter your username"
+                placeholder="Enter your username or email"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
                 required

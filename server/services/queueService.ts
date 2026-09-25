@@ -1,4 +1,4 @@
-import Queue from 'bull';
+﻿import Queue from 'bull';
 import { emailService } from './emailService';
 import { redisClient } from './redisClient';
 
@@ -47,9 +47,9 @@ class QueueService {
             this.setupJobProcessor();
             this.setupEventListeners();
             this.isInitialized = true;
-            console.log('✅ Email Queue initialized successfully');
+            console.log('âœ… Email Queue initialized successfully');
         } catch (error) {
-            console.error('❌ Failed to initialize Email Queue:', error);
+            console.error('âŒ Failed to initialize Email Queue:', error);
             // We don't throw here to allow the app to start, 
             // addEmailJob will handle the fallback if queue is null
         }
@@ -61,7 +61,7 @@ class QueueService {
         this.emailQueue.process(5, async (job) => {
             const { to, subject, templateName, variables, recipientName } = job.data;
 
-            console.log(`🔄 Processing email job ${job.id} for ${to} (${templateName})`);
+            console.log(`ðŸ”„ Processing email job ${job.id} for ${to} (${templateName})`);
 
             try {
                 // Map template names to emailService methods or generic send
@@ -85,6 +85,14 @@ class QueueService {
                             variables.name,
                             variables.eventName,
                             variables.registrationId
+                        );
+                        break;
+                    case 'registration_received_consolidated':
+                        result = await emailService.sendConsolidatedRegistrationReceived(
+                            to,
+                            variables.name,
+                            variables.events,
+                            variables.details
                         );
                         break;
                     case 'registration_approved':
@@ -123,10 +131,27 @@ class QueueService {
                             variables.rank
                         );
                         break;
+                    case 'test_result_qualified':
+                        result = await emailService.sendTestQualification(
+                            to,
+                            variables.name,
+                            variables.eventName,
+                            variables.roundName,
+                            variables.score,
+                            variables.maxScore
+                        );
+                        break;
+                    case 'credentials_consolidated':
+                        result = await emailService.sendConsolidatedCredentials(
+                            to,
+                            variables.name,
+                            variables.credentials
+                        );
+                        break;
                     // Add other cases as needed, or fallback to generic if we can construct HTML
                     default:
                         // If we have raw HTML in variables (not ideal but possible) or if we just want to log
-                        console.warn(`⚠️ Unknown template name: ${templateName}. Job ${job.id} might fail.`);
+                        console.warn(`âš ï¸ Unknown template name: ${templateName}. Job ${job.id} might fail.`);
                         throw new Error(`Unknown template name: ${templateName}`);
                 }
 
@@ -136,7 +161,7 @@ class QueueService {
 
                 return { success: true, messageId: result.messageId };
             } catch (error) {
-                console.error(`❌ Job ${job.id} failed:`, error);
+                console.error(`âŒ Job ${job.id} failed:`, error);
                 throw error; // Triggers retry
             }
         });
@@ -146,16 +171,16 @@ class QueueService {
         if (!this.emailQueue) return;
 
         this.emailQueue.on('completed', (job, result) => {
-            console.log(`✅ Job ${job.id} completed! Result:`, result);
+            console.log(`âœ… Job ${job.id} completed! Result:`, result);
         });
 
         this.emailQueue.on('failed', (job, err) => {
-            console.error(`❌ Job ${job.id} failed after attempts. Error:`, err);
+            console.error(`âŒ Job ${job.id} failed after attempts. Error:`, err);
             // Alert admin logic could go here (e.g., send an email to admin via direct channel)
         });
 
         this.emailQueue.on('error', (error) => {
-            console.error('🔥 Queue error:', error);
+            console.error('ðŸ”¥ Queue error:', error);
         });
     }
 
@@ -168,7 +193,7 @@ class QueueService {
     ): Promise<string | null> {
         // Fallback if queue is not initialized or Redis is down
         if (!this.emailQueue || !this.isInitialized) {
-            console.warn('⚠️ Queue not available. Falling back to direct send.');
+            console.warn('âš ï¸ Queue not available. Falling back to direct send.');
             return this.fallbackDirectSend(to, subject, templateName, variables, recipientName);
         }
 
@@ -180,10 +205,10 @@ class QueueService {
                 variables,
                 recipientName
             });
-            console.log(`📥 Added email job ${job.id} to queue`);
+            console.log(`ðŸ“¥ Added email job ${job.id} to queue`);
             return job.id.toString();
         } catch (error) {
-            console.error('❌ Failed to add job to queue. Falling back to direct send.', error);
+            console.error('âŒ Failed to add job to queue. Falling back to direct send.', error);
             return this.fallbackDirectSend(to, subject, templateName, variables, recipientName);
         }
     }
@@ -196,7 +221,7 @@ class QueueService {
         recipientName?: string
     ): Promise<string | null> {
         try {
-            console.log('🔄 Attempting direct send fallback...');
+            console.log('ðŸ”„ Attempting direct send fallback...');
             // Re-use the same switch logic or call a helper
             // For simplicity, we'll duplicate the switch or extract it. 
             // Since this is a fallback, we just want to try sending.
@@ -206,6 +231,9 @@ class QueueService {
             switch (templateName) {
                 case 'registration_received':
                     result = await emailService.sendRegistrationReceived(to, variables.name, variables.eventName, variables.registrationId);
+                    break;
+                case 'registration_received_consolidated':
+                    result = await emailService.sendConsolidatedRegistrationReceived(to, variables.name, variables.events, variables.details);
                     break;
                 case 'registration_approved':
                     result = await emailService.sendRegistrationApproved(to, variables.name, variables.eventName, variables.username, variables.password);
@@ -219,19 +247,25 @@ class QueueService {
                 case 'result_published':
                     result = await emailService.sendResultPublished(to, variables.name, variables.eventName, variables.score, variables.rank);
                     break;
+                case 'test_result_qualified':
+                    result = await emailService.sendTestQualification(to, variables.name, variables.eventName, variables.roundName, variables.score, variables.maxScore);
+                    break;
+                case 'credentials_consolidated':
+                    result = await emailService.sendConsolidatedCredentials(to, variables.name, variables.credentials);
+                    break;
                 default:
                     throw new Error(`Unknown template name: ${templateName}`);
             }
 
             if (result.success) {
-                console.log('✅ Direct send fallback successful');
+                console.log('âœ… Direct send fallback successful');
                 return 'fallback-direct-send';
             } else {
-                console.error('❌ Direct send fallback failed:', result.error);
+                console.error('âŒ Direct send fallback failed:', result.error);
                 return null;
             }
         } catch (error) {
-            console.error('❌ Direct send fallback exception:', error);
+            console.error('âŒ Direct send fallback exception:', error);
             return null;
         }
     }

@@ -18,6 +18,19 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
   const [isConnected, setIsConnected] = useState(false);
   const socketRef = useRef<Socket | null>(null);
   const { toast } = useToast();
+
+  const refetchEventQueries = (eventId?: string) => {
+    if (!eventId) return;
+    queryClient.refetchQueries({ queryKey: ['/api/events', eventId] });
+    queryClient.refetchQueries({ queryKey: ['/api/events', eventId, 'rounds'] });
+    queryClient.refetchQueries({ queryKey: [`/api/events/${eventId}/registrations`] });
+    queryClient.refetchQueries({ queryKey: [`/api/events/${eventId}/event-credentials`] });
+    queryClient.refetchQueries({ queryKey: [`/api/events/${eventId}/participants`] });
+    queryClient.refetchQueries({ queryKey: [`/api/events/${eventId}/leaderboard`] });
+    queryClient.refetchQueries({ queryKey: [`/api/events/${eventId}/rounds`] });
+    queryClient.refetchQueries({ queryKey: [`/api/events/${eventId}/winners`] });
+    queryClient.refetchQueries({ queryKey: [`/api/events/${eventId}/manual-round-entries`] });
+  };
   const { user, token } = useAuth();
 
   useEffect(() => {
@@ -59,9 +72,20 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
         description: `New participant registered for ${data.registration?.eventName || 'an event'}`,
       });
 
-      // Invalidate registration caches for instant UI update
-      queryClient.invalidateQueries({ queryKey: ['/api/registrations'] });
-      queryClient.invalidateQueries({ queryKey: ['/api/registrations/colleges'] });
+      // Force IMMEDIATE refetch for all registration-related queries
+      queryClient.refetchQueries({ queryKey: ['/api/registrations'] });
+      queryClient.refetchQueries({ queryKey: ['/api/registrations/colleges'] });
+
+      // Super Admin dashboard - immediate update
+      queryClient.refetchQueries({ queryKey: ['/api/admin/stats'] });
+      queryClient.refetchQueries({ queryKey: ['/api/events'] });
+
+      // Event admin dashboard stats - immediate update
+      queryClient.refetchQueries({ queryKey: ['/api/event-admin/my-event'] });
+      queryClient.refetchQueries({ queryKey: ['/api/event-admin/stats'] });
+
+      // Event-specific registrations
+      refetchEventQueries(data.eventId);
     });
 
     socket.on('roundStatus', (data) => {
@@ -70,14 +94,18 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
         description: `Round ${data.round?.name || 'round'} is now ${data.status}`,
       });
 
-      // Invalidate round and event caches
+      // Force IMMEDIATE refetch (not just invalidation) for critical queries
       if (data.roundId) {
-        queryClient.invalidateQueries({ queryKey: [`/api/rounds/${data.roundId}`] });
+        queryClient.refetchQueries({ queryKey: [`/api/rounds/${data.roundId}`] });
+        queryClient.refetchQueries({ queryKey: ['/api/rounds', data.roundId] });
       }
-      if (data.eventId) {
-        queryClient.invalidateQueries({ queryKey: [`/api/events/${data.eventId}`] });
-        queryClient.invalidateQueries({ queryKey: [`/api/events/${data.eventId}/rounds`] });
-      }
+      refetchEventQueries(data.eventId);
+
+      // CRITICAL: Force immediate refetch of participant credential for dashboard update
+      queryClient.refetchQueries({ queryKey: ['/api/participants/my-credential'] });
+
+      // Super Admin Test Manager - immediate refresh
+      queryClient.refetchQueries({ queryKey: ['/api/super-admin/all-rounds'] });
     });
 
     socket.on('overrideAction', (data) => {
@@ -94,44 +122,92 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
         description: 'Your test results are now available',
       });
 
-      // Invalidate result and leaderboard caches
-      if (data.eventId) {
-        queryClient.invalidateQueries({ queryKey: [`/api/leaderboard/${data.eventId}`] });
-      }
-      queryClient.invalidateQueries({ queryKey: ['/api/test-attempts'] });
-      queryClient.invalidateQueries({ queryKey: ['/api/results'] });
+      // Force IMMEDIATE refetch of result and leaderboard
+      refetchEventQueries(data.eventId);
+      queryClient.refetchQueries({ queryKey: ['/api/participants/my-attempts'] });
     });
 
-    // Registration confirmed - invalidate caches
+    // Registration confirmed (approval) - force IMMEDIATE refetch
     socket.on('registrationConfirmed', (data) => {
       toast({
         title: 'Registration Confirmed',
-        description: `${data.organizerName}'s registration has been confirmed`,
+        description: `${data.organizerName || 'Participant'}'s registration has been confirmed`,
       });
 
-      queryClient.invalidateQueries({ queryKey: ['/api/registrations'] });
-      queryClient.invalidateQueries({ queryKey: ['/api/participants/my-credential'] });
+      // Force immediate refetch of all registration-related queries
+      queryClient.refetchQueries({ queryKey: ['/api/registrations'] });
+      queryClient.refetchQueries({ queryKey: ['/api/participants/my-credential'] });
+      // Event admin dashboard and stats - CRITICAL for immediate update
+      queryClient.refetchQueries({ queryKey: ['/api/event-admin/my-event'] });
+      queryClient.refetchQueries({ queryKey: ['/api/event-admin/stats'] });
+      refetchEventQueries(data.eventId);
     });
 
-    // Test submitted - update leaderboard instantly
+    // Test submitted - IMMEDIATE leaderboard update
     socket.on('testSubmitted', (data) => {
       if (data.roundId) {
-        queryClient.invalidateQueries({ queryKey: [`/api/leaderboard/${data.roundId}`] });
+        queryClient.refetchQueries({ queryKey: [`/api/rounds/${data.roundId}/leaderboard`] });
+        queryClient.refetchQueries({ queryKey: [`/api/rounds/${data.roundId}/statistics`] });
       }
-      if (data.eventId) {
-        queryClient.invalidateQueries({ queryKey: [`/api/leaderboard/${data.eventId}`] });
-      }
-      queryClient.invalidateQueries({ queryKey: ['/api/test-attempts'] });
+      refetchEventQueries(data.eventId);
+      // Refresh Super Admin view if checking submissions via test manager
+      queryClient.refetchQueries({ queryKey: ['/api/super-admin/all-rounds'] });
     });
 
-    // Credentials created - show instantly
+    // Leaderboard update event - for direct leaderboard broadcasts
+    socket.on('leaderboardUpdate', (data) => {
+      if (data.roundId) {
+        queryClient.refetchQueries({ queryKey: [`/api/rounds/${data.roundId}/leaderboard`] });
+        queryClient.refetchQueries({ queryKey: [`/api/rounds/${data.roundId}/statistics`] });
+      }
+      refetchEventQueries(data.eventId);
+    });
+
+    // Credentials created - IMMEDIATE update
     socket.on('credentialsCreated', (data) => {
       toast({
         title: 'Credentials Ready',
-        description: 'Your event credentials are now available',
+        description: `${data.organizerName ? `${data.organizerName}'s credentials are ready` : 'Event credentials are now available'}`,
       });
 
-      queryClient.invalidateQueries({ queryKey: ['/api/participants/my-credential'] });
+      queryClient.refetchQueries({ queryKey: ['/api/participants/my-credential'] });
+      refetchEventQueries(data.eventId);
+      // Event admin stats for immediate dashboard update
+      queryClient.refetchQueries({ queryKey: ['/api/event-admin/my-event'] });
+      queryClient.refetchQueries({ queryKey: ['/api/event-admin/stats'] });
+    });
+
+    // Data refresh event - generic refresh trigger for any data updates
+    socket.on('dataRefresh', (data) => {
+      // Force immediate refetch based on type
+      if (data.type === 'registrations') {
+        queryClient.refetchQueries({ queryKey: ['/api/registrations'] });
+      }
+      if (data.type === 'participants') {
+        queryClient.refetchQueries({ queryKey: ['/api/event-admin/my-event'] });
+        queryClient.refetchQueries({ queryKey: ['/api/event-admin/stats'] });
+      }
+      if (data.type === 'results') {
+        queryClient.refetchQueries({ queryKey: ['/api/participants/my-attempts'] });
+      }
+      refetchEventQueries(data.eventId);
+    });
+
+    // Manual round entry added - for physical/manual rounds
+    socket.on('manualRoundEntry', (data) => {
+      refetchEventQueries(data.eventId);
+      queryClient.refetchQueries({ queryKey: ['/api/super-admin/all-rounds'] });
+    });
+
+    // Winner declared
+    socket.on('winnerDeclared', (data) => {
+      toast({
+        title: 'Winner Declared',
+        description: `Winners have been announced for ${data.eventName || 'an event'}`,
+      });
+
+      refetchEventQueries(data.eventId);
+      queryClient.refetchQueries({ queryKey: ['/api/events'] });
     });
 
     return () => {

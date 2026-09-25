@@ -1,26 +1,40 @@
-import { test, expect, Page, BrowserContext } from '@playwright/test';
-import { TestHelpers } from '../utils/testHelpers';
+import { test, expect, Page } from '@playwright/test';
 
-// Test data will be set up once and reused
-let testContext: {
+// The suite runs against the remote Neon database, which adds latency to every
+// API round trip. Give hooks and tests generous room so slow DB responses are
+// not mistaken for failures.
+test.setTimeout(180000);
+
+const BASE_URL = 'http://localhost:5000';
+
+// Shared fixtures created once for the whole suite.
+let shared: {
   superAdminToken: string;
   eventAdminToken: string;
-  participantToken: string;
-  participantCredentials: { username: string; password: string };
   eventId: string;
   roundId: string;
-  attemptId: string;
   questionIds: string[];
 };
 
-// Helper function to make API requests
+// Per-test participant state. A fresh participant is provisioned for every
+// test through the real registration -> confirmation -> credentials flow,
+// because the backend enforces ONE attempt per participant per round.
+let testContext: {
+  participantToken: string;
+  participantCredentials: { username: string; password: string };
+  attemptId: string;
+};
+
+// Helper function to make API requests.
+// Non-2xx responses throw; 400 is returned as parsed JSON so callers can
+// assert on the backend's validation message.
 async function apiRequest(
   method: string,
   endpoint: string,
   token: string,
   body?: any
 ) {
-  const response = await fetch(`http://localhost:5000${endpoint}`, {
+  const response = await fetch(`${BASE_URL}${endpoint}`, {
     method,
     headers: {
       'Content-Type': 'application/json',
@@ -28,52 +42,60 @@ async function apiRequest(
     },
     body: body ? JSON.stringify(body) : undefined
   });
-  
+
   if (!response.ok && response.status !== 400) {
     const text = await response.text();
     throw new Error(`API request failed: ${response.status} ${text}`);
   }
-  
+
   return response.json();
 }
 
-// Setup test data before all tests
+// Setup test data before all tests.
+//
+// Bootstrap strategy (mirrors production):
+// 1. Login with a bootstrap Super Admin (from env, defaults to the account
+//    created by `server/seed.ts`).
+// 2. Create the Event Admin through POST /api/auth/register using the super
+//    admin token — privileged accounts can ONLY be created this way.
+// 3. Create the event, assign the admin, add rounds/rules/questions and start
+//    the round. Participant provisioning happens per test in `beforeEach`.
 test.beforeAll(async () => {
-  // Create super admin
-  const superAdminRes = await fetch('http://localhost:5000/api/auth/register', {
+  test.setTimeout(180000);
+  const adminUser = process.env.E2E_ADMIN_USER || 'superadmin';
+  const adminPass = process.env.E2E_ADMIN_PASS || 'Azzi@03';
+
+  // 1. Login as bootstrap super admin
+  const loginRes = await fetch(`${BASE_URL}/api/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      username: `superadmin_${Date.now()}`,
-      password: 'superadmin123',
-      email: `superadmin_${Date.now()}@test.com`,
-      fullName: 'Super Admin Test',
-      role: 'super_admin'
-    })
+    body: JSON.stringify({ username: adminUser, password: adminPass })
   });
-  const superAdminData = await superAdminRes.json();
+  if (!loginRes.ok) {
+    throw new Error(`Bootstrap admin login failed (${loginRes.status}). Set E2E_ADMIN_USER/E2E_ADMIN_PASS.`);
+  }
+  const superAdminData = await loginRes.json();
   const superAdminToken = superAdminData.token;
 
-  // Create event admin
-  const eventAdminRes = await fetch('http://localhost:5000/api/auth/register', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      username: `eventadmin_${Date.now()}`,
-      password: 'eventadmin123',
-      email: `eventadmin_${Date.now()}@test.com`,
-      fullName: 'Event Admin Test',
-      role: 'event_admin'
-    })
+  // 2. Create event admin via the secured register endpoint (requires super admin)
+  const eventAdminRes = await apiRequest('POST', '/api/auth/register', superAdminToken, {
+    username: `eventadmin_${Date.now()}`,
+    password: 'eventadmin123',
+    email: `eventadmin_${Date.now()}@test.com`,
+    fullName: 'Event Admin Test',
+    role: 'event_admin'
   });
-  const eventAdminData = await eventAdminRes.json();
-  const eventAdminToken = eventAdminData.token;
+  if (!eventAdminRes?.token) {
+    throw new Error('Event admin registration did not return a token');
+  }
+  const eventAdminToken = eventAdminRes.token;
+  const eventAdminUserId = eventAdminRes.user.id;
 
-  // Create event
+  // 3. Create event
   const eventRes = await apiRequest('POST', '/api/events', superAdminToken, {
-    name: 'Proctored Test Event',
+    name: `Proctored Test Event ${Date.now()}`,
     description: 'E2E Test Event',
-    type: 'quiz',
+    type: 'technical',
     category: 'technical',
     status: 'active'
   });
@@ -81,7 +103,7 @@ test.beforeAll(async () => {
 
   // Assign event admin to event
   await apiRequest('POST', `/api/events/${eventId}/admins`, superAdminToken, {
-    adminId: eventAdminData.user.id
+    adminId: eventAdminUserId
   });
 
   // Create round with proctoring rules
@@ -95,7 +117,7 @@ test.beforeAll(async () => {
   const roundId = roundRes.id;
 
   // Set round rules with strict proctoring
-  await apiRequest('POST', `/api/rounds/${roundId}/rules`, eventAdminToken, {
+  await apiRequest('PATCH', `/api/rounds/${roundId}/rules`, eventAdminToken, {
     noRefresh: true,
     noTabSwitch: true,
     forceFullscreen: true,
@@ -108,81 +130,101 @@ test.beforeAll(async () => {
   const questionIds: string[] = [];
   for (let i = 1; i <= 3; i++) {
     const questionRes = await apiRequest('POST', `/api/rounds/${roundId}/questions`, eventAdminToken, {
-      questionType: 'multiple_choice',
+      questionType: 'mcq',
       questionText: `Test Question ${i}`,
       questionNumber: i,
-      points: 10,
+      points: 1,
       options: ['Option A', 'Option B', 'Option C', 'Option D'],
       correctAnswer: 'Option A'
     });
     questionIds.push(questionRes.id);
   }
 
-  // Create participant user
-  const participantRes = await fetch('http://localhost:5000/api/auth/register', {
+  // Start the round (POST, not PATCH)
+  await apiRequest('POST', `/api/rounds/${roundId}/start`, eventAdminToken, {});
+
+  shared = { superAdminToken, eventAdminToken, eventId, roundId, questionIds };
+});
+
+// Every test gets its own participant, because the backend allows exactly one
+// test attempt per participant per round. Provisioning goes through the real
+// production flow: public registration -> super admin confirmation ->
+// generated event credentials -> login as participant.
+test.beforeEach(async () => {
+  const suffix = `${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
+
+  // Public registration (solo) for the participant.
+  // Unique college per test keeps the per-college department limit from
+  // accumulating across runs.
+  const regRes = await fetch(`${BASE_URL}/api/register`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      username: `participant_${Date.now()}`,
-      password: 'participant123',
-      email: `participant_${Date.now()}@test.com`,
-      fullName: 'Test Participant',
-      role: 'participant'
+      eventId: shared.eventId,
+      organizerRollNo: `E2E${Date.now()}`,
+      organizerName: 'Test Participant',
+      organizerEmail: `participant_${suffix}@test.com`,
+      organizerDept: 'CSE',
+      organizerCollege: `E2E Test College ${suffix}`,
+      organizerPhone: '9876543210',
+      organizerFoodType: 'veg'
     })
   });
-  const participantData = await participantRes.json();
-  const participantToken = participantData.token;
+  if (!regRes.ok) {
+    throw new Error(`Participant registration failed: ${regRes.status} ${await regRes.text()}`);
+  }
+  const registration = await regRes.json();
 
-  // Register participant to event
-  await apiRequest('POST', `/api/events/${eventId}/participants`, eventAdminToken, {
-    userId: participantData.user.id
+  // Confirm the registration to generate real event credentials
+  const confirmRes = await apiRequest('PATCH', `/api/registrations/${registration.registration.id}/confirm`, shared.superAdminToken, {});
+  const eventCredential = confirmRes.eventCredentials?.[0];
+  if (!eventCredential) {
+    throw new Error('Confirmation did not return event credentials');
+  }
+
+  // Login as the participant using the generated event credentials
+  const participantLoginRes = await fetch(`${BASE_URL}/api/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      username: eventCredential.eventUsername,
+      password: eventCredential.eventPassword
+    })
   });
-
-  // Create event credentials for participant
-  const credRes = await apiRequest('POST', `/api/events/${eventId}/credentials`, eventAdminToken, {
-    participantUserId: participantData.user.id,
-    eventUsername: `testuser_${Date.now()}`,
-    eventPassword: 'testpass123',
-    testEnabled: true
-  });
-
-  // Start the round
-  await apiRequest('PATCH', `/api/rounds/${roundId}/start`, eventAdminToken, {});
+  if (!participantLoginRes.ok) {
+    throw new Error(`Participant credential login failed (${participantLoginRes.status})`);
+  }
+  const participantData = await participantLoginRes.json();
 
   testContext = {
-    superAdminToken,
-    eventAdminToken,
-    participantToken,
+    participantToken: participantData.token,
     participantCredentials: {
-      username: credRes.eventUsername,
-      password: credRes.eventPassword
+      username: eventCredential.eventUsername,
+      password: eventCredential.eventPassword
     },
-    eventId,
-    roundId,
-    attemptId: '', // Will be set after starting test
-    questionIds
+    attemptId: ''
   };
 });
 
 // Helper functions
 async function loginAsParticipant(page: Page) {
-  await page.goto('http://localhost:5000');
-  await page.waitForSelector('[data-testid="input-username"]', { timeout: 10000 });
+  await page.goto(BASE_URL);
+  await page.waitForSelector('[data-testid="input-username"]', { timeout: 30000 });
   await page.fill('[data-testid="input-username"]', testContext.participantCredentials.username);
   await page.fill('[data-testid="input-password"]', testContext.participantCredentials.password);
   await page.click('[data-testid="button-submit"]');
-  await page.waitForURL('**/participant/dashboard', { timeout: 10000 });
+  await page.waitForURL('**/participant/dashboard', { timeout: 30000 });
 }
 
 async function navigateToTest(page: Page) {
   // Navigate to the test
-  await page.goto(`http://localhost:5000/participant/events/${testContext.eventId}`);
-  await page.waitForSelector(`[data-testid="button-start-test-${testContext.roundId}"]`, { timeout: 10000 });
-  await page.click(`[data-testid="button-start-test-${testContext.roundId}"]`);
-  
+  await page.goto(`${BASE_URL}/participant/events/${shared.eventId}`);
+  await page.waitForSelector(`[data-testid="button-start-test-${shared.roundId}"]`, { timeout: 30000 });
+  await page.click(`[data-testid="button-start-test-${shared.roundId}"]`);
+
   // Wait for attempt page to load
-  await page.waitForURL('**/participant/take-test/**', { timeout: 10000 });
-  
+  await page.waitForURL('**/participant/test/**', { timeout: 30000 });
+
   // Extract attempt ID from URL
   const url = page.url();
   const attemptId = url.split('/').pop() || '';
@@ -191,8 +233,37 @@ async function navigateToTest(page: Page) {
 
 async function startTest(page: Page) {
   // Click begin test button (should trigger fullscreen)
-  await page.click('[data-testid="button-begin-test"]');
-  await page.waitForTimeout(500);
+  await page.locator('[data-testid="button-begin-test"]').click({ force: true, noWaitAfter: true });
+  await waitForFullscreen(page);
+  await expect(page.locator('[data-testid="heading-test-name"]')).toBeVisible({ timeout: 15000 });
+}
+
+async function waitForFullscreen(page: Page) {
+  await expect.poll(
+    () => page.evaluate(() => !!document.fullscreenElement),
+    { timeout: 8000 }
+  ).toBe(true);
+}
+
+// Simulates a tab switch: defines document.hidden as true (as a backgrounded
+// tab reports it) and dispatches visibilitychange + blur events. The desktop
+// elimination threshold is 3 violations, so callers pass the count they need.
+async function triggerTabSwitch(page: Page, times = 1) {
+  await page.evaluate(() => {
+    try {
+      Object.defineProperty(document, 'hidden', {
+        get: () => true,
+        configurable: true
+      });
+    } catch (e) {}
+  });
+  for (let i = 0; i < times; i++) {
+    await page.evaluate(() => {
+      document.dispatchEvent(new Event('visibilitychange'));
+      window.dispatchEvent(new Event('blur'));
+    });
+    await page.waitForTimeout(400);
+  }
 }
 
 async function answerQuestion(page: Page, optionIndex: number) {
@@ -200,26 +271,10 @@ async function answerQuestion(page: Page, optionIndex: number) {
   await page.waitForTimeout(200);
 }
 
-async function submitAnswer(page: Page) {
-  // Submit answer via API to ensure it's saved
-  const currentUrl = page.url();
-  const attemptId = currentUrl.split('/').pop() || '';
-  
-  // Get current question index from page
-  const questionText = await page.textContent('[data-testid="text-question"]');
-  const questionNumber = parseInt(questionText?.match(/Question (\d+)/)?.[1] || '1');
-  const questionId = testContext.questionIds[questionNumber - 1];
-  
-  await apiRequest('POST', `/api/attempts/${attemptId}/answers`, testContext.participantToken, {
-    questionId,
-    answer: 'Option A'
-  });
-}
-
 async function getViolationCount(attemptId: string): Promise<{ tabSwitch: number; refresh: number; fullscreenExit: number }> {
   const attempt = await apiRequest('GET', `/api/attempts/${attemptId}`, testContext.participantToken);
   const violationLogs = attempt.violationLogs || [];
-  
+
   return {
     tabSwitch: violationLogs.filter((v: any) => v.type === 'tab_switch').length,
     refresh: violationLogs.filter((v: any) => v.type === 'refresh').length,
@@ -229,46 +284,43 @@ async function getViolationCount(attemptId: string): Promise<{ tabSwitch: number
 
 // Test Suite: Fullscreen Enforcement
 test.describe('Fullscreen Enforcement Tests', () => {
-  test('should enter fullscreen mode on test start', async ({ page, context }) => {
+  test('should enter fullscreen mode on test start', async ({ page }) => {
     await loginAsParticipant(page);
     await navigateToTest(page);
-    
+
     // Verify begin test button is visible
     await expect(page.locator('[data-testid="button-begin-test"]')).toBeVisible();
-    
+
     // Click begin test
-    await page.click('[data-testid="button-begin-test"]');
-    await page.waitForTimeout(1000);
-    
-    // Verify we're in fullscreen (check via evaluation)
-    const isFullscreen = await page.evaluate(() => !!document.fullscreenElement);
-    expect(isFullscreen).toBe(true);
-    
+    await page.locator('[data-testid="button-begin-test"]').click({ force: true, noWaitAfter: true });
+    await waitForFullscreen(page);
+
     // Take screenshot
     await page.screenshot({ path: 'tests/reports/screenshots/fullscreen-activated.png', fullPage: true });
   });
 
-  test('should detect fullscreen exit and log violation', async ({ page, context }) => {
+  test('should detect fullscreen exit and log violation', async ({ page }) => {
     await loginAsParticipant(page);
     await navigateToTest(page);
     await startTest(page);
-    
+    await waitForFullscreen(page);
+
     // Get initial violation count
     const initialViolations = await getViolationCount(testContext.attemptId);
-    
+
     // Exit fullscreen programmatically
     await page.evaluate(() => {
       if (document.fullscreenElement) {
         document.exitFullscreen();
       }
     });
-    
-    await page.waitForTimeout(1000);
-    
-    // Verify violation was logged
-    const finalViolations = await getViolationCount(testContext.attemptId);
-    expect(finalViolations.fullscreenExit).toBeGreaterThan(initialViolations.fullscreenExit);
-    
+
+    // Verify violation was logged (the frontend posts it asynchronously)
+    await expect.poll(
+      async () => (await getViolationCount(testContext.attemptId)).fullscreenExit,
+      { timeout: 10000 }
+    ).toBeGreaterThan(initialViolations.fullscreenExit);
+
     // Take screenshot of violation
     await page.screenshot({ path: 'tests/reports/screenshots/fullscreen-violation.png' });
   });
@@ -277,46 +329,39 @@ test.describe('Fullscreen Enforcement Tests', () => {
     await loginAsParticipant(page);
     await navigateToTest(page);
     await startTest(page);
-    
+    await waitForFullscreen(page);
+
     // Exit fullscreen
     await page.evaluate(() => {
       if (document.fullscreenElement) {
         document.exitFullscreen();
       }
     });
-    
-    await page.waitForTimeout(500);
-    
+
     // Check for re-enter fullscreen button
-    await expect(page.locator('[data-testid="button-reenter-fullscreen"]')).toBeVisible();
-    
+    await expect(page.locator('[data-testid="button-reenter-fullscreen"]')).toBeVisible({ timeout: 10000 });
+
     await page.screenshot({ path: 'tests/reports/screenshots/reenter-fullscreen-modal.png' });
   });
 });
 
 // Test Suite: Tab Switch Detection
 test.describe('Tab Switch Detection Tests', () => {
-  test('should detect tab switch via visibility change', async ({ page, context }) => {
+  test('should detect tab switch via visibility change', async ({ page }) => {
     await loginAsParticipant(page);
     await navigateToTest(page);
     await startTest(page);
-    
+
     const initialViolations = await getViolationCount(testContext.attemptId);
-    
-    // Simulate tab switch by changing visibility
-    await page.evaluate(() => {
-      Object.defineProperty(document, 'hidden', {
-        writable: true,
-        value: true
-      });
-      document.dispatchEvent(new Event('visibilitychange'));
-    });
-    
-    await page.waitForTimeout(1000);
-    
-    const finalViolations = await getViolationCount(testContext.attemptId);
-    expect(finalViolations.tabSwitch).toBeGreaterThan(initialViolations.tabSwitch);
-    
+
+    // Simulate a single tab switch
+    await triggerTabSwitch(page, 1);
+
+    await expect.poll(
+      async () => (await getViolationCount(testContext.attemptId)).tabSwitch,
+      { timeout: 10000 }
+    ).toBeGreaterThan(initialViolations.tabSwitch);
+
     await page.screenshot({ path: 'tests/reports/screenshots/tab-switch-violation.png' });
   });
 
@@ -324,23 +369,21 @@ test.describe('Tab Switch Detection Tests', () => {
     await loginAsParticipant(page);
     await navigateToTest(page);
     await startTest(page);
-    
-    // Trigger tab switch
-    await page.evaluate(() => {
-      Object.defineProperty(document, 'hidden', {
-        writable: true,
-        value: true
-      });
-      document.dispatchEvent(new Event('visibilitychange'));
-    });
-    
-    await page.waitForTimeout(2000);
-    
-    // Check if participant is disqualified (should be redirected or see disqualification message)
-    const participant = await apiRequest('GET', `/api/participants/my-registrations`, testContext.participantToken);
-    const eventParticipant = participant.find((p: any) => p.eventId === testContext.eventId);
-    expect(eventParticipant?.status).toBe('disqualified');
-    
+
+    // Desktop elimination threshold is 3 violations: warnings at 1 and 2,
+    // disqualification + auto-submit at 3.
+    await triggerTabSwitch(page, 3);
+
+    // Check the participant record is disqualified
+    await expect.poll(
+      async () => {
+        const participants = await apiRequest('GET', '/api/participants/my-registrations', testContext.participantToken);
+        const eventParticipant = participants.find((p: any) => p.eventId === shared.eventId);
+        return eventParticipant?.status;
+      },
+      { timeout: 15000 }
+    ).toBe('disqualified');
+
     await page.screenshot({ path: 'tests/reports/screenshots/disqualified-tab-switch.png' });
   });
 });
@@ -351,44 +394,46 @@ test.describe('Page Refresh Prevention Tests', () => {
     await loginAsParticipant(page);
     await navigateToTest(page);
     await startTest(page);
-    
+
     // Set up dialog handler before triggering refresh
     let dialogShown = false;
+    let dialogType = '';
     page.on('dialog', async dialog => {
       dialogShown = true;
-      expect(dialog.type()).toBe('beforeunload');
+      dialogType = dialog.type();
       await dialog.dismiss();
     });
-    
-    // Attempt to reload the page
+
+    // Attempt to reload the page (timeout 5s since cancelling beforeunload aborts navigation)
     try {
-      await page.reload({ waitUntil: 'domcontentloaded' });
+      await page.reload({ timeout: 5000 });
     } catch (e) {
-      // Expected to fail if beforeunload prevents it
+      // Expected: navigation aborted/prevented by beforeunload
     }
-    
+
     await page.waitForTimeout(500);
-    
+
     // The beforeunload dialog should have been shown
-    // Note: In headed mode, this might actually show, in headless it's automatically handled
+    expect(dialogShown).toBe(true);
+    expect(dialogType).toBe('beforeunload');
   });
 
   test('should track refresh attempts in violations', async ({ page }) => {
     await loginAsParticipant(page);
     await navigateToTest(page);
     await startTest(page);
-    
+
     const initialViolations = await getViolationCount(testContext.attemptId);
-    
+
     // Manually log a refresh violation via API (simulating what the frontend does)
     await apiRequest('POST', `/api/attempts/${testContext.attemptId}/violations`, testContext.participantToken, {
       type: 'refresh'
     });
-    
-    await page.waitForTimeout(500);
-    
-    const finalViolations = await getViolationCount(testContext.attemptId);
-    expect(finalViolations.refresh).toBeGreaterThan(initialViolations.refresh);
+
+    await expect.poll(
+      async () => (await getViolationCount(testContext.attemptId)).refresh,
+      { timeout: 10000 }
+    ).toBeGreaterThan(initialViolations.refresh);
   });
 });
 
@@ -398,13 +443,13 @@ test.describe('Browser Controls Disabled Tests', () => {
     await loginAsParticipant(page);
     await navigateToTest(page);
     await startTest(page);
-    
+
     const currentUrl = page.url();
-    
+
     // Try to go back
     await page.goBack();
     await page.waitForTimeout(500);
-    
+
     // Should still be on the same page (back button is blocked)
     const newUrl = page.url();
     expect(newUrl).toBe(currentUrl);
@@ -414,7 +459,7 @@ test.describe('Browser Controls Disabled Tests', () => {
     await loginAsParticipant(page);
     await navigateToTest(page);
     await startTest(page);
-    
+
     // Check if context menu is disabled
     const isContextMenuDisabled = await page.evaluate(() => {
       const event = new MouseEvent('contextmenu', {
@@ -424,7 +469,7 @@ test.describe('Browser Controls Disabled Tests', () => {
       });
       return !document.dispatchEvent(event);
     });
-    
+
     expect(isContextMenuDisabled).toBe(true);
   });
 
@@ -432,22 +477,22 @@ test.describe('Browser Controls Disabled Tests', () => {
     await loginAsParticipant(page);
     await navigateToTest(page);
     await startTest(page);
-    
+
     // Try Ctrl+C (copy)
     await page.keyboard.down('Control');
     await page.keyboard.press('c');
     await page.keyboard.up('Control');
-    
+
     // Try Ctrl+V (paste)
     await page.keyboard.down('Control');
     await page.keyboard.press('v');
     await page.keyboard.up('Control');
-    
+
     // Try F12 (dev tools)
     await page.keyboard.press('F12');
-    
+
     await page.waitForTimeout(500);
-    
+
     // These should be blocked - no errors should occur
     await expect(page.locator('[data-testid="heading-test-name"]')).toBeVisible();
   });
@@ -459,18 +504,18 @@ test.describe('Violation Tracking & Auto-Submit Tests', () => {
     await loginAsParticipant(page);
     await navigateToTest(page);
     await startTest(page);
-    
+
     // Log a violation
     await apiRequest('POST', `/api/attempts/${testContext.attemptId}/violations`, testContext.participantToken, {
       type: 'refresh'
     });
-    
+
     await page.waitForTimeout(500);
-    
+
     // Get attempt and check violation logs
     const attempt = await apiRequest('GET', `/api/attempts/${testContext.attemptId}`, testContext.participantToken);
     const violationLogs = attempt.violationLogs || [];
-    
+
     expect(violationLogs.length).toBeGreaterThan(0);
     expect(violationLogs[violationLogs.length - 1]).toHaveProperty('type', 'refresh');
     expect(violationLogs[violationLogs.length - 1]).toHaveProperty('timestamp');
@@ -480,28 +525,24 @@ test.describe('Violation Tracking & Auto-Submit Tests', () => {
     await loginAsParticipant(page);
     await navigateToTest(page);
     await startTest(page);
-    
+
     // Answer a question first
     await answerQuestion(page, 0);
-    await submitAnswer(page);
-    
+
     await page.waitForTimeout(500);
-    
-    // Trigger tab switch (should cause disqualification and auto-submit)
-    await page.evaluate(() => {
-      Object.defineProperty(document, 'hidden', {
-        writable: true,
-        value: true
-      });
-      document.dispatchEvent(new Event('visibilitychange'));
-    });
-    
-    await page.waitForTimeout(3000);
-    
+
+    // Desktop elimination threshold: 3 violations -> disqualify + auto-submit
+    await triggerTabSwitch(page, 3);
+
     // Check if test was auto-submitted
-    const attempt = await apiRequest('GET', `/api/attempts/${testContext.attemptId}`, testContext.participantToken);
-    expect(['completed', 'auto_submitted']).toContain(attempt.status);
-    
+    await expect.poll(
+      async () => {
+        const attempt = await apiRequest('GET', `/api/attempts/${testContext.attemptId}`, testContext.participantToken);
+        return attempt.status;
+      },
+      { timeout: 20000 }
+    ).toBe('completed');
+
     await page.screenshot({ path: 'tests/reports/screenshots/auto-submit-violation.png' });
   });
 
@@ -509,35 +550,36 @@ test.describe('Violation Tracking & Auto-Submit Tests', () => {
     await loginAsParticipant(page);
     await navigateToTest(page);
     await startTest(page);
-    
+
     // Answer first question
     await answerQuestion(page, 0);
     await apiRequest('POST', `/api/attempts/${testContext.attemptId}/answers`, testContext.participantToken, {
-      questionId: testContext.questionIds[0],
+      questionId: shared.questionIds[0],
       answer: 'Option A'
     });
-    
+
     await page.waitForTimeout(500);
-    
+
     // Verify answer was saved
     const attemptBefore = await apiRequest('GET', `/api/attempts/${testContext.attemptId}`, testContext.participantToken);
     const answerCountBefore = attemptBefore.answers?.length || 0;
     expect(answerCountBefore).toBeGreaterThan(0);
-    
-    // Trigger auto-submit via tab switch
-    await page.evaluate(() => {
-      Object.defineProperty(document, 'hidden', {
-        writable: true,
-        value: true
-      });
-      document.dispatchEvent(new Event('visibilitychange'));
-    });
-    
-    await page.waitForTimeout(3000);
-    
+
+    // Trigger auto-submit via tab switch (3 violations)
+    await triggerTabSwitch(page, 3);
+
+    // Wait for auto-submit to complete
+    await expect.poll(
+      async () => {
+        const attempt = await apiRequest('GET', `/api/attempts/${testContext.attemptId}`, testContext.participantToken);
+        return attempt.status;
+      },
+      { timeout: 20000 }
+    ).toBe('completed');
+
     // Get attempt after auto-submit
     const attemptAfter = await apiRequest('GET', `/api/attempts/${testContext.attemptId}`, testContext.participantToken);
-    
+
     // Answers should be preserved
     expect(attemptAfter.answers?.length).toBe(answerCountBefore);
     expect(attemptAfter.answers?.[0]?.answer).toBe('Option A');
@@ -548,56 +590,53 @@ test.describe('Violation Tracking & Auto-Submit Tests', () => {
 test.describe('Test Flow Integration', () => {
   test('should complete full test flow with normal submission', async ({ page }) => {
     await loginAsParticipant(page);
-    
-    // Navigate to events page
-    await page.goto(`http://localhost:5000/participant/events`);
-    await page.waitForTimeout(500);
-    
-    // Find and click on the event
-    await page.goto(`http://localhost:5000/participant/events/${testContext.eventId}`);
-    await page.waitForTimeout(500);
-    
+
+    // Navigate to the event details page
+    await page.goto(`${BASE_URL}/participant/events/${shared.eventId}`);
+    await page.waitForSelector(`[data-testid="button-start-test-${shared.roundId}"]`, { timeout: 30000 });
+
     // Start test
-    await page.click(`[data-testid="button-start-test-${testContext.roundId}"]`);
-    await page.waitForURL('**/participant/take-test/**', { timeout: 10000 });
-    
+    await page.click(`[data-testid="button-start-test-${shared.roundId}"]`);
+    await page.waitForURL('**/participant/test/**', { timeout: 30000 });
+
     const attemptUrl = page.url();
     const attemptId = attemptUrl.split('/').pop() || '';
-    
+
     // Begin test (enter fullscreen)
-    await page.click('[data-testid="button-begin-test"]');
+    await page.locator('[data-testid="button-begin-test"]').click({ force: true, noWaitAfter: true });
     await page.waitForTimeout(1000);
-    
+
     // Answer all questions
-    for (let i = 0; i < testContext.questionIds.length; i++) {
+    for (let i = 0; i < shared.questionIds.length; i++) {
       await answerQuestion(page, 0); // Select first option
-      
-      await apiRequest('POST', `/api/attempts/${attemptId}/answers`, testContext.participantToken, {
-        questionId: testContext.questionIds[i],
-        answer: 'Option A'
-      });
-      
+
       await page.waitForTimeout(300);
-      
+
       // Navigate to next question or submit
-      if (i < testContext.questionIds.length - 1) {
+      if (i < shared.questionIds.length - 1) {
         await page.click('[data-testid="button-next"]');
         await page.waitForTimeout(300);
       }
     }
-    
+
     // Submit test
     await page.click('[data-testid="button-submit-test"]');
     await page.waitForTimeout(2000);
-    
+
     // Should be redirected to results page
-    await page.waitForURL('**/participant/results/**', { timeout: 10000 });
-    
+    await page.waitForURL('**/participant/results/**', { timeout: 30000 });
+
     // Verify test is completed
     const attempt = await apiRequest('GET', `/api/attempts/${attemptId}`, testContext.participantToken);
     expect(attempt.status).toBe('completed');
-    expect(attempt.totalScore).toBeGreaterThanOrEqual(0);
-    
+    // Participant view masks totalScore as null until admin enables showAnswers
+    expect(attempt.totalScore).toBeNull();
+
+    // Event admin can see the actual calculated totalScore
+    const adminAttempt = await apiRequest('GET', `/api/attempts/${attemptId}`, shared.eventAdminToken);
+    expect(adminAttempt.status).toBe('completed');
+    expect(adminAttempt.totalScore).toBeGreaterThanOrEqual(0);
+
     await page.screenshot({ path: 'tests/reports/screenshots/test-completed.png', fullPage: true });
   });
 
@@ -605,38 +644,33 @@ test.describe('Test Flow Integration', () => {
     await loginAsParticipant(page);
     await navigateToTest(page);
     await startTest(page);
-    
-    // Check fullscreen at multiple points
-    let isFullscreen = await page.evaluate(() => !!document.fullscreenElement);
-    expect(isFullscreen).toBe(true);
-    
+    await waitForFullscreen(page);
+
     // Answer a question
     await answerQuestion(page, 0);
     await page.waitForTimeout(500);
-    
-    isFullscreen = await page.evaluate(() => !!document.fullscreenElement);
-    expect(isFullscreen).toBe(true);
-    
+
+    await waitForFullscreen(page);
+
     // Navigate to next question
     await page.click('[data-testid="button-next"]');
     await page.waitForTimeout(500);
-    
-    isFullscreen = await page.evaluate(() => !!document.fullscreenElement);
-    expect(isFullscreen).toBe(true);
+
+    await waitForFullscreen(page);
   });
 
   test('should show timer and time warnings', async ({ page }) => {
     await loginAsParticipant(page);
     await navigateToTest(page);
     await startTest(page);
-    
+
     // Check timer is visible
     await expect(page.locator('[data-testid="text-timer"]')).toBeVisible();
-    
+
     // Get timer text
     const timerText = await page.locator('[data-testid="text-timer"]').textContent();
     expect(timerText).toMatch(/\d+:\d+/);
-    
+
     await page.screenshot({ path: 'tests/reports/screenshots/timer-display.png' });
   });
 
@@ -644,18 +678,13 @@ test.describe('Test Flow Integration', () => {
     await loginAsParticipant(page);
     await navigateToTest(page);
     await startTest(page);
-    
-    // Trigger a refresh violation
-    await apiRequest('POST', `/api/attempts/${testContext.attemptId}/violations`, testContext.participantToken, {
-      type: 'refresh'
-    });
-    
-    await page.waitForTimeout(1000);
-    
-    // Check for toast notification or warning message
-    // (This depends on the implementation - adjust selector as needed)
-    const toastVisible = await page.locator('.toast, [role="alert"], [data-testid="toast"]').count() > 0;
-    
+
+    // Trigger a real tab-switch violation so the frontend warning alert renders
+    await triggerTabSwitch(page, 1);
+
+    // Check for the violation warning alert (shown for ~5 seconds)
+    await expect(page.locator('[role="alert"]')).toBeVisible({ timeout: 5000 });
+
     // Take screenshot to show warning
     await page.screenshot({ path: 'tests/reports/screenshots/violation-warning.png' });
   });
@@ -667,7 +696,7 @@ test.describe('Edge Cases and Error Handling', () => {
     await loginAsParticipant(page);
     await navigateToTest(page);
     await startTest(page);
-    
+
     // Log multiple violations rapidly
     const promises: Promise<any>[] = [];
     for (let i = 0; i < 5; i++) {
@@ -677,10 +706,10 @@ test.describe('Edge Cases and Error Handling', () => {
         }).catch(() => {}) // Ignore errors for completed tests
       );
     }
-    
+
     await Promise.all(promises);
     await page.waitForTimeout(1000);
-    
+
     // Should handle gracefully without crashing
     const attempt = await apiRequest('GET', `/api/attempts/${testContext.attemptId}`, testContext.participantToken);
     expect(attempt).toBeDefined();
@@ -688,36 +717,57 @@ test.describe('Edge Cases and Error Handling', () => {
 
   test('should prevent duplicate test attempts', async ({ page }) => {
     await loginAsParticipant(page);
-    
-    // Try to start test twice
-    const firstAttemptRes = await apiRequest('POST', `/api/events/${testContext.eventId}/rounds/${testContext.roundId}/start`, testContext.participantToken, {});
-    
-    // Second attempt should fail
-    try {
-      await apiRequest('POST', `/api/events/${testContext.eventId}/rounds/${testContext.roundId}/start`, testContext.participantToken, {});
-      throw new Error('Should have failed');
-    } catch (error: any) {
-      expect(error.message).toContain('already have an attempt');
-    }
+
+    // First attempt should succeed (201 Created)
+    const firstAttemptRes = await fetch(
+      `${BASE_URL}/api/events/${shared.eventId}/rounds/${shared.roundId}/start`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${testContext.participantToken}`
+        },
+        body: '{}'
+      }
+    );
+    expect(firstAttemptRes.status).toBe(201);
+    const firstAttempt = await firstAttemptRes.json();
+    expect(firstAttempt.id).toBeTruthy();
+
+    // Second attempt must be rejected with the duplicate-attempt message
+    const secondAttemptRes = await fetch(
+      `${BASE_URL}/api/events/${shared.eventId}/rounds/${shared.roundId}/start`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${testContext.participantToken}`
+        },
+        body: '{}'
+      }
+    );
+    expect(secondAttemptRes.status).toBe(400);
+    const secondAttemptBody = await secondAttemptRes.json();
+    expect(secondAttemptBody.message).toContain('already have an attempt');
   });
 
   test('should handle window blur events', async ({ page }) => {
     await loginAsParticipant(page);
     await navigateToTest(page);
     await startTest(page);
-    
+
     const initialViolations = await getViolationCount(testContext.attemptId);
-    
+
     // Trigger window blur
     await page.evaluate(() => {
       window.dispatchEvent(new Event('blur'));
     });
-    
-    await page.waitForTimeout(1000);
-    
-    // Check if blur is treated as tab switch
-    const finalViolations = await getViolationCount(testContext.attemptId);
-    // Note: Depending on implementation, blur might trigger tab switch violation
+
+    // Blur is treated as a tab switch violation
+    await expect.poll(
+      async () => (await getViolationCount(testContext.attemptId)).tabSwitch,
+      { timeout: 10000 }
+    ).toBeGreaterThan(initialViolations.tabSwitch);
   });
 });
 

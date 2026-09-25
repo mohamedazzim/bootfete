@@ -3,6 +3,22 @@ import { QueryClient, QueryFunction } from "@tanstack/react-query";
 async function throwIfResNotOk(res: Response) {
   if (!res.ok) {
     const text = (await res.text()) || res.statusText;
+
+    // Attach structured error fields (code, invalidMembers, department, ...)
+    // from the JSON body so callers can react to machine-readable errors.
+    let json: Record<string, unknown> | null = null;
+    try {
+      json = JSON.parse(text);
+    } catch (e) {
+      json = null;
+    }
+
+    if (json && typeof json === 'object' && typeof json.message === 'string') {
+      const error = new Error(json.message) as Error & Record<string, unknown>;
+      Object.assign(error, json);
+      throw error;
+    }
+
     throw new Error(`${res.status}: ${text}`);
   }
 }
@@ -62,9 +78,9 @@ export const queryClient = new QueryClient({
       queryFn: getQueryFn({ on401: "throw" }),
       refetchInterval: false,
       refetchOnWindowFocus: false,
-      refetchOnReconnect: false,
-      staleTime: 5 * 60 * 1000, // 5 minutes - consider data fresh
-      gcTime: 10 * 60 * 1000, // 10 minutes - garbage collection time
+      refetchOnReconnect: true, // Enable reconnect refetch for real-time app
+      staleTime: 30 * 1000, // 30 seconds - reduced for faster WebSocket-triggered refetches
+      gcTime: 5 * 60 * 1000, // 5 minutes - garbage collection time
       retry: 1, // Retry once on failure
     },
     mutations: {

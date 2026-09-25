@@ -5,12 +5,29 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Check, ChevronsUpDown } from "lucide-react";
+import { cn } from "@/lib/utils";
+import {
+    Command,
+    CommandEmpty,
+    CommandGroup,
+    CommandInput,
+    CommandItem,
+} from "@/components/ui/command";
+import {
+    Popover,
+    PopoverContent,
+    PopoverTrigger,
+} from "@/components/ui/popover";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Badge } from "@/components/ui/badge";
 import { CheckCircle, AlertCircle, Plus, Trash2, Users, Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { RegistrationForm, Event } from "@shared/schema";
+import { PAPER_PRESENTATION_TOPICS, FOOD_TYPES, DEPARTMENT_OPTIONS, type FoodType } from "@shared/schema";
 
 interface EventWithRounds extends Event {
     rounds?: Array<{ startTime: Date | string | null; endTime: Date | string | null }>;
@@ -21,7 +38,192 @@ interface TeamMember {
     name: string;
     email: string;
     dept: string;
+    deptIsOther?: boolean; // Track if "Others" was selected for department
     phone: string;
+    foodType: FoodType;
+    foodTypeLocked?: boolean; // Track if food type is locked from participant registry
+}
+
+interface DynamicFormFieldProps {
+    field: {
+        id: string;
+        label: string;
+        type: string;
+        required: boolean;
+        placeholder?: string;
+        options?: string[];
+    };
+    value: string;
+    onChange: (value: string) => void;
+    onBlur?: () => void;
+    colleges: string[];
+}
+
+function DynamicFormField({ field, value, onChange, onBlur, colleges }: DynamicFormFieldProps) {
+    const [isManualEntry, setIsManualEntry] = useState(false);
+    const [open, setOpen] = useState(false);
+    const label = field.label.toLowerCase();
+    const isCollegeField = (label.includes('college') || label.includes('institution')) &&
+        !label.includes('roll') &&
+        !label.includes('no') &&
+        !label.includes('number') &&
+        !label.includes('id');
+    const isRollNoField = label.includes('roll') || label.includes('register number');
+    const isDeptField = (label.includes('dept') || label.includes('department')) &&
+        !label.includes('id') &&
+        !label.includes('code');
+
+    // Initialize manual entry state if value is present but not in the list
+    useEffect(() => {
+        if (isCollegeField && value && colleges.length > 0 && !colleges.includes(value)) {
+            setIsManualEntry(true);
+        }
+        // For department field, check if value is not in DEPARTMENT_OPTIONS (excluding "Others")
+        if (isDeptField && value && !DEPARTMENT_OPTIONS.slice(0, -1).includes(value as any)) {
+            setIsManualEntry(true);
+        }
+    }, [value, colleges, isCollegeField, isDeptField]);
+
+    // Department field with dropdown
+    if (isDeptField) {
+        // Determine the select value - show "Others" if manual entry, otherwise show the value or empty
+        const selectValue = isManualEntry ? "Others" : (value && DEPARTMENT_OPTIONS.slice(0, -1).includes(value as any) ? value : "");
+
+        return (
+            <div className="space-y-2">
+                <Label htmlFor={field.id}>
+                    {field.label} {field.required && <span className="text-destructive">*</span>}
+                </Label>
+                <div className="flex flex-col gap-2">
+                    <Select
+                        value={selectValue || undefined}
+                        onValueChange={(val) => {
+                            if (val === "Others") {
+                                setIsManualEntry(true);
+                                onChange(""); // Clear to allow manual entry
+                            } else {
+                                setIsManualEntry(false);
+                                onChange(val);
+                            }
+                        }}
+                    >
+                        <SelectTrigger>
+                            <SelectValue placeholder="Select department..." />
+                        </SelectTrigger>
+                        <SelectContent>
+                            {DEPARTMENT_OPTIONS.map((dept) => (
+                                <SelectItem key={dept} value={dept}>
+                                    {dept}
+                                </SelectItem>
+                            ))}
+                        </SelectContent>
+                    </Select>
+
+                    {isManualEntry && (
+                        <Input
+                            className="mt-1"
+                            placeholder="Enter your department"
+                            value={value}
+                            onChange={(e) => onChange(e.target.value)}
+                            required={field.required}
+                            autoFocus
+                        />
+                    )}
+                </div>
+            </div>
+        );
+    }
+
+    if (isCollegeField) {
+        return (
+            <div className="space-y-2">
+                <Label htmlFor={field.id}>
+                    {field.label} {field.required && <span className="text-destructive">*</span>}
+                </Label>
+                <div className="flex flex-col gap-2">
+                    <Popover open={open} onOpenChange={setOpen}>
+                        <PopoverTrigger asChild>
+                            <Button
+                                variant="outline"
+                                role="combobox"
+                                aria-expanded={open}
+                                className="w-full justify-between font-normal"
+                            >
+                                {isManualEntry ? "Other (Enter below)" : (value || "Select college...")}
+                                <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                            </Button>
+                        </PopoverTrigger>
+                        <PopoverContent className="w-full p-0" align="start">
+                            <Command>
+                                <CommandInput placeholder="Search college..." />
+                                <CommandEmpty>No college found.</CommandEmpty>
+                                <CommandGroup className="max-h-64 overflow-auto">
+                                    {colleges.map((college) => (
+                                        <CommandItem
+                                            key={college}
+                                            value={college}
+                                            onSelect={() => {
+                                                setIsManualEntry(false);
+                                                onChange(college);
+                                                setOpen(false);
+                                            }}
+                                        >
+                                            <Check
+                                                className={cn(
+                                                    "mr-2 h-4 w-4",
+                                                    value === college ? "opacity-100" : "opacity-0"
+                                                )}
+                                            />
+                                            {college}
+                                        </CommandItem>
+                                    ))}
+                                    <CommandItem
+                                        value="Other"
+                                        onSelect={() => {
+                                            setIsManualEntry(true);
+                                            onChange(""); // Clear value to allow typing
+                                            setOpen(false);
+                                        }}
+                                    >
+                                        <Check className={cn("mr-2 h-4 w-4", isManualEntry ? "opacity-100" : "opacity-0")} />
+                                        Other
+                                    </CommandItem>
+                                </CommandGroup>
+                            </Command>
+                        </PopoverContent>
+                    </Popover>
+
+                    {isManualEntry && (
+                        <Input
+                            className="mt-1"
+                            placeholder="Enter your college name"
+                            value={value}
+                            onChange={(e) => onChange(e.target.value)}
+                            required={field.required}
+                            autoFocus
+                        />
+                    )}
+                </div>
+            </div>
+        );
+    }
+
+    return (
+        <div className="space-y-2">
+            <Label htmlFor={field.id}>
+                {field.label} {field.required && <span className="text-destructive">*</span>}
+            </Label>
+            <Input
+                id={field.id}
+                type={field.type}
+                placeholder={field.placeholder || ''}
+                value={value || ""}
+                onChange={(e) => onChange(e.target.value)}
+                onBlur={isRollNoField ? onBlur : undefined}
+                required={field.required}
+            />
+        </div>
+    );
 }
 
 export default function PublicRegistrationFormPage() {
@@ -33,7 +235,72 @@ export default function PublicRegistrationFormPage() {
     const [selectedNonTech, setSelectedNonTech] = useState<string | null>(null);
     const [submitted, setSubmitted] = useState(false);
     const [teamMembers, setTeamMembers] = useState<Record<string, TeamMember[]>>({});
+    const [batchResults, setBatchResults] = useState<any[]>([]);
     const [isSubmitting, setIsSubmitting] = useState(false);
+
+    // New state for organizer food type and paper topics
+    const [organizerFoodType, setOrganizerFoodType] = useState<FoodType>('veg');
+    const [organizerFoodTypeLocked, setOrganizerFoodTypeLocked] = useState(false);
+    const [paperTopics, setPaperTopics] = useState<Record<string, string>>({});
+
+    // College list state
+    const [colleges, setColleges] = useState<string[]>([]);
+
+    useEffect(() => {
+        fetch('/api/colleges')
+            .then(res => res.json())
+            .then(data => setColleges(data))
+            .catch(err => console.error("Failed to fetch colleges:", err));
+    }, []);
+
+    // Lookup participant by roll number to pre-fill food type
+    const lookupParticipantFoodType = async (rollNo: string): Promise<{ found: boolean; foodType?: FoodType }> => {
+        if (!rollNo || rollNo.trim().length === 0) return { found: false };
+        try {
+            const res = await fetch(`/api/participants/by-roll/${encodeURIComponent(rollNo.trim())}`);
+            if (res.ok) {
+                const data = await res.json();
+                if (data.found && data.participant) {
+                    return { found: true, foodType: data.participant.foodType as FoodType };
+                }
+            }
+            return { found: false };
+        } catch (err) {
+            console.error("Error looking up participant:", err);
+            return { found: false };
+        }
+    };
+
+    // Handle organizer roll number blur - lookup food preference
+    const handleOrganizerRollNoBlur = async () => {
+        const rollNoField = form?.formFields.find(f =>
+            f.label.toLowerCase().includes('roll') ||
+            f.id.toLowerCase().includes('roll') ||
+            f.label.toLowerCase().includes('register number')
+        );
+        if (!rollNoField) return;
+
+        const rollNo = formData[rollNoField.id];
+        if (!rollNo) return;
+
+        const result = await lookupParticipantFoodType(rollNo);
+        if (result.found && result.foodType) {
+            setOrganizerFoodType(result.foodType);
+            setOrganizerFoodTypeLocked(true);
+            toast({
+                title: "Food preference loaded",
+                description: `Your food preference (${result.foodType === 'veg' ? 'Vegetarian' : 'Non-Vegetarian'}) was loaded from your previous registration.`,
+            });
+        } else {
+            setOrganizerFoodTypeLocked(false);
+        }
+    };
+
+    // Helper to check if event is Paper Presentation
+    const isPaperPresentation = (eventName: string) => {
+        const normalized = eventName.toLowerCase();
+        return normalized.includes('paper presentation') || normalized.includes('quanta talks');
+    };
 
     const { data: form, isLoading: isLoadingForm } = useQuery<RegistrationForm>({
         queryKey: [`/api/registration-forms/${slug}`],
@@ -60,7 +327,7 @@ export default function PublicRegistrationFormPage() {
             }
             return 'Time TBA';
         }
-        // ... (rest of time formatting logic same as before)
+
         const firstRound = event.rounds[0];
         if (!firstRound.startTime || !firstRound.endTime) return 'Time TBA';
         const startDate = new Date(firstRound.startTime);
@@ -84,7 +351,7 @@ export default function PublicRegistrationFormPage() {
     const handleAddTeamMember = (eventId: string) => {
         setTeamMembers(prev => ({
             ...prev,
-            [eventId]: [...(prev[eventId] || []), { rollNo: '', name: '', email: '', dept: '', phone: '' }]
+            [eventId]: [...(prev[eventId] || []), { rollNo: '', name: '', email: '', dept: '', deptIsOther: false, phone: '', foodType: 'veg' as FoodType, foodTypeLocked: false }]
         }));
     };
 
@@ -95,12 +362,49 @@ export default function PublicRegistrationFormPage() {
         }));
     };
 
-    const handleTeamMemberChange = (eventId: string, index: number, field: keyof TeamMember, value: string) => {
+    const handleTeamMemberChange = (eventId: string, index: number, field: keyof TeamMember, value: string | boolean) => {
         setTeamMembers(prev => {
             const members = [...(prev[eventId] || [])];
-            members[index] = { ...members[index], [field]: value };
+            // Handle deptIsOther as boolean
+            if (field === 'deptIsOther') {
+                members[index] = { ...members[index], [field]: value === 'true' || value === true };
+            } else {
+                members[index] = { ...members[index], [field]: value };
+            }
             return { ...prev, [eventId]: members };
         });
+    };
+
+    // Handle team member roll number blur - lookup food preference
+    const handleTeamMemberRollNoBlur = async (eventId: string, index: number) => {
+        const members = teamMembers[eventId];
+        if (!members || !members[index]) return;
+
+        const rollNo = members[index].rollNo;
+        if (!rollNo) return;
+
+        const result = await lookupParticipantFoodType(rollNo);
+        if (result.found && result.foodType) {
+            setTeamMembers(prev => {
+                const updatedMembers = [...(prev[eventId] || [])];
+                updatedMembers[index] = {
+                    ...updatedMembers[index],
+                    foodType: result.foodType!,
+                    foodTypeLocked: true
+                };
+                return { ...prev, [eventId]: updatedMembers };
+            });
+        } else {
+            // Unlock food type if not found
+            setTeamMembers(prev => {
+                const updatedMembers = [...(prev[eventId] || [])];
+                updatedMembers[index] = {
+                    ...updatedMembers[index],
+                    foodTypeLocked: false
+                };
+                return { ...prev, [eventId]: updatedMembers };
+            });
+        }
     };
 
     const handleSubmit = async (e: React.FormEvent) => {
@@ -131,7 +435,7 @@ export default function PublicRegistrationFormPage() {
             errors.push("Could not identify required student details (Name, Roll No, Email, Dept, Phone) from the form. Please ensure these fields are filled.");
         }
 
-        // 3. Validate Team Members
+        // 3. Validate Team Members and Paper Topics
         selectedEventIds.forEach(eventId => {
             const event = events?.find(e => e.id === eventId);
             if (event) {
@@ -149,6 +453,10 @@ export default function PublicRegistrationFormPage() {
                         errors.push(`${event.name}: Please fill all details for Team Member ${idx + 1}`);
                     }
                 });
+                // Validate paper topic for Paper Presentation events
+                if (isPaperPresentation(event.name) && !paperTopics[eventId]) {
+                    errors.push(`${event.name}: Please select a paper topic`);
+                }
             }
         });
 
@@ -160,15 +468,15 @@ export default function PublicRegistrationFormPage() {
         setIsSubmitting(true);
 
         try {
-            // 4. Submit for each selected event
-            for (const eventId of selectedEventIds) {
+            // 4. Submit all events in batch
+            const registrations = selectedEventIds.map(eventId => {
                 const event = events?.find(e => e.id === eventId);
-                if (!event) continue;
+                if (!event) return null;
 
                 const members = teamMembers[eventId] || [];
                 const registrationType = (event.minMembers > 1 || members.length > 0) ? 'team' : 'solo';
 
-                await apiRequest('POST', '/api/register', {
+                return {
                     eventId,
                     organizerRollNo,
                     organizerName,
@@ -176,49 +484,61 @@ export default function PublicRegistrationFormPage() {
                     organizerDept,
                     organizerCollege,
                     organizerPhone,
+                    organizerFoodType,
                     registrationType,
+                    paperTopic: isPaperPresentation(event.name) ? paperTopics[eventId] : undefined,
                     teamMembers: members.map(m => ({
                         memberRollNo: m.rollNo,
                         memberName: m.name,
                         memberEmail: m.email,
                         memberDept: m.dept,
-                        memberPhone: m.phone
+                        memberPhone: m.phone,
+                        memberFoodType: m.foodType
                     }))
-                });
-            }
+                };
+            }).filter(Boolean);
 
-            setSubmitted(true);
-            toast({ title: "Success", description: "Registration submitted successfully!" });
+            if (registrations.length > 0) {
+                const res = await apiRequest('POST', '/api/register/batch', { registrations });
+                const data = await res.json();
+
+                if (data.successfulCount === registrations.length) {
+                    setBatchResults(data.results);
+                    setSubmitted(true);
+                    toast({ title: "Success", description: "Registration submitted successfully!" });
+                } else if (data.successfulCount > 0) {
+                    setBatchResults(data.results);
+                    setSubmitted(true);
+                    toast({
+                        title: "Partial Success",
+                        description: `Registered for ${data.successfulCount} out of ${registrations.length} events. See details below.`,
+                        variant: "default"
+                    });
+                } else {
+                    // All failed
+                    const firstError = data.results.find((r: any) => !r.success);
+                    throw new Error(firstError?.message || "Registration failed for all selected events");
+                }
+            } else {
+                throw new Error("No valid events selected");
+            }
         } catch (error: any) {
             let description: React.ReactNode = error.message || "An error occurred during registration";
-
-            // Try to parse JSON error message from backend
-            try {
-                // Backend error message format from apiRequest is usually "Status: JSON_BODY"
-                const jsonStart = error.message.indexOf('{');
-                if (jsonStart !== -1) {
-                    const jsonPart = error.message.substring(jsonStart);
-                    const errorObj = JSON.parse(jsonPart);
-
-                    if (errorObj.invalidMembers && Array.isArray(errorObj.invalidMembers)) {
-                        description = (
-                            <div className="flex flex-col gap-2 mt-2">
-                                <p className="font-semibold">{errorObj.message}</p>
-                                <ul className="list-disc pl-4 space-y-2 text-sm">
-                                    {errorObj.invalidMembers.map((m: any, idx: number) => (
-                                        <li key={idx}>
-                                            <span className="font-semibold">{m.name}</span> ({m.rollNo}) - {m.reason}
-                                        </li>
-                                    ))}
-                                </ul>
-                            </div>
-                        );
-                    } else if (errorObj.message) {
-                        description = errorObj.message;
-                    }
-                }
-            } catch (e) {
-                console.error("Failed to parse registration error toast", e);
+            // apiRequest attaches structured fields (invalidMembers, ...) from
+            // the JSON error body, so member-level conflicts can be shown directly
+            if (error?.invalidMembers && Array.isArray(error.invalidMembers)) {
+                description = (
+                    <div className="flex flex-col gap-2 mt-2">
+                        <p className="font-semibold">{error.message}</p>
+                        <ul className="list-disc pl-4 space-y-2 text-sm">
+                            {error.invalidMembers.map((m: any, idx: number) => (
+                                <li key={idx}>
+                                    <span className="font-semibold">{m.name}</span> ({m.rollNo}) - {m.reason}
+                                </li>
+                            ))}
+                        </ul>
+                    </div>
+                );
             }
 
             toast({
@@ -239,11 +559,47 @@ export default function PublicRegistrationFormPage() {
     if (isLoadingForm) return <div className="min-h-screen flex items-center justify-center"><Loader2 className="h-8 w-8 animate-spin" /></div>;
     if (!form || !form.isActive) return <div className="min-h-screen flex items-center justify-center">Form not available</div>;
     if (submitted) return (
-        <div className="min-h-screen flex items-center justify-center bg-muted/30">
-            <Card className="max-w-lg p-8 text-center">
-                <CheckCircle className="h-20 w-20 text-green-600 mx-auto mb-4" />
-                <h2 className="text-3xl font-bold mb-3">Registration Submitted!</h2>
-                <p className="text-muted-foreground">Thank you for registering. Check your email for confirmation.</p>
+        <div className="min-h-screen flex items-center justify-center bg-muted/30 p-4">
+            <Card className="max-w-lg w-full p-6">
+                <div className="text-center mb-6">
+                    <CheckCircle className="h-16 w-16 text-green-600 mx-auto mb-4" />
+                    <h2 className="text-2xl font-bold mb-2">Registration Processed</h2>
+                    <p className="text-muted-foreground text-sm">Here is the status of your registration request:</p>
+                </div>
+
+                <div className="space-y-4 mb-6">
+                    {batchResults.map((result, idx) => {
+                        const eventName = events?.find(e => e.id === result.eventId)?.name || "Unknown Event";
+                        return (
+                            <div key={idx} className={`p-3 rounded-lg border flex items-start gap-3 ${result.success ? 'bg-green-50 border-green-200' : 'bg-red-50 border-red-200'}`}>
+                                {result.success ? (
+                                    <CheckCircle className="h-5 w-5 text-green-600 flex-shrink-0 mt-0.5" />
+                                ) : (
+                                    <AlertCircle className="h-5 w-5 text-red-600 flex-shrink-0 mt-0.5" />
+                                )}
+                                <div>
+                                    <div className={`font-medium ${result.success ? 'text-green-900' : 'text-red-900'}`}>
+                                        {eventName}
+                                    </div>
+                                    <div className={`text-sm ${result.success ? 'text-green-700' : 'text-red-700'}`}>
+                                        {result.success ? "Successfully registered" : (result.message || "Registration failed")}
+                                    </div>
+                                    {result.invalidMembers && result.invalidMembers.length > 0 && (
+                                        <ul className="list-disc list-inside text-xs mt-1 text-red-600">
+                                            {result.invalidMembers.map((m: any, i: number) => (
+                                                <li key={i}>{m.name}: {m.reason}</li>
+                                            ))}
+                                        </ul>
+                                    )}
+                                </div>
+                            </div>
+                        );
+                    })}
+                </div>
+
+                <Button className="w-full" onClick={() => window.location.reload()}>
+                    Register for Another Event
+                </Button>
             </Card>
         </div>
     );
@@ -269,18 +625,37 @@ export default function PublicRegistrationFormPage() {
                         <CardContent>
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                 {form.formFields.map((field) => (
-                                    <div key={field.id} className="space-y-2">
-                                        <Label htmlFor={field.id}>{field.label} {field.required && <span className="text-destructive">*</span>}</Label>
-                                        <Input
-                                            id={field.id}
-                                            type={field.type}
-                                            placeholder={field.placeholder || ''}
-                                            value={formData[field.id] || ""}
-                                            onChange={(e) => handleChange(field.id, e.target.value)}
-                                            required={field.required}
-                                        />
-                                    </div>
+                                    <DynamicFormField
+                                        key={field.id}
+                                        field={field}
+                                        value={formData[field.id] || ""}
+                                        onChange={(value) => handleChange(field.id, value)}
+                                        onBlur={handleOrganizerRollNoBlur}
+                                        colleges={colleges}
+                                    />
                                 ))}
+                                {/* Food Type Selection for Organizer */}
+                                <div className="space-y-2">
+                                    <Label htmlFor="organizerFoodType">
+                                        Food Preference <span className="text-destructive">*</span>
+                                    </Label>
+                                    <Select
+                                        value={organizerFoodType}
+                                        onValueChange={(value) => setOrganizerFoodType(value as FoodType)}
+                                        disabled={organizerFoodTypeLocked}
+                                    >
+                                        <SelectTrigger id="organizerFoodType" className={organizerFoodTypeLocked ? "opacity-70" : ""}>
+                                            <SelectValue placeholder="Select food preference" />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            <SelectItem value="veg">🥬 Vegetarian</SelectItem>
+                                            <SelectItem value="nonveg">🍗 Non-Vegetarian</SelectItem>
+                                        </SelectContent>
+                                    </Select>
+                                    {organizerFoodTypeLocked && (
+                                        <p className="text-xs text-muted-foreground">🔒 Food preference locked for this roll number</p>
+                                    )}
+                                </div>
                             </div>
                         </CardContent>
                     </Card>
@@ -330,6 +705,33 @@ export default function PublicRegistrationFormPage() {
                                                                     </span>
                                                                 </div>
 
+                                                                {/* Paper Presentation Topic Selection */}
+                                                                {section.selected === event.id && isPaperPresentation(event.name) && (
+                                                                    <div className="mt-4 p-4 bg-background rounded-md border">
+                                                                        <div className="space-y-2">
+                                                                            <Label htmlFor={`paper-topic-${event.id}`} className="font-medium">
+                                                                                📝 Paper Topic <span className="text-destructive">*</span>
+                                                                            </Label>
+                                                                            <Select
+                                                                                value={paperTopics[event.id] || ''}
+                                                                                onValueChange={(value) => setPaperTopics(prev => ({ ...prev, [event.id]: value }))}
+                                                                            >
+                                                                                <SelectTrigger id={`paper-topic-${event.id}`}>
+                                                                                    <SelectValue placeholder="Select your paper topic" />
+                                                                                </SelectTrigger>
+                                                                                <SelectContent>
+                                                                                    {PAPER_PRESENTATION_TOPICS.map((topic) => (
+                                                                                        <SelectItem key={topic} value={topic}>
+                                                                                            {topic}
+                                                                                        </SelectItem>
+                                                                                    ))}
+                                                                                </SelectContent>
+                                                                            </Select>
+                                                                            <p className="text-xs text-muted-foreground">Select the topic your paper/presentation will cover</p>
+                                                                        </div>
+                                                                    </div>
+                                                                )}
+
                                                                 {/* Team Member Input Section */}
                                                                 {section.selected === event.id && event.maxMembers > 1 && (
                                                                     <div className="mt-4 p-4 bg-background rounded-md border">
@@ -344,13 +746,67 @@ export default function PublicRegistrationFormPage() {
 
                                                                         <div className="space-y-3">
                                                                             {(teamMembers[event.id] || []).map((member, idx) => (
-                                                                                <div key={idx} className="grid grid-cols-1 md:grid-cols-6 gap-2 items-end border-b pb-3 last:border-0">
-                                                                                    <div className="md:col-span-1"><Label className="text-xs">Roll No</Label><Input value={member.rollNo} onChange={e => handleTeamMemberChange(event.id, idx, 'rollNo', e.target.value)} className="h-8" placeholder="Roll No" /></div>
-                                                                                    <div className="md:col-span-1"><Label className="text-xs">Name</Label><Input value={member.name} onChange={e => handleTeamMemberChange(event.id, idx, 'name', e.target.value)} className="h-8" placeholder="Name" /></div>
-                                                                                    <div className="md:col-span-1"><Label className="text-xs">Email</Label><Input value={member.email} onChange={e => handleTeamMemberChange(event.id, idx, 'email', e.target.value)} className="h-8" placeholder="Email" /></div>
-                                                                                    <div className="md:col-span-1"><Label className="text-xs">Dept</Label><Input value={member.dept} onChange={e => handleTeamMemberChange(event.id, idx, 'dept', e.target.value)} className="h-8" placeholder="Dept" /></div>
-                                                                                    <div className="md:col-span-1"><Label className="text-xs">Phone</Label><Input value={member.phone} onChange={e => handleTeamMemberChange(event.id, idx, 'phone', e.target.value)} className="h-8" placeholder="Phone" /></div>
-                                                                                    <div className="md:col-span-1 flex justify-end"><Button type="button" variant="ghost" size="icon" onClick={() => handleRemoveTeamMember(event.id, idx)} className="h-8 w-8 text-destructive"><Trash2 className="h-4 w-4" /></Button></div>
+                                                                                <div key={idx} className="space-y-2 border-b pb-3 last:border-0">
+                                                                                    <div className="grid grid-cols-1 md:grid-cols-5 gap-2 items-end">
+                                                                                        <div className="md:col-span-1"><Label className="text-xs">Roll No</Label><Input value={member.rollNo} onChange={e => handleTeamMemberChange(event.id, idx, 'rollNo', e.target.value)} onBlur={() => handleTeamMemberRollNoBlur(event.id, idx)} className="h-8" placeholder="Roll No" /></div>
+                                                                                        <div className="md:col-span-1"><Label className="text-xs">Name</Label><Input value={member.name} onChange={e => handleTeamMemberChange(event.id, idx, 'name', e.target.value)} className="h-8" placeholder="Name" /></div>
+                                                                                        <div className="md:col-span-1"><Label className="text-xs">Email</Label><Input value={member.email} onChange={e => handleTeamMemberChange(event.id, idx, 'email', e.target.value)} className="h-8" placeholder="Email" /></div>
+                                                                                        <div className="md:col-span-1"><Label className="text-xs">Phone</Label><Input value={member.phone} onChange={e => handleTeamMemberChange(event.id, idx, 'phone', e.target.value)} className="h-8" placeholder="Phone" /></div>
+                                                                                        <div className="md:col-span-1 flex justify-end"><Button type="button" variant="ghost" size="icon" onClick={() => handleRemoveTeamMember(event.id, idx)} className="h-8 w-8 text-destructive"><Trash2 className="h-4 w-4" /></Button></div>
+                                                                                    </div>
+                                                                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                                                                                        <div>
+                                                                                            <Label className="text-xs">Department</Label>
+                                                                                            <Select
+                                                                                                value={member.deptIsOther ? "Others" : (member.dept && DEPARTMENT_OPTIONS.slice(0, -1).includes(member.dept as any) ? member.dept : undefined)}
+                                                                                                onValueChange={(value) => {
+                                                                                                    if (value === "Others") {
+                                                                                                        handleTeamMemberChange(event.id, idx, 'deptIsOther', 'true');
+                                                                                                        handleTeamMemberChange(event.id, idx, 'dept', '');
+                                                                                                    } else {
+                                                                                                        handleTeamMemberChange(event.id, idx, 'deptIsOther', '');
+                                                                                                        handleTeamMemberChange(event.id, idx, 'dept', value);
+                                                                                                    }
+                                                                                                }}
+                                                                                            >
+                                                                                                <SelectTrigger className="h-8">
+                                                                                                    <SelectValue placeholder="Select dept" />
+                                                                                                </SelectTrigger>
+                                                                                                <SelectContent>
+                                                                                                    {DEPARTMENT_OPTIONS.map((dept) => (
+                                                                                                        <SelectItem key={dept} value={dept}>{dept}</SelectItem>
+                                                                                                    ))}
+                                                                                                </SelectContent>
+                                                                                            </Select>
+                                                                                            {member.deptIsOther && (
+                                                                                                <Input
+                                                                                                    className="h-8 mt-1"
+                                                                                                    placeholder="Enter department"
+                                                                                                    value={member.dept}
+                                                                                                    onChange={e => handleTeamMemberChange(event.id, idx, 'dept', e.target.value)}
+                                                                                                />
+                                                                                            )}
+                                                                                        </div>
+                                                                                        <div>
+                                                                                            <Label className="text-xs">Food Preference {member.foodTypeLocked && <span className="text-muted-foreground">🔒</span>}</Label>
+                                                                                            <Select
+                                                                                                value={member.foodType}
+                                                                                                onValueChange={(value) => handleTeamMemberChange(event.id, idx, 'foodType', value)}
+                                                                                                disabled={member.foodTypeLocked}
+                                                                                            >
+                                                                                                <SelectTrigger className={`h-8 ${member.foodTypeLocked ? "opacity-70" : ""}`}>
+                                                                                                    <SelectValue placeholder="Select" />
+                                                                                                </SelectTrigger>
+                                                                                                <SelectContent>
+                                                                                                    <SelectItem value="veg">🥬 Veg</SelectItem>
+                                                                                                    <SelectItem value="nonveg">🍗 Non-Veg</SelectItem>
+                                                                                                </SelectContent>
+                                                                                            </Select>
+                                                                                            {member.foodTypeLocked && (
+                                                                                                <p className="text-xs text-muted-foreground mt-1">Locked from previous registration</p>
+                                                                                            )}
+                                                                                        </div>
+                                                                                    </div>
                                                                                 </div>
                                                                             ))}
                                                                             {(teamMembers[event.id]?.length || 0) === 0 && event.minMembers > 1 && (

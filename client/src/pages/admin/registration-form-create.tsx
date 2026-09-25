@@ -7,19 +7,21 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useLocation } from "wouter";
-import { Plus, Trash2, Check, Copy, Upload, X, Image } from "lucide-react";
+import { Plus, Trash2, Check, Copy, Upload, X, Image, QrCode } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import AdminLayout from "@/components/layouts/AdminLayout";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { nanoid } from "nanoid";
 import type { Event, RegistrationForm } from "@shared/schema";
+import QRCodeLib from "qrcode";
 
 interface FormField {
   id: string;
   label: string;
-  type: 'text' | 'email' | 'tel' | 'number';
+  type: 'text' | 'email' | 'tel' | 'number' | 'select';
   required: boolean;
   placeholder?: string;
+  options?: string[];
 }
 
 export default function RegistrationFormCreatePage() {
@@ -161,6 +163,47 @@ export default function RegistrationFormCreatePage() {
     }
   };
 
+  const generateAndDownloadQR = async () => {
+    if (createdForm) {
+      try {
+        const link = `${window.location.origin}/register/${createdForm.formSlug}`;
+        const qrCodeDataUrl = await QRCodeLib.toDataURL(link, {
+          width: 400,
+          margin: 2,
+          errorCorrectionLevel: 'H',
+          type: 'image/png',
+        });
+
+        // Convert data URL to blob for better download handling
+        const response = await fetch(qrCodeDataUrl);
+        const blob = await response.blob();
+        const blobUrl = URL.createObjectURL(blob);
+
+        // Create download link
+        const downloadLink = document.createElement('a');
+        downloadLink.href = blobUrl;
+        downloadLink.download = `registration-qr-${createdForm.formSlug}.png`;
+        document.body.appendChild(downloadLink);
+        downloadLink.click();
+        document.body.removeChild(downloadLink);
+
+        // Clean up blob URL
+        URL.revokeObjectURL(blobUrl);
+
+        toast({
+          title: "QR Code downloaded",
+          description: "QR code saved successfully as PNG",
+        });
+      } catch (error) {
+        toast({
+          title: "Error",
+          description: "Failed to generate QR code",
+          variant: "destructive",
+        });
+      }
+    }
+  };
+
   if (!events || events.length === 0) {
     return (
       <AdminLayout>
@@ -234,10 +277,14 @@ export default function RegistrationFormCreatePage() {
                 </div>
               </div>
 
-              <div className="flex gap-3 pt-4">
+              <div className="flex flex-col sm:flex-row gap-3 pt-4">
                 <Button onClick={copyLink} data-testid="button-copy-link">
                   <Copy className="h-4 w-4 mr-2" />
                   Copy Link
+                </Button>
+                <Button onClick={generateAndDownloadQR} variant="secondary" data-testid="button-generate-qr">
+                  <QrCode className="h-4 w-4 mr-2" />
+                  Generate QR Code
                 </Button>
                 <Button variant="outline" onClick={() => setLocation('/admin/registration-forms')} data-testid="button-view-all">
                   View All Forms
@@ -368,6 +415,7 @@ export default function RegistrationFormCreatePage() {
                                   <SelectItem value="email">Email</SelectItem>
                                   <SelectItem value="tel">Phone</SelectItem>
                                   <SelectItem value="number">Number</SelectItem>
+                                  <SelectItem value="select">Select (Dropdown)</SelectItem>
                                 </SelectContent>
                               </Select>
                             </div>
@@ -382,6 +430,21 @@ export default function RegistrationFormCreatePage() {
                               />
                             </div>
                           </div>
+
+                          {/* Options for Select type */}
+                          {field.type === 'select' && (
+                            <div className="mt-3 p-3 bg-muted/50 rounded-md">
+                              <label className="text-xs font-medium text-muted-foreground mb-2 block">Options (one per line)</label>
+                              <Textarea
+                                value={(field.options || []).join('\n')}
+                                onChange={(e) => updateField(field.id, { options: e.target.value.split('\n').filter(o => o.trim()) })}
+                                placeholder="Veg\nNon-veg"
+                                className="min-h-[80px] font-mono text-sm"
+                                data-testid={`input-options-${field.id}`}
+                              />
+                              <p className="text-xs text-muted-foreground mt-1">Enter each option on a new line</p>
+                            </div>
+                          )}
 
                           <div className="flex items-center gap-2">
                             <Checkbox
@@ -478,12 +541,24 @@ export default function RegistrationFormCreatePage() {
                           <label className="text-sm font-medium block">
                             {field.label || 'Field Label'} {field.required && <span className="text-destructive">*</span>}
                           </label>
-                          <Input
-                            type={field.type}
-                            placeholder={field.placeholder || `Enter ${field.label || 'value'}...`}
-                            disabled
-                            className="bg-muted/50 border-2"
-                          />
+                          {field.type === 'select' ? (
+                            <select
+                              disabled
+                              className="w-full bg-muted/50 border-2 rounded-md px-3 py-2 text-sm"
+                            >
+                              <option value="">{field.placeholder || 'Select an option...'}</option>
+                              {(field.options || []).map((opt, i) => (
+                                <option key={i} value={opt}>{opt}</option>
+                              ))}
+                            </select>
+                          ) : (
+                            <Input
+                              type={field.type}
+                              placeholder={field.placeholder || `Enter ${field.label || 'value'}...`}
+                              disabled
+                              className="bg-muted/50 border-2"
+                            />
+                          )}
                         </div>
                       ))
                     ) : (

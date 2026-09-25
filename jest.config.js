@@ -29,6 +29,7 @@ export default {
     ],
   },
   transformIgnorePatterns: [],
+  testPathIgnorePatterns: ['/node_modules/', '/tests/e2e/'],
   testMatch: [
     '**/tests/**/*.test.ts',
     '**/tests/**/*.spec.ts'

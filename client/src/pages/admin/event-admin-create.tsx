@@ -66,7 +66,7 @@ export default function EventAdminCreatePage() {
       }
 
       queryClient.invalidateQueries({ queryKey: ['/api/users'] });
-      queryClient.invalidateQueries({ queryKey: ['/api/events/unassigned'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/events'] });
 
       toast({
         title: 'Event Admin created',

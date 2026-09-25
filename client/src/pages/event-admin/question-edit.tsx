@@ -15,7 +15,7 @@ import { apiRequest, queryClient } from '@/lib/queryClient';
 import { insertQuestionSchema } from '@shared/schema';
 import type { Question } from '@shared/schema';
 import { z } from 'zod';
-import { ArrowLeft, Plus, X, Loader2 } from 'lucide-react';
+import { ArrowLeft, Plus, X, Loader2, Upload } from 'lucide-react';
 
 const formSchema = insertQuestionSchema.omit({
   options: true,
@@ -23,7 +23,7 @@ const formSchema = insertQuestionSchema.omit({
   expectedOutput: true,
   testCases: true
 }).extend({
-  questionType: z.enum(['mcq', 'true_false', 'short_answer', 'coding']),
+  questionType: z.enum(['mcq', 'true_false', 'short_answer', 'coding', 'image_mcq']),
 });
 
 type FormData = z.infer<typeof formSchema>;
@@ -36,6 +36,39 @@ export default function QuestionEditPage() {
   const [mcqOptions, setMcqOptions] = useState<string[]>(['', '', '', '']);
   const [correctAnswer, setCorrectAnswer] = useState<string>('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Image MCQ state
+  const [imageOptions, setImageOptions] = useState<{ file: File | null; preview: string; url: string }[]>([]);
+  const [correctImageIndex, setCorrectImageIndex] = useState<number | null>(null);
+  const [isCompressing, setIsCompressing] = useState(false);
+
+  // Compress image for faster upload (5MB -> ~150KB)
+  const compressImage = async (file: File, maxWidth = 1200, quality = 0.8): Promise<File> => {
+    return new Promise((resolve) => {
+      const img = new window.Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        let { width, height } = img;
+        if (width > maxWidth) {
+          height = Math.round((height * maxWidth) / width);
+          width = maxWidth;
+        }
+        canvas.width = width;
+        canvas.height = height;
+        canvas.getContext('2d')!.drawImage(img, 0, 0, width, height);
+        canvas.toBlob(
+          (blob) => {
+            const compressedFile = new File([blob!], file.name, { type: 'image/jpeg' });
+            URL.revokeObjectURL(img.src);
+            resolve(compressedFile);
+          },
+          'image/jpeg',
+          quality
+        );
+      };
+      img.src = URL.createObjectURL(file);
+    });
+  };
 
   const { data: question, isLoading } = useQuery<Question>({
     queryKey: ['/api/rounds', roundId, 'questions', questionId],
@@ -64,7 +97,15 @@ export default function QuestionEditPage() {
       });
       setQuestionType(question.questionType);
 
-      if (question.options && Array.isArray(question.options)) {
+      if (question.questionType === 'image_mcq' && question.options && Array.isArray(question.options)) {
+        // Load existing image URLs
+        const urls = question.options as string[];
+        setImageOptions(urls.map(url => ({ file: null, preview: url, url })));
+        if (question.correctAnswer) {
+          const idx = urls.indexOf(question.correctAnswer);
+          setCorrectImageIndex(idx >= 0 ? idx : null);
+        }
+      } else if (question.options && Array.isArray(question.options)) {
         setMcqOptions(question.options as string[]);
       }
 
@@ -105,6 +146,63 @@ export default function QuestionEditPage() {
         }
         questionData.options = validOptions;
         questionData.correctAnswer = correctAnswer;
+      } else if (questionType === 'image_mcq') {
+        // Handle Image MCQ update
+        const validImages = imageOptions.filter(opt => opt.preview || opt.url);
+        if (validImages.length < 2) {
+          toast({
+            title: 'Invalid options',
+            description: 'Please provide at least 2 images for Image MCQ',
+            variant: 'destructive',
+          });
+          setIsSubmitting(false);
+          return;
+        }
+        if (correctImageIndex === null) {
+          toast({
+            title: 'Missing correct answer',
+            description: 'Please select the correct image option',
+            variant: 'destructive',
+          });
+          setIsSubmitting(false);
+          return;
+        }
+
+        // Upload any new images
+        const filesToUpload = imageOptions.filter(opt => opt.file).map(opt => opt.file as File);
+        let updatedOptions = [...imageOptions];
+
+        if (filesToUpload.length > 0) {
+          const formData = new FormData();
+          filesToUpload.forEach(file => formData.append('images', file));
+
+          const token = localStorage.getItem('token');
+          const uploadResponse = await fetch('/api/upload/question-images', {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${token}` },
+            body: formData
+          });
+
+          if (!uploadResponse.ok) {
+            const errorData = await uploadResponse.json();
+            throw new Error(errorData.message || 'Failed to upload images');
+          }
+
+          const { urls } = await uploadResponse.json();
+          let urlIndex = 0;
+          updatedOptions = imageOptions.map(opt => {
+            if (opt.file) {
+              return { ...opt, url: urls[urlIndex++], file: null };
+            }
+            return opt;
+          });
+          setImageOptions(updatedOptions);
+        }
+
+        const validUrls = updatedOptions.filter(opt => opt.url).map(opt => opt.url);
+        questionData.options = validUrls;
+        questionData.correctAnswer = validUrls[correctImageIndex];
+        questionData.questionType = 'image_mcq';
       } else if (questionType === 'true_false') {
         questionData.options = ['True', 'False'];
         questionData.correctAnswer = correctAnswer || 'True';
@@ -228,6 +326,7 @@ export default function QuestionEditPage() {
                           <SelectItem value="true_false">True/False</SelectItem>
                           <SelectItem value="short_answer">Short Answer</SelectItem>
                           <SelectItem value="coding">Coding Question</SelectItem>
+                          <SelectItem value="image_mcq">Image Question</SelectItem>
                         </SelectContent>
                       </Select>
                       <FormMessage />
@@ -395,6 +494,160 @@ export default function QuestionEditPage() {
                       className="min-h-[100px]"
                       data-testid="input-expected-output"
                     />
+                  </div>
+                )}
+
+                {questionType === 'image_mcq' && (
+                  <div className="space-y-4">
+                    <div className="flex justify-between items-center">
+                      <div>
+                        <FormLabel>Image Options</FormLabel>
+                        <FormDescription>Edit images (2-6). Select one as correct answer.</FormDescription>
+                      </div>
+                      {imageOptions.length < 6 && (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setImageOptions([...imageOptions, { file: null, preview: '', url: '' }])}
+                          data-testid="button-add-image-option"
+                        >
+                          <Plus className="h-4 w-4 mr-1" />
+                          Add Image
+                        </Button>
+                      )}
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4">
+                      {imageOptions.map((option, index) => (
+                        <div
+                          key={index}
+                          className={`relative border-2 rounded-lg p-3 ${correctImageIndex === index
+                            ? 'border-green-500 bg-green-50'
+                            : 'border-gray-200 hover:border-gray-300'
+                            }`}
+                        >
+                          {option.preview ? (
+                            <div className="space-y-2">
+                              <img
+                                src={option.preview.startsWith('/') || option.preview.startsWith('data:')
+                                  ? option.preview
+                                  : `/${option.preview}`}
+                                alt={`Option ${index + 1}`}
+                                className="w-full h-32 object-contain rounded bg-gray-100"
+                              />
+                              <div className="flex items-center justify-between">
+                                <label className="flex items-center gap-2 cursor-pointer">
+                                  <input
+                                    type="radio"
+                                    name="correctImage"
+                                    checked={correctImageIndex === index}
+                                    onChange={() => setCorrectImageIndex(index)}
+                                    className="h-4 w-4"
+                                  />
+                                  <span className="text-sm font-medium">Correct</span>
+                                </label>
+                                <div className="flex gap-1">
+                                  <label className="cursor-pointer">
+                                    <Button type="button" variant="ghost" size="sm" asChild>
+                                      <span>Replace</span>
+                                    </Button>
+                                    <input
+                                      type="file"
+                                      accept="image/*"
+                                      className="hidden"
+                                      onChange={async (e) => {
+                                        const file = e.target.files?.[0];
+                                        if (file) {
+                                          setIsCompressing(true);
+                                          try {
+                                            const compressedFile = await compressImage(file);
+                                            const reader = new FileReader();
+                                            reader.onload = (ev) => {
+                                              const newOptions = [...imageOptions];
+                                              newOptions[index] = {
+                                                file: compressedFile,
+                                                preview: ev.target?.result as string,
+                                                url: ''
+                                              };
+                                              setImageOptions(newOptions);
+                                            };
+                                            reader.readAsDataURL(compressedFile);
+                                          } finally {
+                                            setIsCompressing(false);
+                                          }
+                                        }
+                                      }}
+                                    />
+                                  </label>
+                                  {imageOptions.length > 2 && (
+                                    <Button
+                                      type="button"
+                                      variant="ghost"
+                                      size="sm"
+                                      onClick={() => {
+                                        const newOptions = imageOptions.filter((_, i) => i !== index);
+                                        setImageOptions(newOptions);
+                                        if (correctImageIndex === index) {
+                                          setCorrectImageIndex(null);
+                                        } else if (correctImageIndex !== null && correctImageIndex > index) {
+                                          setCorrectImageIndex(correctImageIndex - 1);
+                                        }
+                                      }}
+                                      data-testid={`button-remove-image-${index}`}
+                                    >
+                                      <X className="h-4 w-4" />
+                                    </Button>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          ) : (
+                            <label className="flex flex-col items-center justify-center h-32 cursor-pointer text-gray-500 hover:text-gray-700">
+                              <Upload className="h-8 w-8 mb-2" />
+                              <span className="text-sm">Option {index + 1}</span>
+                              <span className="text-xs">Click to upload</span>
+                              <input
+                                type="file"
+                                accept="image/*"
+                                className="hidden"
+                                onChange={async (e) => {
+                                  const file = e.target.files?.[0];
+                                  if (file) {
+                                    setIsCompressing(true);
+                                    try {
+                                      const compressedFile = await compressImage(file);
+                                      const reader = new FileReader();
+                                      reader.onload = (ev) => {
+                                        const newOptions = [...imageOptions];
+                                        newOptions[index] = {
+                                          file: compressedFile,
+                                          preview: ev.target?.result as string,
+                                          url: ''
+                                        };
+                                        setImageOptions(newOptions);
+                                      };
+                                      reader.readAsDataURL(compressedFile);
+                                    } finally {
+                                      setIsCompressing(false);
+                                    }
+                                  }
+                                }}
+                                data-testid={`input-image-${index}`}
+                              />
+                            </label>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+
+                    {correctImageIndex !== null && (
+                      <div className="p-3 bg-green-50 border border-green-200 rounded-lg">
+                        <span className="text-sm text-green-800">
+                          ✓ Option {correctImageIndex + 1} is marked as the correct answer
+                        </span>
+                      </div>
+                    )}
                   </div>
                 )}
 

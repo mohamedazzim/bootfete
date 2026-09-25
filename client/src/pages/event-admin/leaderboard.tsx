@@ -1,11 +1,15 @@
+import { useState } from 'react';
 import { useParams, useLocation } from 'wouter';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useMutation } from '@tanstack/react-query';
 import EventAdminLayout from '@/components/layouts/EventAdminLayout';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { ArrowLeft, Trophy, Medal, Award, Clock, Printer } from 'lucide-react';
+import { Checkbox } from "@/components/ui/checkbox";
+import { ArrowLeft, Trophy, Medal, Award, Clock, Printer, Send, Users } from 'lucide-react';
+import { useToast } from '@/hooks/use-toast';
+import { queryClient, apiRequest } from '@/lib/queryClient';
 
 interface LeaderboardEntry {
     rank: number;
@@ -13,20 +17,88 @@ interface LeaderboardEntry {
     userName: string;
     totalScore: number;
     maxScore?: number;
-    submittedAt: Date;
+    submittedAt: string | null;
 }
+
+type LeaderboardApiResponse =
+    | LeaderboardEntry[]
+    | {
+        scope: 'admin' | 'participant';
+        answersVisible: boolean;
+        canSelectParticipants?: boolean;
+        leaderboard?: LeaderboardEntry[];
+        participantResult?: any;
+        message?: string;
+    };
 
 export default function EventAdminLeaderboardPage() {
     const { roundId, eventId } = useParams();
     const [, setLocation] = useLocation();
+    const { toast } = useToast();
+    const [selectedUsers, setSelectedUsers] = useState<string[]>([]);
 
-    const { data: leaderboard, isLoading } = useQuery<LeaderboardEntry[]>({
-        queryKey: roundId ? ['/api/rounds', roundId, 'leaderboard'] : ['/api/events', eventId, 'leaderboard'],
+    const leaderboardKey = roundId
+        ? `/api/rounds/${roundId}/leaderboard`
+        : `/api/events/${eventId}/leaderboard`;
+
+    const { data: leaderboardResponse, isLoading } = useQuery<LeaderboardApiResponse>({
+        queryKey: [leaderboardKey],
         enabled: !!(roundId || eventId),
+    });
+
+    const leaderboard: LeaderboardEntry[] | undefined = Array.isArray(leaderboardResponse)
+        ? leaderboardResponse
+        : leaderboardResponse?.leaderboard;
+
+    const publishMutation = useMutation({
+        mutationFn: async (userIds: string[]) => {
+            if (!roundId) throw new Error("Round ID is missing");
+            const res = await apiRequest('POST', `/api/rounds/${roundId}/publish-results`, { userIds });
+            return res.json();
+        },
+        onSuccess: (data) => {
+            toast({
+                title: "Results Published",
+                description: `Sent emails to ${selectedUsers.length} participants.`,
+            });
+            setSelectedUsers([]);
+            queryClient.invalidateQueries({ queryKey: [leaderboardKey] });
+        },
+        onError: () => {
+            toast({
+                title: "Error",
+                description: "Failed to publish results.",
+                variant: "destructive"
+            });
+        }
     });
 
     const handlePrint = () => {
         window.print();
+    };
+
+    const toggleSelectAll = () => {
+        if (!leaderboard) return;
+        if (selectedUsers.length === leaderboard.length) {
+            setSelectedUsers([]);
+        } else {
+            setSelectedUsers(leaderboard.map(u => u.userId));
+        }
+    };
+
+    const toggleUser = (userId: string) => {
+        if (selectedUsers.includes(userId)) {
+            setSelectedUsers(selectedUsers.filter(id => id !== userId));
+        } else {
+            setSelectedUsers([...selectedUsers, userId]);
+        }
+    };
+
+    const handlePublish = () => {
+        if (selectedUsers.length === 0) return;
+        if (confirm(`Send result emails to ${selectedUsers.length} participants?`)) {
+            publishMutation.mutate(selectedUsers);
+        }
     };
 
     if (isLoading) {
@@ -99,11 +171,24 @@ export default function EventAdminLeaderboardPage() {
                             Print Leaderboard
                         </Button>
                     </div>
-                    <div className="flex items-center gap-3 mb-2">
-                        <Trophy className="h-8 w-8 text-yellow-500" />
-                        <h1 className="text-3xl font-bold text-gray-900">
-                            Event Leaderboard
-                        </h1>
+
+                    <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center gap-3">
+                            <Trophy className="h-8 w-8 text-yellow-500" />
+                            <h1 className="text-3xl font-bold text-gray-900">
+                                Event Leaderboard
+                            </h1>
+                        </div>
+                        {roundId && (
+                            <Button
+                                onClick={handlePublish}
+                                disabled={selectedUsers.length === 0 || publishMutation.isPending}
+                                className="print:hidden"
+                            >
+                                <Send className="mr-2 h-4 w-4" />
+                                {publishMutation.isPending ? 'Sending...' : `Publish to Selected (${selectedUsers.length})`}
+                            </Button>
+                        )}
                     </div>
                     <p className="text-gray-600">
                         {roundId ? 'Round Rankings' : 'Event Rankings'} • {leaderboard.length} Participants
@@ -169,14 +254,24 @@ export default function EventAdminLeaderboardPage() {
                 {/* Full Leaderboard Table */}
                 <Card>
                     <CardHeader>
-                        <CardTitle>Complete Rankings</CardTitle>
-                        <CardDescription>Ranked by score, then by submission time (earlier submissions rank higher)</CardDescription>
+                        <div className="flex justify-between items-center">
+                            <div>
+                                <CardTitle>Complete Rankings</CardTitle>
+                                <CardDescription>Ranked by score, then by submission time</CardDescription>
+                            </div>
+                            {roundId && (
+                                <Button size="sm" variant="outline" onClick={toggleSelectAll}>
+                                    {selectedUsers.length === leaderboard.length ? "Deselect All" : "Select All"}
+                                </Button>
+                            )}
+                        </div>
                     </CardHeader>
                     <CardContent>
                         <div className="overflow-x-auto">
                             <Table>
                                 <TableHeader>
                                     <TableRow>
+                                        {roundId && <TableHead className="w-10"><Checkbox checked={selectedUsers.length === leaderboard.length && leaderboard.length > 0} onCheckedChange={toggleSelectAll} /></TableHead>}
                                         <TableHead className="w-20">Rank</TableHead>
                                         <TableHead>Participant</TableHead>
                                         <TableHead className="text-right">Score</TableHead>
@@ -189,6 +284,14 @@ export default function EventAdminLeaderboardPage() {
                                             key={entry.userId}
                                             className={entry.rank <= 3 ? 'bg-gray-50' : ''}
                                         >
+                                            {roundId && (
+                                                <TableCell>
+                                                    <Checkbox
+                                                        checked={selectedUsers.includes(entry.userId)}
+                                                        onCheckedChange={() => toggleUser(entry.userId)}
+                                                    />
+                                                </TableCell>
+                                            )}
                                             <TableCell>
                                                 <div className="flex items-center justify-center">
                                                     <Badge
@@ -209,7 +312,7 @@ export default function EventAdminLeaderboardPage() {
                                             <TableCell className="text-right text-sm text-gray-600">
                                                 <div className="flex items-center justify-end gap-1">
                                                     <Clock className="h-3 w-3" />
-                                                    {new Date(entry.submittedAt).toLocaleString()}
+                                                    {entry.submittedAt ? new Date(entry.submittedAt).toLocaleString() : 'Not submitted'}
                                                 </div>
                                             </TableCell>
                                         </TableRow>

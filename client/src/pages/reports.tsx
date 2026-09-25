@@ -20,7 +20,8 @@ export default function ReportsPage() {
   const [isDownloading, setIsDownloading] = useState(false);
 
   const { data: events, isLoading: eventsLoading } = useQuery<Event[]>({
-    queryKey: user?.role === 'super_admin' ? ['/api/events'] : ['/api/events/admin/assigned'],
+    // super_admin gets all events; event_admin gets only its assigned events
+    queryKey: user?.role === 'super_admin' ? ['/api/events'] : ['/api/event-admin/events'],
   });
 
   const handleDownload = async () => {

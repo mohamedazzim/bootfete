@@ -18,16 +18,16 @@ export interface AuthRequest extends Request {
 export async function requireAuth(req: AuthRequest, res: Response, next: NextFunction) {
   try {
     const token = req.headers.authorization?.replace("Bearer ", "");
-    
+
     if (!token) {
-      return res.status(401).json({ message: "Authentication required" });
+      return res.status(401).json({ message: "Authentication required (No Token Provided)" });
     }
 
     const decoded = jwt.verify(token, JWT_SECRET) as { id: string; username: string; role: string; eventId?: string };
     const user = await storage.getUser(decoded.id);
-    
+
     if (!user) {
-      return res.status(401).json({ message: "User not found" });
+      return res.status(401).json({ message: `User not found (ID: ${decoded.id})` });
     }
 
     req.user = {
@@ -63,7 +63,7 @@ export function requireEventAdmin(req: AuthRequest, res: Response, next: NextFun
   }
 
   if (req.user.role !== "event_admin" && req.user.role !== "super_admin") {
-    return res.status(403).json({ message: "Event Admin access required" });
+    return res.status(403).json({ message: `Event Admin access required (Current Role: ${req.user.role})` });
   }
 
   next();
@@ -110,21 +110,21 @@ export async function requireEventAccess(req: AuthRequest, res: Response, next: 
   if (req.user.role === "event_admin") {
     const admins = await storage.getEventAdminsByEvent(eventId);
     const isAssigned = admins.some(admin => admin.id === req.user!.id);
-    
+
     if (!isAssigned) {
       return res.status(403).json({ message: "You are not assigned to this event" });
     }
-    
+
     return next();
   }
 
   if (req.user.role === "participant") {
     const participant = await storage.getParticipantByUserAndEvent(req.user.id, eventId);
-    
+
     if (!participant) {
       return res.status(403).json({ message: "You are not registered for this event" });
     }
-    
+
     return next();
   }
 
@@ -153,12 +153,33 @@ export async function requireRoundAccess(req: AuthRequest, res: Response, next: 
   if (req.user.role === "event_admin") {
     const admins = await storage.getEventAdminsByEvent(round.eventId);
     const isAssigned = admins.some(admin => admin.id === req.user!.id);
-    
+
     if (!isAssigned) {
       return res.status(403).json({ message: "You are not assigned to this event" });
     }
-    
+
     return next();
+  }
+
+  // Allow participants who have an attempt in this round to access round info
+  // This is needed for checking if round is paused/ended during the test
+  if (req.user.role === "participant") {
+    const attempts = await storage.getTestAttemptsByRound(roundId);
+    const hasAttempt = attempts.some(attempt => attempt.userId === req.user!.id);
+
+    if (hasAttempt) {
+      return next();
+    }
+
+    // Also allow if participant is registered for this event
+    const event = await storage.getEvent(round.eventId);
+    if (event) {
+      const participants = await storage.getParticipantsByEvent(round.eventId);
+      const isRegistered = participants.some(p => p.userId === req.user!.id);
+      if (isRegistered) {
+        return next();
+      }
+    }
   }
 
   return res.status(403).json({ message: "Access denied" });
@@ -173,19 +194,34 @@ export async function requireEventAdminOrSuperAdmin(req: AuthRequest, res: Respo
     return next();
   }
 
-  const eventId = req.params.eventId;
+  // Try to get eventId from params, or derive it from roundId
+  let eventId = req.params.eventId;
+
+  // If no eventId but we have roundId, get eventId from the round
+  if (!eventId && req.params.roundId) {
+    const round = await storage.getRound(req.params.roundId);
+    if (round) {
+      eventId = round.eventId;
+    }
+  }
+
+  // For routes without eventId or roundId (like /api/upload/question-image), 
+  // just check if the user is an event_admin
   if (!eventId) {
-    return res.status(400).json({ message: "Event ID is required" });
+    if (req.user.role === "event_admin") {
+      return next();
+    }
+    return res.status(403).json({ message: "Access denied" });
   }
 
   if (req.user.role === "event_admin") {
     const admins = await storage.getEventAdminsByEvent(eventId);
     const isAssigned = admins.some(admin => admin.id === req.user!.id);
-    
+
     if (!isAssigned) {
       return res.status(403).json({ message: "You are not assigned to this event" });
     }
-    
+
     return next();
   }
 

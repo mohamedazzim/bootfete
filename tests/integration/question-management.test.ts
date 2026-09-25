@@ -234,7 +234,8 @@ describe('Question Management Tests', () => {
           .send(questionData);
 
         expect(response.status).toBe(400);
-        expect(response.body.message).toContain('required');
+        expect(response.body.message).toContain('Invalid question data');
+        expect(response.body.message).toContain('questionText');
       });
 
       test('should reject question creation without questionNumber', async () => {
@@ -249,7 +250,8 @@ describe('Question Management Tests', () => {
           .send(questionData);
 
         expect(response.status).toBe(400);
-        expect(response.body.message).toContain('required');
+        expect(response.body.message).toContain('Invalid question data');
+        expect(response.body.message).toContain('questionNumber');
       });
 
       test('should reject question creation without questionType', async () => {
@@ -264,7 +266,8 @@ describe('Question Management Tests', () => {
           .send(questionData);
 
         expect(response.status).toBe(400);
-        expect(response.body.message).toContain('required');
+        expect(response.body.message).toContain('Invalid question data');
+        expect(response.body.message).toContain('questionType');
       });
     });
 

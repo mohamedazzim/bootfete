@@ -53,7 +53,7 @@ export default function RegistrationCommitteeCreatePage() {
         title: "Success",
         description: "Registration Committee user created successfully",
       });
-      setLocation("/admin/event-admins");
+      setLocation("/admin/registration-committee");
     },
     onError: (error: Error) => {
       toast({
@@ -167,7 +167,7 @@ export default function RegistrationCommitteeCreatePage() {
                   <Button
                     type="button"
                     variant="outline"
-                    onClick={() => setLocation('/admin/event-admins')}
+                    onClick={() => setLocation('/admin/registration-committee')}
                     data-testid="button-cancel"
                   >
                     Cancel

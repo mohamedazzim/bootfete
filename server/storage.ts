@@ -1,7 +1,16 @@
-import { eq, and, desc, asc, sql, gte, lte, or } from 'drizzle-orm';
+import { eq, ne, and, desc, asc, sql, gte, lte, or, inArray, isNull } from 'drizzle-orm';
 import { db } from './db';
-import { users, events, eventAdmins, eventRules, rounds, roundRules, questions, participants, testAttempts, answers, reports, registrationForms, registrations, teamMembers, eventCredentials, auditLogs, emailLogs } from '@shared/schema';
-import type { User, InsertUser, Event, InsertEvent, EventRules, InsertEventRules, Round, InsertRound, RoundRules, InsertRoundRules, Question, InsertQuestion, Participant, InsertParticipant, TestAttempt, InsertTestAttempt, Answer, InsertAnswer, Report, InsertReport, RegistrationForm, InsertRegistrationForm, Registration, InsertRegistration, TeamMember, InsertTeamMember, EventCredential, InsertEventCredential, AuditLog, InsertAuditLog, EmailLog, InsertEmailLog } from '@shared/schema';
+import { users, events, eventAdmins, eventRules, rounds, roundRules, questions, participants, testAttempts, answers, reports, registrationForms, registrations, teamMembers, eventCredentials, auditLogs, emailLogs, participantRegistry, manualRoundEntries, eventWinners } from '@shared/schema';
+import type { User, InsertUser, Event, InsertEvent, EventRules, InsertEventRules, Round, InsertRound, RoundRules, InsertRoundRules, Question, InsertQuestion, Participant, InsertParticipant, TestAttempt, InsertTestAttempt, Answer, InsertAnswer, Report, InsertReport, RegistrationForm, InsertRegistrationForm, Registration, InsertRegistration, TeamMember, InsertTeamMember, EventCredential, InsertEventCredential, AuditLog, InsertAuditLog, EmailLog, InsertEmailLog, ParticipantRegistry, InsertParticipantRegistry, FoodType, ManualRoundEntry, InsertManualRoundEntry, EventWinner, InsertEventWinner } from '@shared/schema';
+import { normalizeDepartment } from './lib/departmentUtils';
+
+export interface LeaderboardEntry {
+  userId: string;
+  userName: string;
+  totalScore: number;
+  submittedAt: Date | null;
+  rank: number;
+}
 
 export interface IStorage {
   getUsers(): Promise<User[]>;
@@ -35,9 +44,11 @@ export interface IStorage {
   getRound(id: string): Promise<Round | undefined>;
   createRound(round: InsertRound): Promise<Round>;
   updateRound(id: string, round: Partial<InsertRound>): Promise<Round | undefined>;
-  updateRoundStatus(roundId: string, status: 'not_started' | 'in_progress' | 'completed', timestamp?: Date): Promise<Round | undefined>;
+  updateRoundStatus(roundId: string, status: 'not_started' | 'in_progress' | 'paused' | 'completed', timestamp?: Date | null): Promise<Round | undefined>;
   updateRoundResultsPublished(roundId: string, published: boolean): Promise<Round | undefined>;
+  updateRoundShowAnswers(roundId: string, show: boolean): Promise<Round | undefined>;
   deleteRound(id: string): Promise<void>;
+  deleteRoundTestData(roundId: string): Promise<{ deletedAttempts: number; deletedAnswers: number }>;
 
   getRoundRules(roundId: string): Promise<RoundRules | undefined>;
   createRoundRules(rules: InsertRoundRules): Promise<RoundRules>;
@@ -65,6 +76,7 @@ export interface IStorage {
   deleteTestAttemptsByRound(roundId: string): Promise<void>;
 
   getAnswersByAttempt(attemptId: string): Promise<Answer[]>;
+  getAnswer(id: string): Promise<Answer | undefined>;
   createAnswer(answer: InsertAnswer): Promise<Answer>;
   updateAnswer(id: string, answer: Partial<InsertAnswer>): Promise<Answer | undefined>;
 
@@ -90,24 +102,59 @@ export interface IStorage {
   createTeamRegistration(data: {
     eventId: string;
     organizerRollNo: string;
+    eventName?: string;
     organizerName: string;
     organizerEmail: string;
     organizerDept: string;
+    organizerCollege?: string;
     organizerPhone?: string;
+    organizerFoodType: 'veg' | 'nonveg';
     registrationType: 'solo' | 'team';
+    paperTopic?: string;
     teamMembers?: Array<{
       memberRollNo: string;
       memberName: string;
       memberEmail: string;
       memberDept: string;
       memberPhone?: string;
+      memberFoodType: 'veg' | 'nonveg';
     }>;
   }): Promise<Registration>;
+  createTeamRegistrationAtomic(data: {
+    eventId: string;
+    organizerRollNo: string;
+    eventName?: string;
+    organizerName: string;
+    organizerEmail: string;
+    organizerDept: string;
+    organizerCollege?: string;
+    organizerPhone?: string;
+    organizerFoodType: 'veg' | 'nonveg';
+    registrationType: 'solo' | 'team';
+    paperTopic?: string;
+    teamMembers?: Array<{
+      memberRollNo: string;
+      memberName: string;
+      memberEmail: string;
+      memberDept: string;
+      memberPhone?: string;
+      memberFoodType: 'veg' | 'nonveg';
+    }>;
+  }): Promise<{
+    success: boolean;
+    registration?: Registration;
+    error?: string;
+    department?: string;
+    currentCount?: number;
+  }>;
+  updateRegistration(id: string, updates: Partial<InsertRegistration>): Promise<Registration | undefined>; // NEW METHOD
   getRegistrations(): Promise<any[]>;
   getRegistrationsByEvent(eventId: string): Promise<any[]>;
   getRegistration(id: string): Promise<any | undefined>;
   confirmRegistration(id: string, confirmedBy: string): Promise<Registration>;
   cancelRegistration(id: string): Promise<Registration>;
+  deleteRegistration(id: string): Promise<void>;
+  cleanupStalePendingRegistrations(maxAgeHours?: number): Promise<number>;
 
   // Roll number validation
   checkRollNoCategoryRegistration(rollNo: string, category: 'technical' | 'non_technical'): Promise<{
@@ -121,21 +168,29 @@ export interface IStorage {
   // Team members
   getTeamMembersByRegistration(registrationId: string): Promise<TeamMember[]>;
 
+  // Department participant count (per college)
+  getParticipantCountByDepartment(department: string, college: string): Promise<number>;
+  validateDepartmentParticipantLimit(departments: string[], college: string): Promise<{ valid: boolean; department?: string; currentCount?: number; message?: string }>;
+
   getEventsByIds(eventIds: string[]): Promise<Event[]>;
   createParticipant(userId: string, eventId: string): Promise<Participant>;
 
   createEventCredential(participantUserId: string, eventId: string, eventUsername: string, eventPassword: string): Promise<EventCredential>;
   getEventCredentialsByParticipant(participantUserId: string): Promise<EventCredential[]>;
-  getEventCredentialsByEvent(eventId: string): Promise<Array<EventCredential & { participant: User, event: Event }>>;
+  getEventCredentialsByEvent(eventId: string): Promise<Array<EventCredential & { participant: User, event: Event, paperTopic?: string | null }>>;
   getEventCredential(credentialId: string): Promise<EventCredential | undefined>;
   getEventCredentialByUserAndEvent(userId: string, eventId: string): Promise<EventCredential | undefined>;
   updateEventCredentialTestStatus(credentialId: string, testEnabled: boolean, enabledBy: string): Promise<EventCredential>;
+  updateEventCredentialPassword(credentialId: string, eventPassword: string): Promise<EventCredential | undefined>;
   getEventCredentialsWithParticipants(eventId: string): Promise<Array<EventCredential & { participant: User }>>;
   isUserEventAdmin(userId: string, eventId: string): Promise<boolean>;
+  getEventLeaderboard(eventId: string): Promise<LeaderboardEntry[]>;
+  getRoundLeaderboard(roundId: string): Promise<LeaderboardEntry[]>;
+  exportEventData(eventId: string): Promise<any>;
   getEventById(eventId: string): Promise<Event | undefined>;
   getParticipantCredentialWithDetails(userId: string, eventId: string): Promise<any>;
 
-  getOnSpotParticipantsByCreator(creatorId: string): Promise<Array<User & { eventCredentials: Array<EventCredential & { event: Event }> }>>;
+  getOnSpotParticipantsByCreator(creatorId?: string): Promise<Array<User & { eventCredentials: Array<EventCredential & { event: Event }> }>>;
   updateUserDetails(userId: string, updates: { fullName?: string; email?: string; phone?: string }): Promise<User | undefined>;
   getEventCredentialCountForEvent(eventId: string): Promise<number>;
 
@@ -144,14 +199,103 @@ export interface IStorage {
   getAuditLogsByTarget(targetType: string, targetId: string): Promise<AuditLog[]>;
 
   createEmailLog(log: InsertEmailLog): Promise<EmailLog>;
-  getEmailLogs(filters?: { status?: string; templateType?: string; startDate?: Date; endDate?: Date }): Promise<EmailLog[]>;
-  getEmailLogsByRecipient(email: string): Promise<EmailLog[]>;
+  getEmailLogs(filters?: { status?: string; templateType?: string; startDate?: Date; endDate?: Date; limit?: number; offset?: number }): Promise<Omit<EmailLog, 'metadata'>[]>;
+  getEmailLogsByRecipient(email: string, limit?: number): Promise<EmailLog[]>;
+  getEmailLogsCount(filters?: { status?: string; templateType?: string; startDate?: Date; endDate?: Date }): Promise<number>;
+  getEmailLogCountSince(since: Date, provider?: string): Promise<number>;
+  getEmailLogById(id: string): Promise<EmailLog | null>;
 
   getParticipantsByEventId(eventId: string): Promise<User[]>;
   removeEventFromRegistrations(eventId: string): Promise<void>;
+
+  getRegistrationStats(adminId?: string): Promise<{
+    totalTeams: number;
+    teamsPerEvent: Array<{ eventId: string; eventName: string; count: number }>;
+    teamsPerCollege: Array<{ college: string; count: number }>;
+    totalParticipants: number;
+    vegCount: number;
+    nonVegCount: number;
+  }>;
+
+  // Participant Registry methods (global participant info by roll_no)
+  getParticipantRegistryByRollNo(rollNo: string): Promise<ParticipantRegistry | undefined>;
+  upsertParticipantRegistry(data: {
+    rollNo: string;
+    name: string;
+    email?: string;
+    dept?: string;
+    phone?: string;
+    college?: string;
+    foodType: FoodType;
+  }): Promise<ParticipantRegistry>;
+
+  // Manual Round Entries - for physical/offline round results
+  getManualRoundEntriesByEvent(eventId: string): Promise<ManualRoundEntry[]>;
+  getManualRoundEntriesByEventAndRound(eventId: string, roundNumber: number): Promise<(ManualRoundEntry & { participantEmail: string | null })[]>;
+  createManualRoundEntry(entry: InsertManualRoundEntry): Promise<ManualRoundEntry>;
+  updateManualRoundEntry(id: string, entry: Partial<InsertManualRoundEntry>): Promise<ManualRoundEntry | undefined>;
+  deleteManualRoundEntry(id: string): Promise<void>;
+  deleteManualRoundEntriesByEvent(eventId: string): Promise<void>;
+  deleteManualRoundEntriesByEventAndRound(eventId: string, roundNumber: number): Promise<void>;
+
+  // Event Winners
+  getEventWinners(eventId: string): Promise<EventWinner[]>;
+  createEventWinner(winner: InsertEventWinner): Promise<EventWinner>;
+  updateEventWinner(id: string, winner: Partial<InsertEventWinner>): Promise<EventWinner | undefined>;
+  deleteEventWinner(id: string): Promise<void>;
+  deleteEventWinnersByEvent(eventId: string): Promise<void>;
+
+  // Round 1 qualifiers (from online tests)
+  getRound1Qualifiers(eventId: string, limit?: number): Promise<Array<{
+    userId: string;
+    userName: string;
+    rollNo?: string;
+    college?: string;
+    dept?: string;
+    email?: string;
+    score: number;
+    rank: number;
+  }>>;
+
+  // Batch query methods for performance optimization
+  getUsersByIds(ids: string[]): Promise<User[]>;
+  getAnswersByAttemptIds(attemptIds: string[]): Promise<Answer[]>;
+  getTeamMembersByRegistrationIds(registrationIds: string[]): Promise<TeamMember[]>;
 }
 
 export class DatabaseStorage implements IStorage {
+  private getTeamIdPrefix(eventName?: string): string {
+    const cleaned = (eventName || 'EV').replace(/[^A-Za-z]/g, '').toUpperCase();
+    if (cleaned.length === 0) return 'EV';
+    return cleaned.slice(0, 2).padEnd(2, 'X');
+  }
+
+  private async getNextTeamSequence(eventId: string): Promise<number> {
+    const [row] = await db
+      .select({ maxSeq: sql<number>`COALESCE(MAX(CAST(RIGHT(${registrations.teamId}, 2) AS INTEGER)), 0)` })
+      .from(registrations)
+      .where(eq(registrations.eventId, eventId));
+
+    return ((row?.maxSeq as number | undefined) || 0) + 1;
+  }
+
+  private async resolveEventName(eventId: string, fallbackName?: string): Promise<string> {
+    if (fallbackName) return fallbackName;
+    const event = await this.getEventById(eventId);
+    return event?.name || 'Event';
+  }
+
+  private async generateTeamId(eventId: string, eventName?: string): Promise<string> {
+    const resolvedName = await this.resolveEventName(eventId, eventName);
+    const prefix = this.getTeamIdPrefix(resolvedName);
+    const sequence = await this.getNextTeamSequence(eventId);
+    return `BHC${prefix}${String(sequence).padStart(2, '0')}`;
+  }
+
+  private isTeamIdConflict(error: any): boolean {
+    return error?.code === '23505' && (error?.constraint?.includes('team_id') || (error?.message || '').includes('team_id'));
+  }
+
   async getUsers(): Promise<User[]> {
     return await db.select().from(users);
   }
@@ -159,6 +303,12 @@ export class DatabaseStorage implements IStorage {
   async getUser(id: string): Promise<User | undefined> {
     const [user] = await db.select().from(users).where(eq(users.id, id));
     return user;
+  }
+
+  // Batch query: Get multiple users by their IDs in a single query
+  async getUsersByIds(ids: string[]): Promise<User[]> {
+    if (ids.length === 0) return [];
+    return await db.select().from(users).where(inArray(users.id, ids));
   }
 
   async getUserByUsername(username: string): Promise<User | undefined> {
@@ -327,17 +477,29 @@ export class DatabaseStorage implements IStorage {
     return round;
   }
 
-  async updateRoundStatus(roundId: string, status: 'not_started' | 'in_progress' | 'completed', timestamp?: Date | null): Promise<Round | undefined> {
+  async updateRoundStatus(roundId: string, status: 'not_started' | 'in_progress' | 'paused' | 'completed', timestamp?: Date | null): Promise<Round | undefined> {
     if (status === 'in_progress') {
+      const existingRound = await this.getRound(roundId);
+      const startedAt = timestamp !== undefined ? timestamp : (existingRound?.startedAt || new Date());
       const [round] = await db.update(rounds)
         .set({
           status: 'in_progress',
-          startedAt: timestamp || new Date(),
+          startedAt,
           updatedAt: new Date()
         })
         .where(eq(rounds.id, roundId))
         .returning();
       return round;
+    } else if (status === 'paused') {
+      const [round] = await db.update(rounds)
+        .set({
+          status: 'paused',
+          updatedAt: new Date()
+        })
+        .where(eq(rounds.id, roundId))
+        .returning();
+      return round;
+
     } else if (status === 'completed') {
       const [round] = await db.update(rounds)
         .set({
@@ -374,8 +536,45 @@ export class DatabaseStorage implements IStorage {
     return round;
   }
 
+  async updateRoundShowAnswers(roundId: string, show: boolean): Promise<Round | undefined> {
+    const [round] = await db.update(rounds)
+      .set({
+        showAnswers: show,
+        updatedAt: new Date()
+      })
+      .where(eq(rounds.id, roundId))
+      .returning();
+    return round;
+  }
+
   async deleteRound(id: string): Promise<void> {
     await db.delete(rounds).where(eq(rounds.id, id));
+  }
+
+  async deleteRoundTestData(roundId: string): Promise<{ deletedAttempts: number; deletedAnswers: number }> {
+    // First, get all test attempts for this round to count answers
+    const attemptIds = await db.select({ id: testAttempts.id })
+      .from(testAttempts)
+      .where(eq(testAttempts.roundId, roundId));
+
+    let deletedAnswers = 0;
+    if (attemptIds.length > 0) {
+      // Delete all answers for these attempts
+      const answerResult = await db.delete(answers)
+        .where(sql`${answers.attemptId} IN (${sql.join(attemptIds.map(a => sql`${a.id}`), sql`, `)})`)
+        .returning({ id: answers.id });
+      deletedAnswers = answerResult.length;
+    }
+
+    // Delete all test attempts for this round
+    const attemptResult = await db.delete(testAttempts)
+      .where(eq(testAttempts.roundId, roundId))
+      .returning({ id: testAttempts.id });
+
+    return {
+      deletedAttempts: attemptResult.length,
+      deletedAnswers
+    };
   }
 
   async getRoundRules(roundId: string): Promise<RoundRules | undefined> {
@@ -501,8 +700,19 @@ export class DatabaseStorage implements IStorage {
     return await db.select().from(answers).where(eq(answers.attemptId, attemptId));
   }
 
+  // Batch query: Get all answers for multiple attempts in a single query
+  async getAnswersByAttemptIds(attemptIds: string[]): Promise<Answer[]> {
+    if (attemptIds.length === 0) return [];
+    return await db.select().from(answers).where(inArray(answers.attemptId, attemptIds));
+  }
+
   async createAnswer(insertAnswer: InsertAnswer): Promise<Answer> {
     const [answer] = await db.insert(answers).values(insertAnswer).returning();
+    return answer;
+  }
+
+  async getAnswer(id: string): Promise<Answer | undefined> {
+    const [answer] = await db.select().from(answers).where(eq(answers.id, id)).limit(1);
     return answer;
   }
 
@@ -548,6 +758,25 @@ export class DatabaseStorage implements IStorage {
     const eventParticipants = await this.getParticipantsByEvent(eventId);
     const eventRulesData = await this.getEventRules(eventId);
 
+    // Get all registrations for this event with team members
+    const eventRegistrations = await this.getRegistrationsByEvent(eventId);
+
+    // Calculate college statistics from registrations
+    const collegeMap = new Map<string, { count: number; participants: number }>();
+    for (const reg of eventRegistrations) {
+      const collegeName = reg.organizerCollege || 'Unknown';
+      const current = collegeMap.get(collegeName) || { count: 0, participants: 0 };
+      current.count += 1;
+      // Count organizer + team members as participants
+      current.participants += 1 + (reg.teamMembers?.length || 0);
+      collegeMap.set(collegeName, current);
+    }
+    const collegeStatistics = Array.from(collegeMap.entries()).map(([name, data]) => ({
+      collegeName: name,
+      teamCount: data.count,
+      participantCount: data.participants
+    })).sort((a, b) => b.participantCount - a.participantCount);
+
     const roundsDetails = await Promise.all(
       eventRoundsData.map(async (round) => {
         const questionsData = await this.getQuestionsByRound(round.id);
@@ -591,6 +820,7 @@ export class DatabaseStorage implements IStorage {
         );
 
         const completedAttempts = attemptsData.filter(a => a.attempt.status === 'completed');
+        const inProgressAttempts = attemptsData.filter(a => a.attempt.status === 'in_progress');
         const totalScore = completedAttempts.reduce((sum, a) => sum + (a.attempt.totalScore || 0), 0);
         const avgScore = completedAttempts.length > 0 ? totalScore / completedAttempts.length : 0;
 
@@ -604,16 +834,58 @@ export class DatabaseStorage implements IStorage {
 
         const leaderboard = await this.getRoundLeaderboard(round.id);
 
+        // Get top 3 winners for this round with registration details
+        const top3 = leaderboard.slice(0, 3);
+        const winners = await Promise.all(top3.map(async (entry, index) => {
+          // Find registration for this user
+          const userReg = eventRegistrations.find(r => {
+            // Check if organizer email matches
+            const user = attemptsData.find(a => a.user.id === entry.userId)?.user;
+            if (!user) return false;
+            return r.organizerEmail === user.email ||
+              r.teamMembers?.some((m: any) => m.memberEmail === user.email);
+          });
+
+          return {
+            rank: index + 1,
+            userId: entry.userId,
+            userName: entry.userName,
+            score: entry.totalScore,
+            maxScore: entry.maxScore,
+            submittedAt: entry.submittedAt,
+            college: userReg?.organizerCollege || 'Unknown',
+            rollNo: userReg?.organizerRollNo || null,
+            department: userReg?.organizerDept || null
+          };
+        }));
+
         return {
           roundId: round.id,
           roundName: round.name,
           roundNumber: round.roundNumber,
           duration: round.duration,
           status: round.status,
+          // Enhanced timing information
+          timing: {
+            scheduledStart: round.startTime,
+            scheduledEnd: round.endTime,
+            actualStart: round.startedAt,
+            actualEnd: round.endedAt
+          },
+          // Enhanced attendance
+          attendance: {
+            registered: eventParticipants.length,
+            attempted: attemptsData.length,
+            inProgress: inProgressAttempts.length,
+            completed: completedAttempts.length,
+            completionRate: attemptsData.length > 0 ? Math.round((completedAttempts.length / attemptsData.length) * 100) : 0
+          },
           totalQuestions: questionsData.length,
           totalAttempts: attemptsData.length,
           completedAttempts: completedAttempts.length,
           averageScore: Math.round(avgScore * 100) / 100,
+          // Winners for this round
+          winners,
           questionAnalysis,
           violations,
           leaderboard: leaderboard.slice(0, 10)
@@ -637,18 +909,63 @@ export class DatabaseStorage implements IStorage {
           .filter(a => a.test_attempts.status === 'completed')
           .reduce((sum, a) => sum + (a.test_attempts.totalScore || 0), 0);
 
+        // Find registration info for this participant
+        const userReg = eventRegistrations.find(r =>
+          r.organizerEmail === user?.email ||
+          r.teamMembers?.some((m: any) => m.memberEmail === user?.email)
+        );
+
         return {
           userId: participant.userId,
           userName: user?.fullName,
           email: user?.email,
+          college: userReg?.organizerCollege || null,
+          department: userReg?.organizerDept || null,
+          rollNo: userReg?.organizerRollNo || null,
           registeredAt: participant.registeredAt,
           status: participant.status,
           attemptsCount: attempts.length,
           completedAttempts: attempts.filter(a => a.test_attempts.status === 'completed').length,
-          totalScore
+          totalScore,
+          // Round-wise breakdown
+          roundWiseScores: attempts
+            .filter(a => a.test_attempts.status === 'completed')
+            .map(a => ({
+              roundId: a.rounds.id,
+              roundName: a.rounds.name,
+              score: a.test_attempts.totalScore,
+              maxScore: a.test_attempts.maxScore,
+              submittedAt: a.test_attempts.submittedAt
+            }))
         };
       })
     );
+
+    // Registration data with team members
+    const registrationData = eventRegistrations.map(reg => ({
+      registrationId: reg.id,
+      status: reg.status,
+      registrationType: reg.registrationType,
+      createdAt: reg.createdAt,
+      organizer: {
+        name: reg.organizerName,
+        email: reg.organizerEmail,
+        rollNo: reg.organizerRollNo,
+        department: reg.organizerDept,
+        college: reg.organizerCollege,
+        phone: reg.organizerPhone,
+        foodType: reg.organizerFoodType
+      },
+      teamMembers: reg.teamMembers?.map((m: any) => ({
+        name: m.memberName,
+        email: m.memberEmail,
+        rollNo: m.memberRollNo,
+        department: m.memberDept,
+        phone: m.memberPhone,
+        foodType: m.memberFoodType
+      })) || [],
+      paperTopic: reg.paperTopic
+    }));
 
     const reportData = {
       event: {
@@ -656,15 +973,25 @@ export class DatabaseStorage implements IStorage {
         name: event.name,
         description: event.description,
         type: event.type,
+        category: event.category,
         startDate: event.startDate,
         endDate: event.endDate,
         status: event.status
       },
       rules: eventRulesData,
-      totalRounds: eventRoundsData.length,
-      totalParticipants: eventParticipants.length,
+      // Summary statistics
+      summary: {
+        totalRounds: eventRoundsData.length,
+        totalParticipants: eventParticipants.length,
+        totalRegistrations: eventRegistrations.length,
+        totalColleges: collegeStatistics.length,
+        confirmedRegistrations: eventRegistrations.filter(r => r.status === 'confirmed').length,
+        pendingRegistrations: eventRegistrations.filter(r => r.status === 'pending').length
+      },
+      collegeStatistics,
       rounds: roundsDetails,
       participants: participantDetails,
+      registrations: registrationData,
       generatedAt: new Date().toISOString()
     };
 
@@ -680,14 +1007,47 @@ export class DatabaseStorage implements IStorage {
     return report;
   }
 
+
   async generateSymposiumReport(generatedBy: string): Promise<Report> {
     const allEvents = await this.getEvents();
     const allUsers = await this.getUsers();
+
+    // Get all registrations across all events for college and attendance statistics
+    const allRegistrations = await this.getRegistrations();
+
+    // Calculate unique colleges across all events
+    const allColleges = new Set<string>();
+    for (const reg of allRegistrations) {
+      if (reg.organizerCollege) {
+        allColleges.add(reg.organizerCollege);
+      }
+    }
+
+    // College-wise participation statistics
+    const collegeParticipation = new Map<string, { teams: number; participants: number; events: Set<string> }>();
+    for (const reg of allRegistrations) {
+      const college = reg.organizerCollege || 'Unknown';
+      const current = collegeParticipation.get(college) || { teams: 0, participants: 0, events: new Set<string>() };
+      current.teams += 1;
+      current.participants += 1 + (reg.teamMembers?.length || 0);
+      current.events.add(reg.eventId);
+      collegeParticipation.set(college, current);
+    }
+
+    const collegeStatistics = Array.from(collegeParticipation.entries())
+      .map(([name, data]) => ({
+        collegeName: name,
+        teamCount: data.teams,
+        participantCount: data.participants,
+        eventsParticipated: data.events.size
+      }))
+      .sort((a, b) => b.participantCount - a.participantCount);
 
     const eventSummaries = await Promise.all(
       allEvents.map(async (event) => {
         const eventRoundsData = await db.select().from(rounds).where(eq(rounds.eventId, event.id));
         const eventParticipants = await this.getParticipantsByEvent(event.id);
+        const eventRegs = allRegistrations.filter(r => r.eventId === event.id);
 
         const roundIds = eventRoundsData.map(r => r.id);
         let completedAttempts = 0;
@@ -707,17 +1067,45 @@ export class DatabaseStorage implements IStorage {
             .reduce((sum, a) => sum + (a.totalScore || 0), 0);
         }
 
+        // Get event winner (top performer overall)
+        const eventLeaderboard = await this.getEventLeaderboard(event.id);
+        const topPerformer = eventLeaderboard.length > 0 ? eventLeaderboard[0] : null;
+
+        // Find winner's registration for college info
+        let winnerDetails = null;
+        if (topPerformer) {
+          const winnerUser = await this.getUser(topPerformer.userId);
+          const winnerReg = eventRegs.find(r =>
+            r.organizerEmail === winnerUser?.email ||
+            r.teamMembers?.some((m: any) => m.memberEmail === winnerUser?.email)
+          );
+          winnerDetails = {
+            userId: topPerformer.userId,
+            userName: topPerformer.userName,
+            score: topPerformer.totalScore,
+            college: winnerReg?.organizerCollege || 'Unknown',
+            department: winnerReg?.organizerDept || null
+          };
+        }
+
+        // Count unique colleges for this event
+        const eventColleges = new Set(eventRegs.map(r => r.organizerCollege).filter(Boolean));
+
         return {
           eventId: event.id,
           eventName: event.name,
           eventType: event.type,
+          category: event.category,
           status: event.status,
           totalRounds: eventRoundsData.length,
           totalParticipants: eventParticipants.length,
+          totalRegistrations: eventRegs.length,
+          totalColleges: eventColleges.size,
           totalAttempts,
           completedAttempts,
           completionRate: totalAttempts > 0 ? Math.round((completedAttempts / totalAttempts) * 100) : 0,
-          averageScore: completedAttempts > 0 ? Math.round((totalScore / completedAttempts) * 100) / 100 : 0
+          averageScore: completedAttempts > 0 ? Math.round((totalScore / completedAttempts) * 100) / 100 : 0,
+          winner: winnerDetails
         };
       })
     );
@@ -726,13 +1114,14 @@ export class DatabaseStorage implements IStorage {
       .select({
         userId: testAttempts.userId,
         userName: users.fullName,
+        userEmail: users.email,
         totalScore: sql<number>`SUM(${testAttempts.totalScore})`.as('total_score'),
         attemptsCount: sql<number>`COUNT(*)`.as('attempts_count')
       })
       .from(testAttempts)
       .innerJoin(users, eq(testAttempts.userId, users.id))
       .where(eq(testAttempts.status, 'completed'))
-      .groupBy(testAttempts.userId, users.fullName)
+      .groupBy(testAttempts.userId, users.fullName, users.email)
       .orderBy(desc(sql`SUM(${testAttempts.totalScore})`))
       .limit(50);
 
@@ -753,12 +1142,43 @@ export class DatabaseStorage implements IStorage {
       })
       .from(testAttempts);
 
+    // Enhance top performers with college info
+    const topPerformersWithDetails = await Promise.all(
+      allAttempts.slice(0, 20).map(async (performer, index) => {
+        const performerReg = allRegistrations.find(r =>
+          r.organizerEmail === performer.userEmail ||
+          r.teamMembers?.some((m: any) => m.memberEmail === performer.userEmail)
+        );
+        return {
+          rank: index + 1,
+          userId: performer.userId,
+          userName: performer.userName,
+          email: performer.userEmail,
+          totalScore: performer.totalScore,
+          attemptsCount: performer.attemptsCount,
+          college: performerReg?.organizerCollege || 'Unknown',
+          department: performerReg?.organizerDept || null
+        };
+      })
+    );
+
+    // Registration summary
+    const confirmedRegs = allRegistrations.filter(r => r.status === 'confirmed').length;
+    const pendingRegs = allRegistrations.filter(r => r.status === 'pending').length;
+    const totalTeamSize = allRegistrations.reduce((sum, r) => sum + 1 + (r.teamMembers?.length || 0), 0);
+
     const reportData = {
       overview: {
         totalEvents: allEvents.length,
         activeEvents: allEvents.filter(e => e.status === 'active').length,
         completedEvents: allEvents.filter(e => e.status === 'completed').length,
+        draftEvents: allEvents.filter(e => e.status === 'draft').length,
         totalParticipants: participantCount.length,
+        totalRegistrations: allRegistrations.length,
+        confirmedRegistrations: confirmedRegs,
+        pendingRegistrations: pendingRegs,
+        totalTeamParticipants: totalTeamSize,
+        totalColleges: allColleges.size,
         totalEventAdmins: allUsers.filter(u => u.role === 'event_admin').length,
         totalCompletedAttempts: totalCompletedAttempts[0]?.count || 0,
         totalViolations: {
@@ -766,14 +1186,9 @@ export class DatabaseStorage implements IStorage {
           refreshes: totalViolations[0]?.totalRefreshes || 0
         }
       },
+      collegeStatistics,
       eventSummaries,
-      topPerformers: allAttempts.slice(0, 20).map((performer, index) => ({
-        rank: index + 1,
-        userId: performer.userId,
-        userName: performer.userName,
-        totalScore: performer.totalScore,
-        attemptsCount: performer.attemptsCount
-      })),
+      topPerformers: topPerformersWithDetails,
       generatedAt: new Date().toISOString()
     };
 
@@ -789,30 +1204,8 @@ export class DatabaseStorage implements IStorage {
     return report;
   }
 
-  async getRoundLeaderboard(roundId: string) {
-    const attempts = await db
-      .select({
-        attemptId: testAttempts.id,
-        userId: testAttempts.userId,
-        userName: users.fullName,
-        totalScore: testAttempts.totalScore,
-        maxScore: testAttempts.maxScore,
-        submittedAt: testAttempts.submittedAt,
-        status: testAttempts.status
-      })
-      .from(testAttempts)
-      .innerJoin(users, eq(testAttempts.userId, users.id))
-      .where(and(
-        eq(testAttempts.roundId, roundId),
-        eq(testAttempts.status, 'completed')
-      ))
-      .orderBy(desc(testAttempts.totalScore), asc(testAttempts.submittedAt));
 
-    return attempts.map((attempt, index) => ({
-      ...attempt,
-      rank: index + 1
-    }));
-  }
+
 
   async getEventLeaderboard(eventId: string) {
     const roundsData = await db.select().from(rounds).where(eq(rounds.eventId, eventId));
@@ -827,13 +1220,19 @@ export class DatabaseStorage implements IStorage {
         userId: testAttempts.userId,
         userName: users.fullName,
         totalScore: sql<number>`SUM(${testAttempts.totalScore})`.as('total_score'),
+        maxScore: sql<number>`SUM(${testAttempts.maxScore})`.as('max_score'),
         submittedAt: sql<Date>`MAX(${testAttempts.submittedAt})`.as('last_submitted')
       })
       .from(testAttempts)
       .innerJoin(users, eq(testAttempts.userId, users.id))
+      .leftJoin(participants, and(
+        eq(participants.userId, testAttempts.userId),
+        eq(participants.eventId, eventId)
+      ))
       .where(and(
         sql`${testAttempts.roundId} IN (${sql.join(roundIds.map(id => sql`${id}`), sql`, `)})`,
-        eq(testAttempts.status, 'completed')
+        eq(testAttempts.status, 'completed'),
+        or(ne(participants.status, 'disqualified'), isNull(participants.status))
       ))
       .groupBy(testAttempts.userId, users.fullName)
       .orderBy(desc(sql`SUM(${testAttempts.totalScore})`), asc(sql`MAX(${testAttempts.submittedAt})`));
@@ -844,14 +1243,79 @@ export class DatabaseStorage implements IStorage {
     }));
   }
 
-  async createRegistrationForm(title: string, description: string, formFields: any[], slug: string, headerImage?: string | null): Promise<RegistrationForm> {
+  async getRoundLeaderboard(roundId: string) {
+    const round = await this.getRound(roundId);
+    const eventId = round?.eventId;
+
+    let query = db
+      .select({
+        userId: testAttempts.userId,
+        userName: users.fullName,
+        totalScore: sql<number>`SUM(${testAttempts.totalScore})`.as('total_score'),
+        maxScore: sql<number>`SUM(${testAttempts.maxScore})`.as('max_score'),
+        submittedAt: sql<Date>`MAX(${testAttempts.submittedAt})`.as('last_submitted')
+      })
+      .from(testAttempts)
+      .innerJoin(users, eq(testAttempts.userId, users.id));
+
+    if (eventId) {
+      query = query.leftJoin(participants, and(
+        eq(participants.userId, testAttempts.userId),
+        eq(participants.eventId, eventId)
+      )) as any;
+    }
+
+    const whereConditions: any[] = [
+      eq(testAttempts.roundId, roundId),
+      eq(testAttempts.status, 'completed')
+    ];
+
+    if (eventId) {
+      whereConditions.push(or(ne(participants.status, 'disqualified'), isNull(participants.status)));
+    }
+
+    const attempts = await query
+      .where(and(...whereConditions))
+      .groupBy(testAttempts.userId, users.fullName)
+      .orderBy(desc(sql`SUM(${testAttempts.totalScore})`), asc(sql`MAX(${testAttempts.submittedAt})`));
+
+    return attempts.map((attempt, index) => ({
+      ...attempt,
+      rank: index + 1
+    }));
+  }
+
+  async createRegistrationForm(
+    titleOrData: string | {
+      title: string;
+      description?: string | null;
+      formSlug: string;
+      formFields: any[];
+      headerImage?: string | null;
+      allowedCategories?: Array<'technical' | 'non_technical'>;
+      isActive?: boolean;
+    },
+    description?: string,
+    formFields?: any[],
+    slug?: string,
+    headerImage?: string | null,
+  ): Promise<RegistrationForm> {
+    // Accept both a full object and the legacy positional signature
+    const data = typeof titleOrData === 'object' ? titleOrData : {
+      title: titleOrData,
+      description: description ?? '',
+      formSlug: slug!,
+      formFields: formFields!,
+      headerImage: headerImage ?? null,
+    };
     const [form] = await db.insert(registrationForms).values({
-      title,
-      description,
-      formSlug: slug,
-      formFields,
-      headerImage: headerImage || null,
-      isActive: true
+      title: data.title,
+      description: data.description ?? '',
+      formSlug: data.formSlug,
+      formFields: data.formFields,
+      headerImage: data.headerImage ?? null,
+      allowedCategories: data.allowedCategories ?? ['technical', 'non_technical'],
+      isActive: data.isActive ?? true,
     }).returning();
     return form;
   }
@@ -888,36 +1352,247 @@ export class DatabaseStorage implements IStorage {
 
   // ============ Team-Based Registration Methods ============
 
-  async createTeamRegistration(data: {
+  /**
+   * ATOMIC: Create team registration with department limit validation
+   * 
+   * This method wraps validation + registration creation in a database transaction
+   * to prevent race conditions where concurrent requests could bypass the department limit.
+   * 
+   * @param data - Registration data including organizer and optional team members
+   * @returns Promise resolving to { success, registration?, error?, department?, currentCount? }
+   */
+  async createTeamRegistrationAtomic(data: {
     eventId: string;
+    eventName?: string;
     organizerRollNo: string;
     organizerName: string;
     organizerEmail: string;
     organizerDept: string;
     organizerCollege?: string;
     organizerPhone?: string;
+    organizerFoodType: 'veg' | 'nonveg';
     registrationType: 'solo' | 'team';
+    paperTopic?: string;
     teamMembers?: Array<{
       memberRollNo: string;
       memberName: string;
       memberEmail: string;
       memberDept: string;
       memberPhone?: string;
+      memberFoodType: 'veg' | 'nonveg';
+    }>;
+  }): Promise<{
+    success: boolean;
+    registration?: Registration;
+    error?: string;
+    department?: string;
+    currentCount?: number;
+  }> {
+    const DEPARTMENT_LIMIT = 10;
+
+    // Normalize all department names
+    const normalizedOrganizerDept = normalizeDepartment(data.organizerDept);
+    const allDepartments = [normalizedOrganizerDept];
+
+    if (data.teamMembers && data.teamMembers.length > 0) {
+      data.teamMembers.forEach(m => {
+        const normalizedDept = normalizeDepartment(m.memberDept);
+        if (!allDepartments.includes(normalizedDept)) {
+          allDepartments.push(normalizedDept);
+        }
+      });
+    }
+
+    try {
+      // Step 1: Validate department limits per college (no transaction - Neon HTTP doesn't support)
+      const normalizedCollege = data.organizerCollege ? data.organizerCollege.trim().toUpperCase() : '';
+
+      for (const dept of allDepartments) {
+        // Count confirmed + pending registrations (prevents over-registration) for THIS COLLEGE
+        const organizerCount = await db
+          .select({ rollNo: registrations.organizerRollNo })
+          .from(registrations)
+          .where(
+            and(
+              inArray(registrations.status, ['confirmed', 'pending']),
+              sql`UPPER(TRIM(${registrations.organizerDept})) = ${dept}`,
+              sql`UPPER(TRIM(${registrations.organizerCollege})) = ${normalizedCollege}`
+            )
+          );
+
+        const memberCount = await db
+          .select({ rollNo: teamMembers.memberRollNo })
+          .from(teamMembers)
+          .innerJoin(registrations, eq(teamMembers.registrationId, registrations.id))
+          .where(
+            and(
+              inArray(registrations.status, ['confirmed', 'pending']),
+              sql`UPPER(TRIM(${teamMembers.memberDept})) = ${dept}`,
+              sql`UPPER(TRIM(${registrations.organizerCollege})) = ${normalizedCollege}`
+            )
+          );
+
+        // Get unique roll numbers (participants can be in multiple registrations)
+        const existingRollNos = new Set<string>();
+        organizerCount.forEach(r => existingRollNos.add(r.rollNo));
+        memberCount.forEach(r => existingRollNos.add(r.rollNo));
+
+        const currentCount = existingRollNos.size;
+
+        // Calculate how many NEW unique participants this registration will add
+        const newParticipants = new Set<string>();
+
+        // Check organizer (only if from this dept)
+        const normalizedOrgDept = normalizeDepartment(data.organizerDept);
+        if (normalizedOrgDept === dept && !existingRollNos.has(data.organizerRollNo)) {
+          newParticipants.add(data.organizerRollNo);
+        }
+
+        // Check team members (only from this dept)
+        if (data.teamMembers && data.teamMembers.length > 0) {
+          data.teamMembers.forEach(member => {
+            const memberDept = normalizeDepartment(member.memberDept);
+            if (memberDept === dept && !existingRollNos.has(member.memberRollNo)) {
+              newParticipants.add(member.memberRollNo);
+            }
+          });
+        }
+
+        const newCount = newParticipants.size;
+        const projectedTotal = currentCount + newCount;
+
+        // Reject if adding these new participants would exceed the limit for THIS COLLEGE
+        if (projectedTotal > DEPARTMENT_LIMIT) {
+          return {
+            success: false,
+            error: `Department "${dept}" at ${data.organizerCollege} would exceed the maximum limit of ${DEPARTMENT_LIMIT} unique participants. Current: ${currentCount}, New: ${newCount}, Total would be: ${projectedTotal}`,
+            department: dept,
+            currentCount: currentCount,
+          };
+        }
+      }
+
+      // Step 2: Create registration with generated team ID (retry on rare collisions)
+      let registration: Registration | undefined;
+      for (let attempt = 0; attempt < 5; attempt++) {
+        const teamId = await this.generateTeamId(data.eventId, data.eventName);
+
+        try {
+          const [created] = await db.insert(registrations).values({
+            eventId: data.eventId,
+            organizerRollNo: data.organizerRollNo,
+            organizerName: data.organizerName,
+            organizerEmail: data.organizerEmail,
+            organizerDept: normalizedOrganizerDept, // Store normalized department
+            organizerCollege: data.organizerCollege || null,
+            organizerPhone: data.organizerPhone || null,
+            organizerFoodType: data.organizerFoodType,
+            registrationType: data.registrationType,
+            paperTopic: data.paperTopic || null,
+            status: 'pending',
+            confirmedBy: null,
+            teamId,
+          }).returning();
+
+          registration = created as Registration;
+          break;
+        } catch (error: any) {
+          if (this.isTeamIdConflict(error)) {
+            continue;
+          }
+          throw error;
+        }
+      }
+
+      if (!registration) {
+        throw new Error('Failed to generate unique team ID for registration');
+      }
+
+      // Step 3: Add team members
+      if (data.teamMembers && data.teamMembers.length > 0) {
+        try {
+          await db.insert(teamMembers).values(
+            data.teamMembers.map(member => ({
+              registrationId: registration!.id,
+              memberRollNo: member.memberRollNo,
+              memberName: member.memberName,
+              memberEmail: member.memberEmail,
+              memberDept: normalizeDepartment(member.memberDept), // Store normalized
+              memberPhone: member.memberPhone || null,
+              memberFoodType: member.memberFoodType,
+            }))
+          );
+        } catch (memberError) {
+          // Rollback: Delete registration if team members fail
+          await db.delete(registrations).where(eq(registrations.id, registration.id));
+          throw memberError;
+        }
+      }
+
+      return { success: true, registration };
+    } catch (error: any) {
+      // Log and re-throw unexpected errors
+      console.error('Registration creation error:', error);
+      throw error;
+    }
+  }
+
+  async createTeamRegistration(data: {
+    eventId: string;
+    eventName?: string;
+    organizerRollNo: string;
+    organizerName: string;
+    organizerEmail: string;
+    organizerDept: string;
+    organizerCollege?: string;
+    organizerPhone?: string;
+    organizerFoodType: 'veg' | 'nonveg';
+    registrationType: 'solo' | 'team';
+    paperTopic?: string;
+    teamMembers?: Array<{
+      memberRollNo: string;
+      memberName: string;
+      memberEmail: string;
+      memberDept: string;
+      memberPhone?: string;
+      memberFoodType: 'veg' | 'nonveg';
     }>;
   }): Promise<Registration> {
-    // Create the registration
-    const [registration] = await db.insert(registrations).values({
-      eventId: data.eventId,
-      organizerRollNo: data.organizerRollNo,
-      organizerName: data.organizerName,
-      organizerEmail: data.organizerEmail,
-      organizerDept: data.organizerDept,
-      organizerCollege: data.organizerCollege || null,
-      organizerPhone: data.organizerPhone || null,
-      registrationType: data.registrationType,
-      status: 'pending',
-      confirmedBy: null,
-    }).returning();
+    let registration: Registration | undefined;
+
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const teamId = await this.generateTeamId(data.eventId, data.eventName);
+
+      try {
+        const [created] = await db.insert(registrations).values({
+          eventId: data.eventId,
+          organizerRollNo: data.organizerRollNo,
+          organizerName: data.organizerName,
+          organizerEmail: data.organizerEmail,
+          organizerDept: data.organizerDept,
+          organizerCollege: data.organizerCollege || null,
+          organizerPhone: data.organizerPhone || null,
+          organizerFoodType: data.organizerFoodType,
+          registrationType: data.registrationType,
+          paperTopic: data.paperTopic || null,
+          status: 'pending',
+          confirmedBy: null,
+          teamId,
+        }).returning();
+
+        registration = created as Registration;
+        break;
+      } catch (error: any) {
+        if (this.isTeamIdConflict(error)) {
+          continue;
+        }
+        throw error;
+      }
+    }
+
+    if (!registration) {
+      throw new Error('Failed to generate unique team ID for registration');
+    }
 
     // Add team members if provided
     if (data.teamMembers && data.teamMembers.length > 0) {
@@ -929,10 +1604,10 @@ export class DatabaseStorage implements IStorage {
           memberEmail: member.memberEmail,
           memberDept: member.memberDept,
           memberPhone: member.memberPhone || null,
+          memberFoodType: member.memberFoodType,
         }))
       );
     }
-
     return registration;
   }
 
@@ -1017,12 +1692,52 @@ export class DatabaseStorage implements IStorage {
     return registration;
   }
 
+  async updateRegistration(id: string, updates: Partial<InsertRegistration>): Promise<Registration | undefined> {
+    const [registration] = await db.update(registrations)
+      .set({ ...updates, updatedAt: new Date() })
+      .where(eq(registrations.id, id))
+      .returning();
+    return registration;
+  }
+
   async cancelRegistration(id: string): Promise<Registration> {
     const [registration] = await db.update(registrations).set({
       status: 'cancelled',
       updatedAt: new Date()
     }).where(eq(registrations.id, id)).returning();
     return registration;
+  }
+
+  async deleteRegistration(id: string): Promise<void> {
+    // First delete team members
+    await db.delete(teamMembers).where(eq(teamMembers.registrationId, id));
+    // Then delete the registration
+    await db.delete(registrations).where(eq(registrations.id, id));
+  }
+
+  /**
+   * Cleanup stale pending registrations
+   * 
+   * Cancels pending registrations that are older than the specified age.
+   * This prevents abandoned registrations from permanently blocking department slots.
+   * 
+   * Should be run as a scheduled job (e.g., daily via cron).
+   * 
+   * @param maxAgeHours - Maximum age in hours for pending registrations (default: 24)
+   * @returns Number of registrations cancelled
+   */
+  async cleanupStalePendingRegistrations(maxAgeHours: number = 24): Promise<number> {
+    const result = await db.update(registrations)
+      .set({ status: 'cancelled' })
+      .where(
+        and(
+          eq(registrations.status, 'pending'),
+          sql`${registrations.createdAt} < NOW() - INTERVAL '${sql.raw(maxAgeHours.toString())} hours'`
+        )
+      )
+      .returning();
+
+    return result.length;
   }
 
   async checkRollNoCategoryRegistration(rollNo: string, category: 'technical' | 'non_technical'): Promise<{
@@ -1129,9 +1844,78 @@ export class DatabaseStorage implements IStorage {
     return allRegs;
   }
 
+  async getParticipantsByEventId(eventId: string): Promise<Participant[]> {
+    return await db.select().from(participants).where(eq(participants.eventId, eventId));
+  }
+
   async getTeamMembersByRegistration(registrationId: string): Promise<TeamMember[]> {
     return await db.select().from(teamMembers)
       .where(eq(teamMembers.registrationId, registrationId));
+  }
+
+  async getTeamMembersByRegistrationIds(registrationIds: string[]): Promise<TeamMember[]> {
+    if (registrationIds.length === 0) return [];
+    return await db.select().from(teamMembers)
+      .where(inArray(teamMembers.registrationId, registrationIds));
+  }
+
+  async getParticipantCountByDepartment(department: string, college: string): Promise<number> {
+    // Normalize department for case-insensitive, whitespace-tolerant comparison
+    const normalizedDept = normalizeDepartment(department);
+    // Normalize college for consistent comparison
+    const normalizedCollege = college.trim().toUpperCase();
+
+    // Count unique roll numbers from confirmed + pending registrations in this department AND college
+    // NOTE: Pending registrations count to prevent over-registration
+    // A cleanup job should cancel stale pending registrations (>24 hours old)
+    const organizerCount = await db.select({ rollNo: registrations.organizerRollNo })
+      .from(registrations)
+      .where(
+        and(
+          inArray(registrations.status, ['confirmed', 'pending']),
+          sql`UPPER(TRIM(${registrations.organizerDept})) = ${normalizedDept}`,
+          sql`UPPER(TRIM(${registrations.organizerCollege})) = ${normalizedCollege}`
+        )
+      );
+
+    const memberCount = await db.select({ rollNo: teamMembers.memberRollNo })
+      .from(teamMembers)
+      .innerJoin(registrations, eq(teamMembers.registrationId, registrations.id))
+      .where(
+        and(
+          inArray(registrations.status, ['confirmed', 'pending']),
+          sql`UPPER(TRIM(${teamMembers.memberDept})) = ${normalizedDept}`,
+          sql`UPPER(TRIM(${registrations.organizerCollege})) = ${normalizedCollege}`
+        )
+      );
+
+    // Get unique roll numbers (participants can be in multiple confirmed registrations)
+    const uniqueRollNos = new Set<string>();
+    organizerCount.forEach(r => uniqueRollNos.add(r.rollNo));
+    memberCount.forEach(r => uniqueRollNos.add(r.rollNo));
+
+    return uniqueRollNos.size;
+  }
+
+  async validateDepartmentParticipantLimit(departments: string[], college: string): Promise<{ valid: boolean; department?: string; currentCount?: number; message?: string }> {
+    const DEPARTMENT_LIMIT = 10;
+
+    // Normalize all department names for consistent comparison
+    const normalizedDepartments = departments.map(dept => normalizeDepartment(dept));
+
+    for (const dept of normalizedDepartments) {
+      const count = await this.getParticipantCountByDepartment(dept, college);
+      if (count >= DEPARTMENT_LIMIT) {
+        return {
+          valid: false,
+          department: dept,
+          currentCount: count,
+          message: `Department "${dept}" at ${college} has already reached the maximum limit of ${DEPARTMENT_LIMIT} unique participants.`
+        };
+      }
+    }
+
+    return { valid: true };
   }
 
   async getUniqueColleges(): Promise<string[]> {
@@ -1176,8 +1960,9 @@ export class DatabaseStorage implements IStorage {
       .where(eq(eventCredentials.participantUserId, participantUserId));
   }
 
-  async getEventCredentialsByEvent(eventId: string): Promise<Array<EventCredential & { participant: User, event: Event }>> {
-    const result = await db.select({
+  async getEventCredentialsByEvent(eventId: string): Promise<Array<EventCredential & { participant: User, event: Event, paperTopic?: string | null, realRollNo?: string | null }>> {
+    // First get credentials with participant and event info
+    const credentialsWithDetails = await db.select({
       id: eventCredentials.id,
       participantUserId: eventCredentials.participantUserId,
       eventId: eventCredentials.eventId,
@@ -1195,7 +1980,128 @@ export class DatabaseStorage implements IStorage {
       .innerJoin(events, eq(eventCredentials.eventId, events.id))
       .where(eq(eventCredentials.eventId, eventId));
 
+    // Get paper topics and roll numbers
+    const result = await Promise.all(credentialsWithDetails.map(async (cred) => {
+      let rollNo: string | null = null;
+      let paperTopic: string | null = null;
+
+      // 1. Try to find as organizer in registrations
+      const [registration] = await db.select({
+        paperTopic: registrations.paperTopic,
+        organizerRollNo: registrations.organizerRollNo,
+      })
+        .from(registrations)
+        .where(
+          and(
+            eq(registrations.eventId, eventId),
+            eq(registrations.organizerEmail, cred.participant.email)
+          )
+        )
+        .limit(1);
+
+      if (registration) {
+        paperTopic = registration.paperTopic;
+        rollNo = registration.organizerRollNo;
+      }
+
+      // 2. If not found or if we need to check team members (users could be team members)
+      // Or if simply rollNo is still missing (e.g. for team members who got accounts)
+      if (!rollNo) {
+        // Try participant registry
+        const [registryEntry] = await db.select({
+          rollNo: participantRegistry.rollNo
+        })
+          .from(participantRegistry)
+          .where(eq(participantRegistry.email, cred.participant.email))
+          .limit(1);
+
+        if (registryEntry) {
+          rollNo = registryEntry.rollNo;
+        }
+      }
+
+      return {
+        ...cred,
+        paperTopic: paperTopic || null,
+        realRollNo: rollNo || cred.participant.username // Fallback to username if absolutely nothing found
+      };
+    }));
+
     return result as any;
+  }
+
+  async getConfirmedParticipantsForEvent(eventId: string): Promise<Array<{
+    userId: string;
+    name: string;
+    rollNo: string | null;
+    college: string | null;
+    dept: string | null;
+    email: string;
+  }>> {
+    const credentials = await db.select({
+      participantUserId: eventCredentials.participantUserId,
+      participant: users,
+    })
+      .from(eventCredentials)
+      .innerJoin(users, eq(eventCredentials.participantUserId, users.id))
+      .where(eq(eventCredentials.eventId, eventId))
+      .orderBy(asc(users.fullName));
+
+    const result = await Promise.all(credentials.map(async (cred) => {
+      let rollNo: string | null = null;
+      let college: string | null = null;
+      let dept: string | null = null;
+
+      // 1. Try to find as organizer in registrations
+      const [registration] = await db.select({
+        organizerRollNo: registrations.organizerRollNo,
+        organizerCollege: registrations.organizerCollege,
+        organizerDept: registrations.organizerDept,
+      })
+        .from(registrations)
+        .where(
+          and(
+            eq(registrations.eventId, eventId),
+            eq(registrations.organizerEmail, cred.participant.email)
+          )
+        )
+        .limit(1);
+
+      if (registration) {
+        rollNo = registration.organizerRollNo;
+        college = registration.organizerCollege;
+        dept = registration.organizerDept;
+      }
+
+      // 2. If not found, try participant registry
+      if (!rollNo) {
+        const [registryEntry] = await db.select({
+          rollNo: participantRegistry.rollNo,
+          college: participantRegistry.college,
+          dept: participantRegistry.dept,
+        })
+          .from(participantRegistry)
+          .where(eq(participantRegistry.email, cred.participant.email))
+          .limit(1);
+
+        if (registryEntry) {
+          rollNo = registryEntry.rollNo;
+          college = registryEntry.college;
+          dept = registryEntry.dept;
+        }
+      }
+
+      return {
+        userId: cred.participantUserId,
+        name: cred.participant.fullName,
+        email: cred.participant.email,
+        rollNo: rollNo || cred.participant.username, // Fallback
+        college: college,
+        dept: dept,
+      };
+    }));
+
+    return result;
   }
 
   async getEventCredential(credentialId: string): Promise<EventCredential | undefined> {
@@ -1224,6 +2130,14 @@ export class DatabaseStorage implements IStorage {
 
     const [credential] = await db.update(eventCredentials)
       .set(updateData)
+      .where(eq(eventCredentials.id, credentialId))
+      .returning();
+    return credential;
+  }
+
+  async updateEventCredentialPassword(credentialId: string, eventPassword: string): Promise<EventCredential | undefined> {
+    const [credential] = await db.update(eventCredentials)
+      .set({ eventPassword })
       .where(eq(eventCredentials.id, credentialId))
       .returning();
     return credential;
@@ -1289,7 +2203,7 @@ export class DatabaseStorage implements IStorage {
     const rounds = await this.getRoundsByEvent(eventId);
     const eventRules = await this.getEventRules(eventId);
 
-    const activeRound = rounds.find(r => r.status === 'active');
+    const activeRound = rounds.find(r => r.status === 'in_progress');
     let activeRoundRules = null;
     if (activeRound) {
       activeRoundRules = await this.getRoundRules(activeRound.id);
@@ -1386,11 +2300,18 @@ export class DatabaseStorage implements IStorage {
     };
   }
 
-  async getOnSpotParticipantsByCreator(creatorId: string): Promise<Array<User & { eventCredentials: Array<EventCredential & { event: Event }> }>> {
+  async getOnSpotParticipantsByCreator(creatorId?: string): Promise<Array<User & { eventCredentials: Array<EventCredential & { event: Event }> }>> {
+    const whereConditions = [eq(users.role, 'participant')];
+    if (creatorId) {
+      whereConditions.push(eq(users.createdBy, creatorId));
+    } else {
+      whereConditions.push(sql`${users.createdBy} IS NOT NULL`);
+    }
+
     const participantUsers = await db
       .select()
       .from(users)
-      .where(and(eq(users.createdBy, creatorId), eq(users.role, 'participant')))
+      .where(and(...whereConditions))
       .orderBy(desc(users.createdAt));
 
     const result = await Promise.all(participantUsers.map(async (user) => {
@@ -1478,8 +2399,19 @@ export class DatabaseStorage implements IStorage {
     return log;
   }
 
-  async getEmailLogs(filters?: { status?: string; templateType?: string; startDate?: Date; endDate?: Date }): Promise<EmailLog[]> {
-    let query = db.select().from(emailLogs);
+  async getEmailLogs(filters?: { status?: string; templateType?: string; startDate?: Date; endDate?: Date; limit?: number; offset?: number }): Promise<Omit<EmailLog, 'metadata'>[]> {
+    // Select only essential fields, exclude large metadata to prevent 507 errors
+    let query = db.select({
+      id: emailLogs.id,
+      recipientEmail: emailLogs.recipientEmail,
+      recipientName: emailLogs.recipientName,
+      subject: emailLogs.subject,
+      templateType: emailLogs.templateType,
+      status: emailLogs.status,
+      errorMessage: emailLogs.errorMessage,
+      sentAt: emailLogs.sentAt,
+      // Exclude metadata field from list view to reduce payload size
+    }).from(emailLogs);
 
     const conditions = [];
     if (filters?.status) conditions.push(eq(emailLogs.status, filters.status));
@@ -1491,25 +2423,63 @@ export class DatabaseStorage implements IStorage {
       query = query.where(and(...conditions)) as any;
     }
 
-    return await query.orderBy(desc(emailLogs.sentAt));
+    // Add pagination with default limit of 50 to prevent response size errors
+    const limit = Math.min(filters?.limit || 50, 100); // Cap at 100
+    const offset = filters?.offset || 0;
+
+    return await query.orderBy(desc(emailLogs.sentAt)).limit(limit).offset(offset);
   }
 
-  async getEmailLogsByRecipient(email: string): Promise<EmailLog[]> {
+  async getEmailLogsByRecipient(email: string, limit: number = 100): Promise<EmailLog[]> {
     return await db.select().from(emailLogs)
       .where(eq(emailLogs.recipientEmail, email))
-      .orderBy(desc(emailLogs.sentAt));
+      .orderBy(desc(emailLogs.sentAt))
+      .limit(limit);
   }
 
-  async getParticipantsByEventId(eventId: string): Promise<User[]> {
-    const result = await db
-      .select({ user: users })
-      .from(users)
-      .innerJoin(participants, eq(participants.userId, users.id))
-      .where(and(eq(participants.eventId, eventId), eq(users.role, 'participant')))
-      .groupBy(users.id);
+  async getEmailLogsCount(filters?: { status?: string; templateType?: string; startDate?: Date; endDate?: Date }): Promise<number> {
+    let query = db.select({ count: sql<number>`count(*)` }).from(emailLogs);
 
-    return result.map(r => r.user);
+    const conditions = [];
+    if (filters?.status) conditions.push(eq(emailLogs.status, filters.status));
+    if (filters?.templateType) conditions.push(eq(emailLogs.templateType, filters.templateType));
+    if (filters?.startDate) conditions.push(gte(emailLogs.sentAt, filters.startDate));
+    if (filters?.endDate) conditions.push(lte(emailLogs.sentAt, filters.endDate));
+
+    if (conditions.length > 0) {
+      query = query.where(and(...conditions)) as any;
+    }
+
+    const result = await query;
+    return result[0]?.count || 0;
   }
+
+  async getEmailLogById(id: string): Promise<EmailLog | null> {
+    const result = await db.select().from(emailLogs).where(eq(emailLogs.id, id)).limit(1);
+    return result[0] || null;
+  }
+
+  // Count emails sent since a specific date, optionally filtered by provider
+  async getEmailLogCountSince(since: Date, provider?: string): Promise<number> {
+    let query = db.select({ count: sql<number>`count(*)` }).from(emailLogs);
+
+    const conditions = [
+      gte(emailLogs.sentAt, since),
+      eq(emailLogs.status, 'sent')
+    ];
+
+    // Filter by provider if specified (provider is stored in metadata JSON)
+    if (provider) {
+      conditions.push(sql`${emailLogs.metadata}->>'provider' = ${provider}`);
+    }
+
+    query = query.where(and(...conditions)) as any;
+
+    const result = await query;
+    return result[0]?.count || 0;
+  }
+
+
 
   async getParticipant(id: string): Promise<Participant | undefined> {
     const [participant] = await db
@@ -1543,6 +2513,356 @@ export class DatabaseStorage implements IStorage {
       console.error(`[Storage] Delete failed for form ${id}:`, error);
       throw error;
     }
+  }
+
+  async getRegistrationStats(adminId?: string) {
+    let eventFilter = undefined;
+
+    if (adminId) {
+      const adminEvents = await this.getEventsByAdmin(adminId);
+      const eventIds = adminEvents.map(e => e.id);
+      if (eventIds.length === 0) {
+        return {
+          totalTeams: 0,
+          teamsPerEvent: [],
+          teamsPerCollege: [],
+          totalParticipants: 0,
+          vegCount: 0,
+          nonVegCount: 0
+        };
+      }
+      eventFilter = sql`${registrations.eventId} IN (${sql.join(eventIds.map(id => sql`${id}`), sql`, `)})`;
+    }
+
+    const teamsPerEvent = await db
+      .select({
+        eventId: registrations.eventId,
+        eventName: events.name,
+        count: sql<number>`count(*)`
+      })
+      .from(registrations)
+      .innerJoin(events, eq(registrations.eventId, events.id))
+      .where(eventFilter)
+      .groupBy(registrations.eventId, events.name);
+
+    const teamsPerCollege = await db
+      .select({
+        college: registrations.organizerCollege,
+        count: sql<number>`count(*)`
+      })
+      .from(registrations)
+      .where(eventFilter)
+      .groupBy(registrations.organizerCollege);
+
+    const totalTeams = teamsPerEvent.reduce((sum, item) => sum + Number(item.count), 0);
+
+    // Get food preference stats from participant_registry for TRULY unique participants
+    // This avoids double-counting people who are both organizers and team members
+    // For event admins, we need to filter by their events
+    let foodStats: Array<{ foodType: string | null; count: number }>;
+    if (eventFilter) {
+      // Event admin: Get participants only from their events
+      // First, get all unique roll numbers from registrations and team members for these events
+      const organizerRolls = await db
+        .selectDistinct({ rollNo: registrations.organizerRollNo })
+        .from(registrations)
+        .where(eventFilter);
+
+      const memberRolls = await db
+        .selectDistinct({ rollNo: teamMembers.memberRollNo })
+        .from(teamMembers)
+        .innerJoin(registrations, eq(teamMembers.registrationId, registrations.id))
+        .where(eventFilter);
+
+      // Combine and deduplicate
+      const allRollNos = new Set<string>();
+      organizerRolls.forEach(r => allRollNos.add(r.rollNo));
+      memberRolls.forEach(r => allRollNos.add(r.rollNo));
+      const rollNos = Array.from(allRollNos);
+
+      if (rollNos.length === 0) {
+        foodStats = [];
+      } else {
+        foodStats = await db
+          .select({
+            foodType: participantRegistry.foodType,
+            count: sql<number>`count(DISTINCT ${participantRegistry.rollNo})`
+          })
+          .from(participantRegistry)
+          .where(inArray(participantRegistry.rollNo, rollNos))
+          .groupBy(participantRegistry.foodType);
+      }
+    } else {
+      // Super admin: Get all participants
+      foodStats = await db
+        .select({
+          foodType: participantRegistry.foodType,
+          count: sql<number>`count(DISTINCT ${participantRegistry.rollNo})`
+        })
+        .from(participantRegistry)
+        .groupBy(participantRegistry.foodType);
+    }
+
+    const vegCount = foodStats.find(f => f.foodType === 'veg')?.count || 0;
+    const nonVegCount = foodStats.find(f => f.foodType === 'nonveg')?.count || 0;
+    const totalParticipants = Number(vegCount) + Number(nonVegCount);
+
+    return {
+      totalTeams,
+      teamsPerEvent: teamsPerEvent.map(t => ({ ...t, count: Number(t.count) })),
+      teamsPerCollege: teamsPerCollege.map(t => ({ college: t.college || 'Other', count: Number(t.count) })),
+      totalParticipants,
+      vegCount: Number(vegCount),
+      nonVegCount: Number(nonVegCount)
+    };
+  }
+
+  // Participant Registry methods - global participant info by roll_no
+  async getParticipantRegistryByRollNo(rollNo: string): Promise<ParticipantRegistry | undefined> {
+    const normalizedRollNo = rollNo.trim().toUpperCase();
+    const [participant] = await db
+      .select()
+      .from(participantRegistry)
+      .where(eq(participantRegistry.rollNo, normalizedRollNo));
+    return participant;
+  }
+
+  async upsertParticipantRegistry(data: {
+    rollNo: string;
+    name: string;
+    email?: string;
+    dept?: string;
+    phone?: string;
+    college?: string;
+    foodType: 'veg' | 'nonveg';
+  }): Promise<ParticipantRegistry> {
+    const normalizedRollNo = data.rollNo.trim().toUpperCase();
+
+    // Check if participant already exists
+    const existing = await this.getParticipantRegistryByRollNo(normalizedRollNo);
+
+    if (existing) {
+      // Update existing participant (but NOT the foodType - it's locked once set)
+      const [updated] = await db
+        .update(participantRegistry)
+        .set({
+          name: data.name,
+          email: data.email || existing.email,
+          dept: data.dept || existing.dept,
+          phone: data.phone || existing.phone,
+          college: data.college || existing.college,
+          updatedAt: new Date()
+        })
+        .where(eq(participantRegistry.rollNo, normalizedRollNo))
+        .returning();
+      return updated;
+    } else {
+      // Insert new participant
+      const [created] = await db
+        .insert(participantRegistry)
+        .values({
+          rollNo: normalizedRollNo,
+          name: data.name,
+          email: data.email,
+          dept: data.dept,
+          phone: data.phone,
+          college: data.college,
+          foodType: data.foodType
+        })
+        .returning();
+      return created;
+    }
+  }
+
+  // Manual Round Entries implementations
+  async getManualRoundEntriesByEvent(eventId: string): Promise<ManualRoundEntry[]> {
+    return await db.select().from(manualRoundEntries)
+      .where(eq(manualRoundEntries.eventId, eventId))
+      .orderBy(asc(manualRoundEntries.roundNumber), asc(manualRoundEntries.rank));
+  }
+
+  async getManualRoundEntriesByEventAndRound(eventId: string, roundNumber: number): Promise<(ManualRoundEntry & { participantEmail: string | null; teamMembers: any[] })[]> {
+    const entries = await db.select({
+      id: manualRoundEntries.id,
+      eventId: manualRoundEntries.eventId,
+      roundNumber: manualRoundEntries.roundNumber,
+      roundName: manualRoundEntries.roundName,
+      participantUserId: manualRoundEntries.participantUserId,
+      participantName: manualRoundEntries.participantName,
+      participantRollNo: manualRoundEntries.participantRollNo,
+      participantCollege: manualRoundEntries.participantCollege,
+      participantDept: manualRoundEntries.participantDept,
+      score: manualRoundEntries.score,
+      rank: manualRoundEntries.rank,
+      notes: manualRoundEntries.notes,
+      enteredBy: manualRoundEntries.enteredBy,
+      createdAt: manualRoundEntries.createdAt,
+      updatedAt: manualRoundEntries.updatedAt,
+      participantEmail: users.email,
+    })
+      .from(manualRoundEntries)
+      .leftJoin(users, eq(manualRoundEntries.participantUserId, users.id))
+      .where(and(
+        eq(manualRoundEntries.eventId, eventId),
+        eq(manualRoundEntries.roundNumber, roundNumber)
+      ))
+      .orderBy(asc(manualRoundEntries.rank));
+
+    // Fetch team members for each entry; avoid relation lookups to prevent Drizzle relation errors
+    const entriesWithTeam = await Promise.all(entries.map(async (entry) => {
+      let team: any[] = [];
+      const email = entry.participantEmail || '';
+
+      // Find a registration by organizer email (best effort)
+      const reg = email
+        ? await db.select().from(registrations).where(eq(registrations.organizerEmail, email)).limit(1)
+        : [];
+
+      if (reg.length > 0) {
+        const regId = reg[0].id;
+        const members = await db.select().from(teamMembers).where(eq(teamMembers.registrationId, regId));
+        team = members.map(tm => ({
+          name: tm.memberName,
+          rollNo: tm.memberRollNo,
+          email: tm.memberEmail
+        }));
+      }
+
+      return { ...entry, teamMembers: team };
+    }));
+
+    return entriesWithTeam;
+  }
+
+  async createManualRoundEntry(entry: InsertManualRoundEntry): Promise<ManualRoundEntry> {
+    const [created] = await db.insert(manualRoundEntries).values(entry).returning();
+    return created;
+  }
+
+  async updateManualRoundEntry(id: string, entry: Partial<InsertManualRoundEntry>): Promise<ManualRoundEntry | undefined> {
+    const [updated] = await db.update(manualRoundEntries)
+      .set({ ...entry, updatedAt: new Date() })
+      .where(eq(manualRoundEntries.id, id))
+      .returning();
+    return updated;
+  }
+
+  async deleteManualRoundEntry(id: string): Promise<void> {
+    await db.delete(manualRoundEntries).where(eq(manualRoundEntries.id, id));
+  }
+
+  async deleteManualRoundEntriesByEvent(eventId: string): Promise<void> {
+    await db.delete(manualRoundEntries).where(eq(manualRoundEntries.eventId, eventId));
+  }
+
+  async deleteManualRoundEntriesByEventAndRound(eventId: string, roundNumber: number): Promise<void> {
+    await db.delete(manualRoundEntries).where(and(
+      eq(manualRoundEntries.eventId, eventId),
+      eq(manualRoundEntries.roundNumber, roundNumber)
+    ));
+  }
+
+  // Event Winners implementations
+  async getEventWinners(eventId: string): Promise<EventWinner[]> {
+    return await db.select().from(eventWinners)
+      .where(eq(eventWinners.eventId, eventId))
+      .orderBy(asc(eventWinners.position));
+  }
+
+  async createEventWinner(winner: InsertEventWinner): Promise<EventWinner> {
+    const [created] = await db.insert(eventWinners).values(winner as any).returning();
+    return created;
+  }
+
+  async updateEventWinner(id: string, winner: Partial<InsertEventWinner>): Promise<EventWinner | undefined> {
+    const [updated] = await db.update(eventWinners)
+      .set(winner as any)
+      .where(eq(eventWinners.id, id))
+      .returning();
+    return updated;
+  }
+
+  async deleteEventWinner(id: string): Promise<void> {
+    await db.delete(eventWinners).where(eq(eventWinners.id, id));
+  }
+
+  async deleteEventWinnersByEvent(eventId: string): Promise<void> {
+    await db.delete(eventWinners).where(eq(eventWinners.eventId, eventId));
+  }
+
+  async exportEventData(eventId: string): Promise<any> {
+    return { eventId };
+  }
+
+
+  async getRound1Qualifiers(eventId: string, limit: number = 100): Promise<Array<{
+    userId: string;
+    userName: string;
+    rollNo?: string;
+    college?: string;
+    dept?: string;
+    email?: string;
+    score: number;
+    rank: number;
+    teamMembers?: Array<{ name: string; rollNo: string; email: string }>;
+  }>> {
+    // Get Round 1 for this event
+    const eventRounds = await db.select().from(rounds)
+      .where(and(eq(rounds.eventId, eventId), eq(rounds.roundNumber, 1)));
+
+    if (eventRounds.length === 0) {
+      return [];
+    }
+
+    const round1 = eventRounds[0];
+
+    // Get completed test attempts for Round 1, sorted by score
+    const attempts = await db.select({
+      userId: testAttempts.userId,
+      userName: users.fullName,
+      email: users.email,
+      totalScore: testAttempts.totalScore,
+    })
+      .from(testAttempts)
+      .innerJoin(users, eq(testAttempts.userId, users.id))
+      .where(and(
+        eq(testAttempts.roundId, round1.id),
+        eq(testAttempts.status, 'completed')
+      ))
+      .orderBy(desc(testAttempts.totalScore), asc(testAttempts.submittedAt))
+      .limit(limit);
+
+    // Get registration details for college/dept info and team members
+    const results = await Promise.all(attempts.map(async (attempt, index) => {
+      // Find registration for this participant
+      // Using organizerEmail because online tests are typically taken by the organizer
+      const reg = await db.query.registrations.findFirst({
+        where: eq(registrations.organizerEmail, attempt.email || ''),
+        with: {
+          teamMembers: true
+        }
+      });
+
+      const team = reg?.teamMembers?.map(tm => ({
+        name: tm.memberName,
+        rollNo: tm.memberRollNo,
+        email: tm.memberEmail
+      })) || [];
+
+      return {
+        userId: attempt.userId,
+        userName: attempt.userName,
+        rollNo: reg?.organizerRollNo || undefined,
+        college: reg?.organizerCollege || undefined,
+        dept: reg?.organizerDept || undefined,
+        email: attempt.email || reg?.organizerEmail || undefined,
+        score: attempt.totalScore || 0,
+        rank: index + 1,
+        teamMembers: team
+      };
+    }));
+
+    return results;
   }
 }
 

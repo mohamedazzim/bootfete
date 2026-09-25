@@ -50,7 +50,7 @@ export default function RegistrationCommitteeDashboard() {
     return 1 + (reg.teamMembers?.length || 0);
   };
 
-  const downloadList = () => {
+  const downloadList = async () => {
     if (confirmedList.length === 0) {
       toast({
         title: "No Data",
@@ -60,28 +60,44 @@ export default function RegistrationCommitteeDashboard() {
       return;
     }
 
-    const content = confirmedList.map((reg, index) => {
-      const eventName = reg.event?.name || getEventName(reg.eventId);
-      const teamSize = getTotalMembers(reg);
-      return `${index + 1}. ${reg.organizerName} - ${reg.organizerRollNo} - ${reg.organizerEmail} - ${reg.organizerDept} - Event: ${eventName} - Team Size: ${teamSize}`;
-    }).join('\n');
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch('/api/registrations/download-excel', {
+        method: 'GET',
+        headers: {
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+        },
+      });
 
-    const fullContent = `CONFIRMED PARTICIPANTS LIST\n\nTotal Confirmed: ${confirmedList.length}\n\n${content}`;
+      if (!response.ok) {
+        throw new Error('Failed to download file');
+      }
 
-    const blob = new Blob([fullContent], { type: 'text/plain' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `confirmed-participants-${new Date().toISOString().split('T')[0]}.txt`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
+      // Get the blob from response
+      const blob = await response.blob();
 
-    toast({
-      title: "Downloaded",
-      description: "Participant list has been downloaded",
-    });
+      // Create download link
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `confirmed-participants-${new Date().toISOString().split('T')[0]}.xlsx`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+
+      toast({
+        title: "Downloaded",
+        description: "Participant list has been downloaded as Excel file",
+      });
+    } catch (error) {
+      console.error('Download error:', error);
+      toast({
+        title: "Download Failed",
+        description: "Failed to download participant list",
+        variant: "destructive",
+      });
+    }
   };
 
   return (

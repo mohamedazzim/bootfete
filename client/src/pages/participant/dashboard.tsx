@@ -6,7 +6,8 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Loader2, AlertCircle, CheckCircle } from 'lucide-react';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Loader2, AlertCircle, CheckCircle, ArrowRightLeft } from 'lucide-react';
 import { apiRequest } from '@/lib/queryClient';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/lib/auth';
@@ -14,12 +15,18 @@ import { useAuth } from '@/lib/auth';
 export default function ParticipantDashboard() {
   const [, setLocation] = useLocation();
   const [agreed, setAgreed] = useState(false);
+  const [selectedEventId, setSelectedEventId] = useState<string>('');
   const { toast } = useToast();
   const { user } = useAuth();
 
   const { data: credentialData, isLoading } = useQuery<any>({
-    queryKey: ['/api/participants/my-credential'],
-    refetchInterval: 5000,
+    queryKey: ['/api/participants/my-credential', selectedEventId],
+    queryFn: async () => {
+      const url = selectedEventId ? `/api/participants/my-credential?eventId=${selectedEventId}` : '/api/participants/my-credential';
+      const res = await apiRequest('GET', url);
+      return res.json();
+    },
+    refetchInterval: 2000, // Faster polling as WebSocket backup
   });
 
   const { credential, event, eventRules, rounds, team } = credentialData || {};
@@ -30,10 +37,6 @@ export default function ParticipantDashboard() {
   const startTestMutation = useMutation({
     mutationFn: async (roundId: string) => {
       const checkResponse = await apiRequest('GET', `/api/participants/rounds/${roundId}/my-attempt`, {});
-      if (!checkResponse.ok) {
-        const error = await checkResponse.json();
-        throw new Error(error.message || 'Failed to check for existing attempt');
-      }
       const checkData = await checkResponse.json();
 
       if (checkData.attempt) {
@@ -41,10 +44,6 @@ export default function ParticipantDashboard() {
       }
 
       const createResponse = await apiRequest('POST', `/api/events/${event?.id}/rounds/${roundId}/start`, {});
-      if (!createResponse.ok) {
-        const error = await createResponse.json();
-        throw new Error(error.message || 'Failed to start test');
-      }
       return await createResponse.json();
     },
     onSuccess: (attempt: any) => {
@@ -103,12 +102,39 @@ export default function ParticipantDashboard() {
       <div className="max-w-4xl mx-auto p-4 md:p-8">
         <div className="text-center mb-8">
           <h1 className="text-3xl font-bold text-gray-900 mb-2" data-testid="heading-dashboard">
-            BootFeet 2K26 | {event?.name || 'Event'} | {team && team.length > 0 ? team.map((m: any) => m.name).join(', ') : (user?.fullName || 'Participant')}
+            BootFete 2K26 | {event?.name || 'Event'} | {team && team.length > 0 ? team.map((m: any) => m.name).join(', ') : (user?.fullName || 'Participant')}
           </h1>
           <p className="text-gray-600" data-testid="text-event-description">
             {event?.description}
           </p>
         </div>
+
+        {credentialData?.allEvents && credentialData.allEvents.length > 1 && (
+          <div className="mb-6 p-4 bg-white rounded-lg border shadow-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <ArrowRightLeft className="h-4 w-4 text-blue-600" />
+              <div>
+                <span className="font-semibold text-gray-900 text-sm">Switch Registered Event:</span>
+                <p className="text-xs text-gray-500">You are registered for {credentialData.allEvents.length} events</p>
+              </div>
+            </div>
+            <Select
+              value={selectedEventId || event?.id}
+              onValueChange={(val) => setSelectedEventId(val)}
+            >
+              <SelectTrigger className="w-full sm:w-[260px]">
+                <SelectValue placeholder="Select Event" />
+              </SelectTrigger>
+              <SelectContent>
+                {credentialData.allEvents.map((ev: any) => (
+                  <SelectItem key={ev.id} value={ev.id}>
+                    {ev.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        )}
 
         {!testEnabled && (
           <Alert className="mb-6" data-testid="alert-test-not-enabled">

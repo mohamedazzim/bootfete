@@ -1,4 +1,5 @@
 import { useParams, useLocation } from 'wouter';
+import { useAuth } from '@/lib/auth';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import { useState, useEffect } from 'react';
 import EventAdminLayout from '@/components/layouts/EventAdminLayout';
@@ -16,18 +17,16 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import { ArrowLeft, Plus, Edit, FileQuestion, Clock, Play, Square, RotateCcw, Eye } from 'lucide-react';
+import { ArrowLeft, Plus, Edit, FileQuestion, Clock, Play, Square, RotateCcw, Trophy } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { apiRequest, queryClient } from '@/lib/queryClient';
 import type { Round, Event } from '@shared/schema';
 
-function CountdownTimer({ round, onTimeExpired }: { round: Round; onTimeExpired?: (roundId: string) => void }) {
+function CountdownTimer({ round }: { round: Round }) {
   const [timeRemaining, setTimeRemaining] = useState<number | null>(null);
-  const [hasNotified, setHasNotified] = useState(false);
 
   useEffect(() => {
     if (round.status !== 'in_progress' || !round.startedAt) {
-      setHasNotified(false);
       return;
     }
 
@@ -45,16 +44,10 @@ function CountdownTimer({ round, onTimeExpired }: { round: Round; onTimeExpired?
     const interval = setInterval(() => {
       const newTimeRemaining = calculateTimeRemaining();
       setTimeRemaining(newTimeRemaining);
-
-      // Notify parent when time expires (only once)
-      if (newTimeRemaining === 0 && onTimeExpired && !hasNotified) {
-        onTimeExpired(round.id);
-        setHasNotified(true);
-      }
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [round, onTimeExpired, hasNotified]);
+  }, [round]);
 
   if (round.status === 'not_started') {
     return <span className="text-gray-400" data-testid={`timer-not-started-${round.id}`}>-- : --</span>;
@@ -96,11 +89,10 @@ function CountdownTimer({ round, onTimeExpired }: { round: Round; onTimeExpired?
 
 export default function EventRoundsPage() {
   const { eventId } = useParams();
+  const { user } = useAuth();
   const [, setLocation] = useLocation();
   const { toast } = useToast();
   const [restartRoundId, setRestartRoundId] = useState<string | null>(null);
-  const [expiredRoundIds, setExpiredRoundIds] = useState<Set<string>>(new Set());
-
   const { data: event, isLoading: eventLoading } = useQuery<Event>({
     queryKey: ['/api/events', eventId],
     enabled: !!eventId,
@@ -111,22 +103,6 @@ export default function EventRoundsPage() {
     enabled: !!eventId,
     refetchInterval: 5000,
   });
-
-  // Clear expired round IDs for rounds that are no longer in progress
-  useEffect(() => {
-    if (rounds) {
-      setExpiredRoundIds(prev => {
-        const newSet = new Set(prev);
-        // Remove rounds that are no longer in progress
-        rounds.forEach(round => {
-          if (round.status !== 'in_progress') {
-            newSet.delete(round.id);
-          }
-        });
-        return newSet;
-      });
-    }
-  }, [rounds]);
 
   const startRoundMutation = useMutation({
     mutationFn: async (roundId: string) => {
@@ -139,10 +115,10 @@ export default function EventRoundsPage() {
       });
       queryClient.invalidateQueries({ queryKey: ['/api/events', eventId, 'rounds'] });
     },
-    onError: () => {
+    onError: (error: Error) => {
       toast({
         title: 'Error',
-        description: 'Failed to start round',
+        description: error.message || 'Failed to start round',
         variant: 'destructive',
       });
     }
@@ -314,65 +290,60 @@ export default function EventRoundsPage() {
                         <TableCell>{round.duration} minutes</TableCell>
                         <TableCell>{getStatusBadge(round.status)}</TableCell>
                         <TableCell>
-                          <CountdownTimer
-                            round={round}
-                            onTimeExpired={(roundId) => {
-                              setExpiredRoundIds(prev => new Set(prev).add(roundId));
-                            }}
-                          />
+                          <CountdownTimer round={round} />
                         </TableCell>
                         <TableCell className="text-right">
                           <div className="flex justify-end gap-2">
-                            {round.status === 'not_started' && (
-                              <Button
-                                variant="default"
-                                size="sm"
-                                onClick={() => startRoundMutation.mutate(round.id)}
-                                disabled={startRoundMutation.isPending}
-                                data-testid={`button-start-${round.id}`}
-                                title="Start Round"
-                              >
-                                <Play className="h-4 w-4 mr-1" />
-                                Start
-                              </Button>
-                            )}
-                            {round.status === 'in_progress' && !expiredRoundIds.has(round.id) && (
-                              <Button
-                                variant="destructive"
-                                size="sm"
-                                onClick={() => endRoundMutation.mutate(round.id)}
-                                disabled={endRoundMutation.isPending}
-                                data-testid={`button-end-${round.id}`}
-                                title="End Round"
-                              >
-                                <Square className="h-4 w-4 mr-1" />
-                                End
-                              </Button>
-                            )}
-                            {round.status === 'completed' && !round.resultsPublished && (
-                              <Button
-                                variant="default"
-                                size="sm"
-                                onClick={() => publishResultsMutation.mutate(round.id)}
-                                disabled={publishResultsMutation.isPending}
-                                data-testid={`button-publish-results-${round.id}`}
-                                title="Publish Results"
-                                className="bg-green-600 hover:bg-green-700"
-                              >
-                                <Eye className="h-4 w-4 mr-1" />
-                                Publish Results
-                              </Button>
+                            {(user?.role === 'super_admin' || user?.role === 'event_admin') && (
+                              <>
+                                {round.status === 'not_started' && (
+                                  <Button
+                                    variant="default"
+                                    size="sm"
+                                    onClick={() => startRoundMutation.mutate(round.id)}
+                                    disabled={startRoundMutation.isPending}
+                                    data-testid={`button-start-${round.id}`}
+                                    title="Start Round"
+                                  >
+                                    <Play className="h-4 w-4 mr-1" />
+                                    Start
+                                  </Button>
+                                )}
+                                {round.status === 'in_progress' && (
+                                  <Button
+                                    variant="destructive"
+                                    size="sm"
+                                    onClick={() => endRoundMutation.mutate(round.id)}
+                                    disabled={endRoundMutation.isPending}
+                                    data-testid={`button-end-${round.id}`}
+                                    title="End Round"
+                                  >
+                                    <Square className="h-4 w-4 mr-1" />
+                                    End
+                                  </Button>
+                                )}
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => setRestartRoundId(round.id)}
+                                  disabled={restartRoundMutation.isPending}
+                                  data-testid={`button-restart-round-${round.id}`}
+                                  title="Restart Round"
+                                  className="border-orange-500 text-orange-600 hover:bg-orange-50 hover:text-orange-700"
+                                >
+                                  <RotateCcw className="h-4 w-4" />
+                                </Button>
+                              </>
                             )}
                             <Button
-                              variant="outline"
+                              variant="ghost"
                               size="sm"
-                              onClick={() => setRestartRoundId(round.id)}
-                              disabled={restartRoundMutation.isPending}
-                              data-testid={`button-restart-round-${round.id}`}
-                              title="Restart Round"
-                              className="border-orange-500 text-orange-600 hover:bg-orange-50 hover:text-orange-700"
+                              onClick={() => setLocation(`/event-admin/events/${eventId}/results`)}
+                              data-testid={`button-results-${round.id}`}
+                              title="View Results"
+                              className="text-blue-600 hover:text-blue-700 hover:bg-blue-50"
                             >
-                              <RotateCcw className="h-4 w-4" />
+                              <Trophy className="h-4 w-4" />
                             </Button>
                             <Button
                               variant="ghost"

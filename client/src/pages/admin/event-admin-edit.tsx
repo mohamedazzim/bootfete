@@ -11,8 +11,35 @@ import { useToast } from '@/hooks/use-toast';
 import { ArrowLeft, Eye, EyeOff } from 'lucide-react';
 import { z } from 'zod';
 import { useQuery } from '@tanstack/react-query';
-import type { User } from '@shared/schema';
+import type { User, Event as SchemaEvent } from '@shared/schema';
 import { apiRequest, queryClient } from '@/lib/queryClient';
+import { Plus, Trash2 } from 'lucide-react';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 
 const editFormSchema = z.object({
   username: z.string().min(3, 'Username must be at least 3 characters').or(z.literal('')),
@@ -32,6 +59,16 @@ export default function EventAdminEditPage() {
   const { data: users, isLoading } = useQuery<User[]>({
     queryKey: ['/api/users'],
   });
+
+  const { data: assignedEvents, isLoading: assignedLoading } = useQuery<SchemaEvent[]>({
+    queryKey: [`/api/users/${adminId}/assigned-events`],
+    enabled: !!adminId,
+  });
+
+  const { data: allEvents } = useQuery<SchemaEvent[]>({
+    queryKey: ['/api/events'],
+  });
+
 
   const admin = users?.find(user => user.id === adminId);
 
@@ -88,6 +125,44 @@ export default function EventAdminEditPage() {
       });
     }
   }
+
+  async function handleRemoveAssignment(eventId: string, eventName: string) {
+    try {
+      await apiRequest('DELETE', `/api/events/${eventId}/admins/${adminId}`);
+      queryClient.invalidateQueries({ queryKey: [`/api/users/${adminId}/assigned-events`] });
+      toast({
+        title: 'Assignment removed',
+        description: `Removed assignment from ${eventName}`,
+      });
+    } catch (error: any) {
+      toast({
+        title: 'Removal failed',
+        description: error.message,
+        variant: 'destructive',
+      });
+    }
+  }
+
+  async function handleAddAssignment(eventId: string) {
+    if (!eventId) return;
+    try {
+      await apiRequest('POST', `/api/events/${eventId}/admins`, { adminId });
+      queryClient.invalidateQueries({ queryKey: [`/api/users/${adminId}/assigned-events`] });
+      toast({
+        title: 'Assignment added',
+        description: 'Successfully assigned to event',
+      });
+    } catch (error: any) {
+      toast({
+        title: 'Assignment failed',
+        description: error.message,
+        variant: 'destructive',
+      });
+    }
+  }
+
+  const [selectedEventId, setSelectedEventId] = useState<string>("");
+
 
   if (isLoading) {
     return (
@@ -226,6 +301,99 @@ export default function EventAdminEditPage() {
                 </div>
               </form>
             </Form>
+          </CardContent>
+        </Card>
+
+        <Card className="max-w-2xl mt-6">
+          <CardHeader className="flex flex-row items-center justify-between">
+            <CardTitle>Assigned Events</CardTitle>
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <Button size="sm" variant="outline">
+                  <Plus className="mr-2 h-4 w-4" />
+                  Assign Event
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Assign to Event</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    Select an event to assign this admin to.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <div className="py-4">
+                  <Select value={selectedEventId} onValueChange={setSelectedEventId}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select an event" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {allEvents?.filter(e => !assignedEvents?.find(ae => ae.id === e.id)).map((event) => (
+                        <SelectItem key={event.id} value={event.id}>
+                          {event.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <AlertDialogFooter>
+                  <AlertDialogCancel onClick={() => setSelectedEventId("")}>Cancel</AlertDialogCancel>
+                  <AlertDialogAction onClick={() => {
+                    handleAddAssignment(selectedEventId);
+                    setSelectedEventId("");
+                  }}>
+                    Assign
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+          </CardHeader>
+          <CardContent>
+            {assignedLoading ? (
+              <div className="text-center py-4">Loading assigned events...</div>
+            ) : !assignedEvents || assignedEvents.length === 0 ? (
+              <div className="text-center py-4 text-gray-500">No events assigned</div>
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Event Name</TableHead>
+                    <TableHead>Category</TableHead>
+                    <TableHead className="text-right">Actions</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {assignedEvents.map((event) => (
+                    <TableRow key={event.id}>
+                      <TableCell className="font-medium">{event.name}</TableCell>
+                      <TableCell className="capitalize">{event.category.replace('_', ' ')}</TableCell>
+                      <TableCell className="text-right">
+                        <AlertDialog>
+                          <AlertDialogTrigger asChild>
+                            <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive/90">
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </AlertDialogTrigger>
+                          <AlertDialogContent>
+                            <AlertDialogHeader>
+                              <AlertDialogTitle>Remove Assignment?</AlertDialogTitle>
+                              <AlertDialogDescription>
+                                Are you sure you want to remove {admin.fullName} from {event.name}? They will no longer have access to manage this event.
+                              </AlertDialogDescription>
+                            </AlertDialogHeader>
+                            <AlertDialogFooter>
+                              <AlertDialogCancel>Cancel</AlertDialogCancel>
+                              <AlertDialogAction onClick={() => handleRemoveAssignment(event.id, event.name)} className="bg-destructive text-destructive-foreground">
+                                Remove
+                              </AlertDialogAction>
+                            </AlertDialogFooter>
+                          </AlertDialogContent>
+                        </AlertDialog>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
           </CardContent>
         </Card>
       </div>

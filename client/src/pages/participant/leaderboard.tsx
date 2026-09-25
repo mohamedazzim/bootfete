@@ -3,25 +3,56 @@ import { useQuery } from '@tanstack/react-query';
 import ParticipantLayout from '@/components/layouts/ParticipantLayout';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { ArrowLeft, Trophy, Medal, Award, Clock } from 'lucide-react';
+import { ArrowLeft, Clock } from 'lucide-react';
 
-interface LeaderboardEntry {
-  rank: number;
+interface ParticipantAnswer {
+  id: string;
+  questionId: string;
+  questionText: string | null;
+  answer: string;
+  isCorrect: boolean | null;
+  pointsAwarded: number | null;
+  answeredAt: string;
+}
+
+interface ParticipantRoundResult {
+  roundId: string;
+  roundName: string;
+  totalScore: number;
+  maxScore?: number;
+  submittedAt: string | null;
+  answers: ParticipantAnswer[];
+}
+
+interface ParticipantResultPayload {
+  rank: number | null;
   userId: string;
   userName: string;
   totalScore: number;
   maxScore?: number;
-  submittedAt: Date;
+  submittedAt: string | null;
+  answers?: ParticipantAnswer[];
+  rounds?: ParticipantRoundResult[];
 }
+
+type LeaderboardApiResponse = {
+  scope: 'participant' | 'admin';
+  answersVisible: boolean;
+  participantResult: ParticipantResultPayload | null;
+  message?: string;
+};
 
 export default function LeaderboardPage() {
   const { roundId, eventId } = useParams();
   const [, setLocation] = useLocation();
 
-  const { data: leaderboard, isLoading } = useQuery<LeaderboardEntry[]>({
-    queryKey: roundId ? ['/api/rounds', roundId, 'leaderboard'] : ['/api/events', eventId, 'leaderboard'],
+  const leaderboardKey = roundId
+    ? `/api/rounds/${roundId}/leaderboard`
+    : `/api/events/${eventId}/leaderboard`;
+
+  const { data, isLoading } = useQuery<LeaderboardApiResponse>({
+    queryKey: [leaderboardKey],
     enabled: !!(roundId || eventId),
   });
 
@@ -35,7 +66,7 @@ export default function LeaderboardPage() {
     );
   }
 
-  if (!leaderboard || leaderboard.length === 0) {
+  if (!data || !data.answersVisible || !data.participantResult) {
     return (
       <ParticipantLayout>
         <div className="p-4 md:p-8 max-w-6xl mx-auto">
@@ -50,8 +81,7 @@ export default function LeaderboardPage() {
           </Button>
           <Card>
             <CardContent className="text-center py-12">
-              <Trophy className="h-16 w-16 mx-auto text-gray-300 mb-4" />
-              <p className="text-gray-600">No results available yet</p>
+              <p className="text-gray-600">{data?.message || 'Results are not yet published'}</p>
             </CardContent>
           </Card>
         </div>
@@ -59,19 +89,10 @@ export default function LeaderboardPage() {
     );
   }
 
-  const getRankIcon = (rank: number) => {
-    if (rank === 1) return <Trophy className="h-6 w-6 text-yellow-500" data-testid={`icon-rank-1`} />;
-    if (rank === 2) return <Medal className="h-6 w-6 text-gray-400" data-testid={`icon-rank-2`} />;
-    if (rank === 3) return <Award className="h-6 w-6 text-amber-600" data-testid={`icon-rank-3`} />;
-    return <span className="text-gray-600 font-medium w-6 text-center" data-testid={`text-rank-${rank}`}>{rank}</span>;
-  };
-
-  const getRankBadgeColor = (rank: number) => {
-    if (rank === 1) return 'bg-yellow-100 text-yellow-800 border-yellow-300';
-    if (rank === 2) return 'bg-gray-100 text-gray-800 border-gray-300';
-    if (rank === 3) return 'bg-amber-100 text-amber-800 border-amber-300';
-    return 'bg-white text-gray-800 border-gray-200';
-  };
+  const participantResult = data.participantResult;
+  const perRound = participantResult.rounds || [];
+  const singleRoundAnswers = participantResult.answers || [];
+  const answersToRender = roundId ? singleRoundAnswers : [];
 
   return (
     <ParticipantLayout>
@@ -87,126 +108,118 @@ export default function LeaderboardPage() {
             Back
           </Button>
           <div className="flex items-center gap-3 mb-2">
-            <Trophy className="h-8 w-8 text-yellow-500" />
             <h1 className="text-3xl font-bold text-gray-900" data-testid="heading-leaderboard">
-              Leaderboard
+              Your Result
             </h1>
           </div>
           <p className="text-gray-600">
-            {roundId ? 'Round Rankings' : 'Event Rankings'} • {leaderboard.length} Participants
+            {roundId ? 'Round Result' : 'Event Result'}
           </p>
         </div>
 
-        {/* Top 3 Podium */}
-        {leaderboard.length >= 3 && (
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-            {/* 2nd Place */}
-            <Card className="mt-0 md:mt-8 bg-gray-50 border-2 border-gray-300 order-2 md:order-1" data-testid="card-podium-2">
-              <CardHeader className="text-center pb-2">
-                <div className="flex justify-center mb-2">
-                  <Medal className="h-12 w-12 text-gray-400" />
-                </div>
-                <CardTitle className="text-lg">2nd Place</CardTitle>
-              </CardHeader>
-              <CardContent className="text-center">
-                <p className="font-semibold text-gray-900 mb-1" data-testid="text-podium-2-name">{leaderboard[1].userName}</p>
-                <p className="text-2xl font-bold text-gray-700" data-testid="text-podium-2-score">
-                  {leaderboard[1].totalScore}
-                  {leaderboard[1].maxScore && <span className="text-sm text-gray-500"> / {leaderboard[1].maxScore}</span>}
-                </p>
-              </CardContent>
-            </Card>
-
-            {/* 1st Place */}
-            <Card className="bg-yellow-50 border-2 border-yellow-400 order-1 md:order-2" data-testid="card-podium-1">
-              <CardHeader className="text-center pb-2">
-                <div className="flex justify-center mb-2">
-                  <Trophy className="h-16 w-16 text-yellow-500" />
-                </div>
-                <CardTitle className="text-xl">1st Place</CardTitle>
-              </CardHeader>
-              <CardContent className="text-center">
-                <p className="font-semibold text-gray-900 mb-1 text-lg" data-testid="text-podium-1-name">{leaderboard[0].userName}</p>
-                <p className="text-3xl font-bold text-yellow-600" data-testid="text-podium-1-score">
-                  {leaderboard[0].totalScore}
-                  {leaderboard[0].maxScore && <span className="text-sm text-gray-500"> / {leaderboard[0].maxScore}</span>}
-                </p>
-              </CardContent>
-            </Card>
-
-            {/* 3rd Place */}
-            <Card className="mt-0 md:mt-8 bg-amber-50 border-2 border-amber-400 order-3" data-testid="card-podium-3">
-              <CardHeader className="text-center pb-2">
-                <div className="flex justify-center mb-2">
-                  <Award className="h-12 w-12 text-amber-600" />
-                </div>
-                <CardTitle className="text-lg">3rd Place</CardTitle>
-              </CardHeader>
-              <CardContent className="text-center">
-                <p className="font-semibold text-gray-900 mb-1" data-testid="text-podium-3-name">{leaderboard[2].userName}</p>
-                <p className="text-2xl font-bold text-amber-700" data-testid="text-podium-3-score">
-                  {leaderboard[2].totalScore}
-                  {leaderboard[2].maxScore && <span className="text-sm text-gray-500"> / {leaderboard[2].maxScore}</span>}
-                </p>
-              </CardContent>
-            </Card>
-          </div>
-        )}
-
-        {/* Full Leaderboard Table */}
+        {/* Summary */}
         <Card>
           <CardHeader>
-            <CardTitle>Complete Rankings</CardTitle>
-            <CardDescription>Ranked by score, then by submission time (earlier submissions rank higher)</CardDescription>
+            <CardTitle>Summary</CardTitle>
+            <CardDescription>Your score and submission time</CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className="w-20">Rank</TableHead>
-                    <TableHead>Participant</TableHead>
-                    <TableHead className="text-right">Score</TableHead>
-                    <TableHead className="text-right">Submitted</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {leaderboard.map((entry) => (
-                    <TableRow
-                      key={entry.userId}
-                      className={entry.rank <= 3 ? 'bg-gray-50' : ''}
-                      data-testid={`row-participant-${entry.rank}`}
-                    >
-                      <TableCell>
-                        <div className="flex items-center justify-center">
-                          <Badge
-                            variant="outline"
-                            className={`${getRankBadgeColor(entry.rank)} flex items-center gap-1 px-3 py-1`}
-                          >
-                            {getRankIcon(entry.rank)}
-                          </Badge>
-                        </div>
-                      </TableCell>
-                      <TableCell className="font-medium" data-testid={`text-name-${entry.rank}`}>
-                        {entry.userName}
-                      </TableCell>
-                      <TableCell className="text-right font-semibold" data-testid={`text-score-${entry.rank}`}>
-                        {entry.totalScore}
-                        {entry.maxScore && <span className="text-gray-500 text-sm font-normal"> / {entry.maxScore}</span>}
-                      </TableCell>
-                      <TableCell className="text-right text-sm text-gray-600" data-testid={`text-time-${entry.rank}`}>
-                        <div className="flex items-center justify-end gap-1">
-                          <Clock className="h-3 w-3" />
-                          {new Date(entry.submittedAt).toLocaleString()}
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div>
+                <p className="text-sm text-gray-500">Score</p>
+                <p className="text-2xl font-bold text-gray-900">
+                  {participantResult.totalScore}
+                  {participantResult.maxScore ? <span className="text-sm text-gray-500"> / {participantResult.maxScore}</span> : null}
+                </p>
+              </div>
+              <div>
+                <p className="text-sm text-gray-500">Submitted</p>
+                <p className="text-sm text-gray-700">
+                  {participantResult.submittedAt ? new Date(participantResult.submittedAt).toLocaleString() : '—'}
+                </p>
+              </div>
+              <div>
+                <p className="text-sm text-gray-500">Rank</p>
+                <p className="text-sm text-gray-700">{participantResult.rank ?? '—'}</p>
+              </div>
             </div>
           </CardContent>
         </Card>
+
+        {/* Answers */}
+        {roundId && answersToRender.length > 0 && (
+          <Card className="mt-6">
+            <CardHeader>
+              <CardTitle>Your Answers</CardTitle>
+              <CardDescription>Only your submitted responses are visible</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Question</TableHead>
+                      <TableHead>Your Answer</TableHead>
+                      <TableHead className="text-right">Points</TableHead>
+                      <TableHead className="text-right">Answered</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {answersToRender.map((entry) => (
+                      <TableRow key={entry.id}>
+                        <TableCell className="font-medium">{entry.questionText || entry.questionId}</TableCell>
+                        <TableCell>{entry.answer}</TableCell>
+                        <TableCell className="text-right">{entry.pointsAwarded ?? 0}</TableCell>
+                        <TableCell className="text-right text-sm text-gray-600">
+                          <div className="flex items-center justify-end gap-1">
+                            <Clock className="h-3 w-3" />
+                            {new Date(entry.answeredAt).toLocaleString()}
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {!roundId && perRound.length > 0 && (
+          <Card className="mt-6">
+            <CardHeader>
+              <CardTitle>Round Breakdown</CardTitle>
+              <CardDescription>Your performance per round</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Round</TableHead>
+                      <TableHead className="text-right">Score</TableHead>
+                      <TableHead className="text-right">Submitted</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {perRound.map((roundResult) => (
+                      <TableRow key={roundResult.roundId}>
+                        <TableCell className="font-medium">{roundResult.roundName}</TableCell>
+                        <TableCell className="text-right">
+                          {roundResult.totalScore}
+                          {roundResult.maxScore ? <span className="text-sm text-gray-500"> / {roundResult.maxScore}</span> : null}
+                        </TableCell>
+                        <TableCell className="text-right text-sm text-gray-600">
+                          {roundResult.submittedAt ? new Date(roundResult.submittedAt).toLocaleString() : '—'}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         <div className="mt-6 flex justify-center">
           <Button

@@ -402,9 +402,9 @@ describe('Authentication & RBAC Test Suite', () => {
         
         // Assert
         expect(response.status).toBe(401);
-        expect(response.body).toHaveProperty('message', 'Authentication required');
+        expect(response.body).toHaveProperty('message', 'Authentication required (No Token Provided)');
       });
-      
+
       test('Protected route rejects empty Bearer token', async () => {
         // Act
         const response = await request(app)
@@ -793,7 +793,7 @@ describe('Authentication & RBAC Test Suite', () => {
         
         // Assert
         expect(response.status).toBe(403);
-        expect(response.body).toHaveProperty('message', 'Event Admin access required');
+        expect(response.body).toHaveProperty('message', 'Event Admin access required (Current Role: participant)');
       });
       
       test('Event Admin cannot access Super Admin routes', async () => {
@@ -839,9 +839,9 @@ describe('Authentication & RBAC Test Suite', () => {
         
         // Assert
         expect(response.status).toBe(401);
-        expect(response.body).toHaveProperty('message', 'Authentication required');
+        expect(response.body).toHaveProperty('message', 'Authentication required (No Token Provided)');
       });
-      
+
       test('requireSuperAdmin middleware blocks non-super-admin users', async () => {
         // Arrange
         const eventAdminToken = TestHelpers.generateJWT({
@@ -1169,7 +1169,7 @@ describe('Authentication & RBAC Test Suite', () => {
         
         // Assert
         expect(response.status).toBe(401);
-        expect(response.body).toHaveProperty('message', 'User not found');
+        expect(response.body.message).toMatch(/^User not found/);
       });
     });
     

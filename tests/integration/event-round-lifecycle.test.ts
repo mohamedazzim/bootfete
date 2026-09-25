@@ -105,10 +105,10 @@ describe('Event Lifecycle Tests', () => {
       const eventData = {
         name: `Test Event ${Date.now()}`,
         description: 'Test event description',
-        type: 'quiz',
+        type: 'technical',
         category: 'technical',
-        startDate: new Date('2025-12-01').toISOString(),
-        endDate: new Date('2025-12-02').toISOString(),
+        startDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+        endDate: new Date(Date.now() + 8 * 24 * 60 * 60 * 1000).toISOString(),
         status: 'draft'
       };
 
@@ -148,10 +148,10 @@ describe('Event Lifecycle Tests', () => {
       const eventData = {
         name: `Test Event ${Date.now()}`,
         description: 'Test event description',
-        type: 'quiz',
+        type: 'technical',
         category: 'technical',
-        startDate: new Date('2025-12-01').toISOString(),
-        endDate: new Date('2025-12-02').toISOString(),
+        startDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+        endDate: new Date(Date.now() + 8 * 24 * 60 * 60 * 1000).toISOString(),
         status: 'draft'
       };
 
@@ -573,6 +573,17 @@ describe('Round Lifecycle Tests', () => {
         duration: 60,
         status: 'not_started'
       });
+
+      // Online rounds require at least one question before they can be started
+      await storage.createQuestion({
+        roundId: testRound.id,
+        questionType: 'mcq',
+        questionText: 'What is 2 + 2?',
+        questionNumber: 1,
+        points: 1,
+        options: ['3', '4'],
+        correctAnswer: '4',
+      });
     });
 
     test('should start round and update status to in_progress', async () => {
@@ -819,6 +830,17 @@ describe('Real-time WebSocket Synchronization Tests', () => {
       roundNumber: 1,
       duration: 60,
       status: 'not_started'
+    });
+
+    // Online rounds require at least one question before they can be started
+    await storage.createQuestion({
+      roundId: testRound.id,
+      questionType: 'mcq',
+      questionText: 'WS test question',
+      questionNumber: 1,
+      points: 1,
+      options: ['A', 'B'],
+      correctAnswer: 'A',
     });
 
     const participant1User = await storage.createUser({

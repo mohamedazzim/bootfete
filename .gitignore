@@ -7,3 +7,9 @@ vite.config.ts.*
 *.log
 logs/
 migrations/
+tests/reports/
+scratchpad_*.txt
+.commandcode/
+.env
+uploads/
+ecosystem.config.js.save

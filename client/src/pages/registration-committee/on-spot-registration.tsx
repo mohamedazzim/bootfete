@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { useForm } from "react-hook-form";
+import { useForm, useFieldArray } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -11,17 +11,35 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Di
 import { Form, FormControl, FormDescription, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Copy, CheckCircle, Trash2, Pencil, UserPlus, Download } from "lucide-react";
+import { Copy, CheckCircle, Trash2, Pencil, UserPlus, Download, ChevronsUpDown, Check, Plus, Users } from "lucide-react";
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem } from "@/components/ui/command";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import RegistrationCommitteeLayout from "@/components/layouts/RegistrationCommitteeLayout";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Event, User, EventCredential } from "@shared/schema";
 
+const teamMemberSchema = z.object({
+  name: z.string().min(1, "Member name is required"),
+  email: z.string().email("Invalid member email"),
+  phone: z.string().optional(),
+  college: z.string().optional(),
+  rollNo: z.string().optional(),
+  department: z.string().optional(),
+  year: z.string().optional(),
+});
+
 const onSpotFormSchema = z.object({
   fullName: z.string().min(1, "Full name is required"),
   email: z.string().email("Invalid email address"),
   phone: z.string().optional(),
+  college: z.string().min(1, "College is required"),
+  rollNo: z.string().min(1, "Roll Number is required"),
+  department: z.string().min(1, "Department is required"),
+  year: z.string().min(1, "Year is required"),
   selectedEvents: z.array(z.string()).min(1, "At least one event must be selected"),
+  teamMembers: z.array(teamMemberSchema).optional(),
 });
 
 type OnSpotFormData = z.infer<typeof onSpotFormSchema>;
@@ -49,8 +67,18 @@ export default function OnSpotRegistrationPage() {
       fullName: "",
       email: "",
       phone: "",
+      college: "",
+      rollNo: "",
+      department: "",
+      year: "",
       selectedEvents: [],
+      teamMembers: [],
     },
+  });
+
+  const { fields: teamFields, append: appendTeamMember, remove: removeTeamMember } = useFieldArray({
+    control: form.control,
+    name: "teamMembers",
   });
 
   const editForm = useForm<{ fullName: string; email: string; phone: string }>({
@@ -69,6 +97,12 @@ export default function OnSpotRegistrationPage() {
     queryKey: ['/api/registration-committee/participants'],
   });
 
+  const { data: colleges = [] } = useQuery<string[]>({
+    queryKey: ['/api/colleges'],
+  });
+
+  const [openCollege, setOpenCollege] = useState(false);
+
   const createMutation = useMutation({
     mutationFn: async (data: OnSpotFormData) => {
       const response = await apiRequest('POST', '/api/registration-committee/participants', data);
@@ -78,18 +112,51 @@ export default function OnSpotRegistrationPage() {
     onSuccess: (data) => {
       setCredentials(data);
       setShowCredentials(true);
-      form.reset();
+      form.reset({
+        fullName: "",
+        email: "",
+        phone: "",
+        college: "",
+        rollNo: "",
+        department: "",
+        year: "",
+        selectedEvents: [],
+        teamMembers: [],
+      });
       queryClient.invalidateQueries({ queryKey: ['/api/registration-committee/participants'] });
       toast({
         title: "Success",
         description: "Participant registered successfully",
       });
     },
-    onError: (error: Error) => {
+    onError: (error: any) => {
+      let title = "Error";
+      let description: React.ReactNode = error.message;
+      let duration = 5000;
+
+      // Handle department limit exceeded error (machine-readable code)
+      if (error?.code === 'DEPARTMENT_LIMIT_EXCEEDED') {
+        title = "Department Limit Reached";
+        description = (
+          <div className="space-y-2">
+            <p className="font-semibold">Only 10 unique participants are allowed per department per college.</p>
+            <p className="text-sm">
+              Department: <span className="font-medium">{error.department}</span>
+            </p>
+            <p className="text-sm">
+              Current Count: <span className="font-medium">{error.currentCount || 10}/10</span>
+            </p>
+            <p className="text-sm mt-2">This limit ensures fair participation across all departments at each college.</p>
+          </div>
+        );
+        duration = 10000; // 10 seconds for department limit errors
+      }
+
       toast({
-        title: "Error",
-        description: error.message,
+        title,
+        description,
         variant: "destructive",
+        duration,
       });
     },
   });
@@ -145,6 +212,10 @@ export default function OnSpotRegistrationPage() {
   const nonTechnicalEvents = availableEvents.filter(e => e.category === 'non_technical');
 
   const selectedEvents = form.watch('selectedEvents');
+  const selectedEventObjects = availableEvents.filter(e => selectedEvents?.includes(e.id));
+  const teamEvent = selectedEventObjects.find(e => (e.maxMembers ?? 1) > 1);
+  const maxAllowedMembers = teamEvent ? ((teamEvent.maxMembers || 2) - 1) : 0;
+
   const selectedTechnicalCount = selectedEvents?.filter(id =>
     technicalEvents.some(e => e.id === id)
   ).length || 0;
@@ -335,6 +406,20 @@ export default function OnSpotRegistrationPage() {
 
                     <FormField
                       control={form.control}
+                      name="rollNo"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Roll Number *</FormLabel>
+                          <FormControl>
+                            <Input {...field} placeholder="Enter roll number" data-testid="input-rollno" />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+
+                    <FormField
+                      control={form.control}
                       name="email"
                       render={({ field }) => (
                         <FormItem>
@@ -359,6 +444,122 @@ export default function OnSpotRegistrationPage() {
                           <FormMessage />
                         </FormItem>
                       )}
+                    />
+
+                    <FormField
+                      control={form.control}
+                      name="department"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Department *</FormLabel>
+                          <FormControl>
+                            <Input {...field} placeholder="e.g. CSE" data-testid="input-dept" />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+
+                    <FormField
+                      control={form.control}
+                      name="year"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Year *</FormLabel>
+                          <FormControl>
+                            <Input {...field} placeholder="e.g. 1" data-testid="input-year" />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+
+                    <FormField
+                      control={form.control}
+                      name="college"
+                      render={({ field }) => {
+                        const [isManualEntry, setIsManualEntry] = useState(false);
+
+                        // Check if current value is not in the list (manual entry)
+                        if (field.value && colleges.length > 0 && !colleges.includes(field.value) && !isManualEntry) {
+                          setIsManualEntry(true);
+                        }
+
+                        return (
+                          <FormItem className="col-span-1 md:col-span-2">
+                            <FormLabel>College *</FormLabel>
+                            <div className="flex flex-col gap-2">
+                              <Popover open={openCollege} onOpenChange={setOpenCollege}>
+                                <PopoverTrigger asChild>
+                                  <FormControl>
+                                    <Button
+                                      variant="outline"
+                                      role="combobox"
+                                      className={cn(
+                                        "w-full justify-between",
+                                        !field.value && "text-muted-foreground"
+                                      )}
+                                    >
+                                      {isManualEntry ? "Other (Enter below)" : (field.value || "Select college")}
+                                      <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                                    </Button>
+                                  </FormControl>
+                                </PopoverTrigger>
+                                <PopoverContent className="w-[--radix-popover-trigger-width] p-0" align="start">
+                                  <Command>
+                                    <CommandInput placeholder="Search college..." />
+                                    <CommandEmpty>No college found.</CommandEmpty>
+                                    <CommandGroup className="max-h-64 overflow-auto">
+                                      {colleges.map((college) => (
+                                        <CommandItem
+                                          value={college}
+                                          key={college}
+                                          onSelect={() => {
+                                            setIsManualEntry(false);
+                                            form.setValue("college", college);
+                                            setOpenCollege(false);
+                                          }}
+                                        >
+                                          <Check
+                                            className={cn(
+                                              "mr-2 h-4 w-4",
+                                              college === field.value
+                                                ? "opacity-100"
+                                                : "opacity-0"
+                                            )}
+                                          />
+                                          {college}
+                                        </CommandItem>
+                                      ))}
+                                      <CommandItem
+                                        value="Other"
+                                        onSelect={() => {
+                                          setIsManualEntry(true);
+                                          form.setValue("college", ""); // Clear value to allow typing
+                                          setOpenCollege(false);
+                                        }}
+                                      >
+                                        <Check className={cn("mr-2 h-4 w-4", isManualEntry ? "opacity-100" : "opacity-0")} />
+                                        Other
+                                      </CommandItem>
+                                    </CommandGroup>
+                                  </Command>
+                                </PopoverContent>
+                              </Popover>
+
+                              {isManualEntry && (
+                                <Input
+                                  placeholder="Enter college name manually"
+                                  value={field.value}
+                                  onChange={e => field.onChange(e.target.value)}
+                                  autoFocus
+                                />
+                              )}
+                            </div>
+                            <FormMessage />
+                          </FormItem>
+                        )
+                      }}
                     />
                   </div>
 
@@ -477,6 +678,118 @@ export default function OnSpotRegistrationPage() {
                       </FormItem>
                     )}
                   />
+
+                  {teamEvent && (
+                    <div className="border rounded-lg p-4 bg-muted/20 space-y-4" data-testid="section-team-members">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <h4 className="font-semibold flex items-center gap-2 text-sm">
+                            <Users className="h-4 w-4 text-primary" />
+                            Team Members ({teamFields.length}/{maxAllowedMembers})
+                          </h4>
+                          <p className="text-xs text-muted-foreground">
+                            For {teamEvent.name}. You can add up to {maxAllowedMembers} additional team members.
+                          </p>
+                        </div>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          disabled={teamFields.length >= maxAllowedMembers}
+                          onClick={() => {
+                            appendTeamMember({
+                              name: "",
+                              email: "",
+                              phone: "",
+                              rollNo: "",
+                              department: form.getValues("department") || "",
+                              year: form.getValues("year") || "",
+                              college: form.getValues("college") || "",
+                            });
+                          }}
+                          data-testid="button-add-team-member"
+                        >
+                          <Plus className="h-4 w-4 mr-1" />
+                          Add Member
+                        </Button>
+                      </div>
+
+                      {teamFields.map((fieldItem, index) => (
+                        <div key={fieldItem.id} className="border p-3 rounded-md bg-background space-y-3" data-testid={`team-member-item-${index}`}>
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs font-semibold uppercase text-muted-foreground">
+                              Member #{index + 2}
+                            </span>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              className="h-7 text-destructive hover:text-destructive"
+                              onClick={() => removeTeamMember(index)}
+                              data-testid={`button-remove-team-member-${index}`}
+                            >
+                              <Trash2 className="h-3.5 w-3.5 mr-1" />
+                              Remove
+                            </Button>
+                          </div>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
+                            <FormField
+                              control={form.control}
+                              name={`teamMembers.${index}.name`}
+                              render={({ field }) => (
+                                <FormItem>
+                                  <FormLabel className="text-xs">Full Name *</FormLabel>
+                                  <FormControl>
+                                    <Input {...field} placeholder="Member name" className="h-8 text-sm" data-testid={`input-team-name-${index}`} />
+                                  </FormControl>
+                                  <FormMessage />
+                                </FormItem>
+                              )}
+                            />
+                            <FormField
+                              control={form.control}
+                              name={`teamMembers.${index}.email`}
+                              render={({ field }) => (
+                                <FormItem>
+                                  <FormLabel className="text-xs">Email *</FormLabel>
+                                  <FormControl>
+                                    <Input {...field} type="email" placeholder="Member email" className="h-8 text-sm" data-testid={`input-team-email-${index}`} />
+                                  </FormControl>
+                                  <FormMessage />
+                                </FormItem>
+                              )}
+                            />
+                            <FormField
+                              control={form.control}
+                              name={`teamMembers.${index}.rollNo`}
+                              render={({ field }) => (
+                                <FormItem>
+                                  <FormLabel className="text-xs">Roll No</FormLabel>
+                                  <FormControl>
+                                    <Input {...field} placeholder="Roll number" className="h-8 text-sm" data-testid={`input-team-rollno-${index}`} />
+                                  </FormControl>
+                                  <FormMessage />
+                                </FormItem>
+                              )}
+                            />
+                            <FormField
+                              control={form.control}
+                              name={`teamMembers.${index}.phone`}
+                              render={({ field }) => (
+                                <FormItem>
+                                  <FormLabel className="text-xs">Phone</FormLabel>
+                                  <FormControl>
+                                    <Input {...field} placeholder="Phone (optional)" className="h-8 text-sm" data-testid={`input-team-phone-${index}`} />
+                                  </FormControl>
+                                  <FormMessage />
+                                </FormItem>
+                              )}
+                            />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
 
                   <Button
                     type="submit"

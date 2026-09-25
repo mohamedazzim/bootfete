@@ -57,6 +57,10 @@ export const eventRules = pgTable("event_rules", {
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
+// Round Type constants
+export const ROUND_TYPES = ['prelims', 'finals'] as const;
+export type RoundType = typeof ROUND_TYPES[number];
+
 // Rounds - multiple rounds per event
 export const rounds = pgTable("rounds", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -64,13 +68,17 @@ export const rounds = pgTable("rounds", {
   name: text("name").notNull(), // Round 1, Round 2, etc.
   description: text("description"),
   roundNumber: integer("round_number").notNull(),
+  roundType: varchar("round_type", { enum: ['prelims', 'finals'] }).notNull().default('prelims'), // prelims = qualification round, finals = winner declaration
   duration: integer("duration").notNull(), // in minutes
   startTime: timestamp("start_time"),
   endTime: timestamp("end_time"),
   status: text("status").notNull().default('not_started'), // not_started, in_progress, completed
   startedAt: timestamp("started_at"), // When admin starts the round
   endedAt: timestamp("ended_at"), // When admin ends the round
-  resultsPublished: boolean("results_published").notNull().default(false), // Admin can publish results
+  resultsPublished: boolean("results_published").notNull().default(false), // Admin can publish results (Emails)
+  showAnswers: boolean("show_answers").notNull().default(false), // Admin can show answers to participants
+  isManual: boolean("is_manual").notNull().default(false), // true = physical/manual round, false = online test
+  conductMedium: varchar("conduct_medium", { enum: ['online', 'physical'] }).notNull().default('online'),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
@@ -179,18 +187,59 @@ export const registrationForms = pgTable("registration_forms", {
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
+// Paper Presentation Topics - used when event name matches 'Paper Presentation' or 'Quanta Talks'
+export const PAPER_PRESENTATION_TOPICS = [
+  "Generative AI in Real-World Applications",
+  "Machine Learning",
+  "Internet of Things",
+  "Quantum Computing",
+  "Cybersecurity and Privacy",
+  "Robotics and Automation",
+  "Cloud Computing",
+  "Mobile Networks",
+  "Big Data and Analytics",
+  "Emotional Intelligence in Information Technology",
+  "Augmented Reality and Virtual Reality",
+  "Nano Technology",
+  "Emerging Applications in Healthcare and Engineering",
+  "Blockchain Systems"
+] as const;
+
+export type PaperPresentationTopic = typeof PAPER_PRESENTATION_TOPICS[number];
+
+// Food type enum for participant meals
+export const FOOD_TYPES = ['veg', 'nonveg'] as const;
+export type FoodType = typeof FOOD_TYPES[number];
+
+// Department options for registration
+export const DEPARTMENT_OPTIONS = [
+  "M.Sc. in Computer Science (M.Sc. CS)",
+  "M.C.A. (Master of Computer Applications)",
+  "M.Sc. in Data Science (M.Sc. DS)",
+  "M.Sc. in Information Technology (M.Sc. IT)",
+  "M.Sc. in Cybersecurity (M.Sc. Cyber Security)",
+  "M.Sc. in Artificial Intelligence (M.Sc. AI)",
+  "Msc Software Development",
+  "Others"
+] as const;
+export type DepartmentOption = typeof DEPARTMENT_OPTIONS[number];
+
 // Registrations - team-based event registrations
 // Each registration is for ONE event, with organizer and optional team members
 export const registrations = pgTable("registrations", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   eventId: varchar("event_id").references(() => events.id, { onDelete: 'cascade' }).notNull(),
+  teamId: varchar("team_id"), // Generated team ID for display (e.g., BHCWS01)
   organizerRollNo: varchar("organizer_roll_no").notNull(),
   organizerName: text("organizer_name").notNull(),
   organizerEmail: text("organizer_email").notNull(),
   organizerDept: text("organizer_dept").notNull(),
   organizerCollege: text("organizer_college"),
   organizerPhone: text("organizer_phone"),
+  organizerFoodType: varchar("organizer_food_type", { enum: ['veg', 'nonveg'] }).notNull().default('veg'),
   registrationType: varchar("registration_type", { enum: ['solo', 'team'] }).notNull().default('solo'),
+  // Paper Presentation topic - only required when event is Paper Presentation
+  paperTopic: text("paper_topic"),
   status: varchar("status", { enum: ['pending', 'confirmed', 'cancelled'] }).notNull().default('pending'),
   confirmedAt: timestamp("confirmed_at"),
   confirmedBy: varchar("confirmed_by").references(() => users.id, { onDelete: 'set null' }),
@@ -207,7 +256,23 @@ export const teamMembers = pgTable("team_members", {
   memberEmail: text("member_email").notNull(),
   memberDept: text("member_dept").notNull(),
   memberPhone: text("member_phone"),
+  memberFoodType: varchar("member_food_type", { enum: ['veg', 'nonveg'] }).notNull().default('veg'),
   addedAt: timestamp("added_at").defaultNow().notNull(),
+});
+
+// Participant Registry - global participant info by roll_no (food preferences persist across registrations)
+// This table stores participant information that should be consistent across all their registrations
+export const participantRegistry = pgTable("participant_registry", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  rollNo: varchar("roll_no").notNull().unique(), // Unique identifier for participant
+  name: text("name").notNull(),
+  email: text("email"),
+  dept: text("dept"),
+  phone: text("phone"),
+  college: text("college"),
+  foodType: varchar("food_type", { enum: ['veg', 'nonveg'] }).notNull().default('veg'),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
 // Event Credentials - event-specific credentials for participants
@@ -226,7 +291,9 @@ export const eventCredentials = pgTable("event_credentials", {
 // Audit Logs - track super admin override actions
 export const auditLogs = pgTable("audit_logs", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  adminId: varchar("admin_id").references(() => users.id, { onDelete: 'set null' }).notNull(),
+  // Nullable: when the admin account is deleted the FK sets NULL while
+  // admin_username preserves who performed the action in the audit trail.
+  adminId: varchar("admin_id").references(() => users.id, { onDelete: 'set null' }),
   adminUsername: text("admin_username").notNull(),
   action: text("action").notNull(),
   targetType: text("target_type").notNull(),
@@ -249,6 +316,43 @@ export const emailLogs = pgTable("email_logs", {
   errorMessage: text("error_message"),
   sentAt: timestamp("sent_at").notNull().defaultNow(),
   metadata: jsonb("metadata"),
+});
+
+// Manual Round Entries - for physical/offline round results entered manually
+// Used when Round 2+ happens outside the app (on paper, physically, etc.)
+export const manualRoundEntries = pgTable("manual_round_entries", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  eventId: varchar("event_id").references(() => events.id, { onDelete: 'cascade' }).notNull(),
+  roundNumber: integer("round_number").notNull(), // 2, 3, etc.
+  roundName: text("round_name").notNull(), // "Semi Finals", "Finals", etc.
+  participantUserId: varchar("participant_user_id").references(() => users.id, { onDelete: 'set null' }),
+  participantName: text("participant_name").notNull(),
+  participantRollNo: text("participant_roll_no"),
+  participantCollege: text("participant_college"),
+  participantDept: text("participant_dept"),
+  score: integer("score"),
+  rank: integer("rank"),
+  notes: text("notes"),
+  enteredBy: varchar("entered_by").references(() => users.id, { onDelete: 'set null' }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+// Event Winners - winners for each event with positions
+export const eventWinners = pgTable("event_winners", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  eventId: varchar("event_id").references(() => events.id, { onDelete: 'cascade' }).notNull(),
+  position: integer("position").notNull(), // 1 = 1st place, 2 = 2nd place, 3 = 3rd place
+  participantUserId: varchar("participant_user_id").references(() => users.id, { onDelete: 'set null' }),
+  participantName: text("participant_name").notNull(),
+  participantRollNo: text("participant_roll_no"),
+  participantCollege: text("participant_college"),
+  participantDept: text("participant_dept"),
+  finalScore: integer("final_score"),
+  winningRound: text("winning_round"), // "Round 1", "Finals", etc.
+  teamMembers: jsonb("team_members").$type<Array<{ name: string, rollNo: string }>>(),
+  declaredBy: varchar("declared_by").references(() => users.id, { onDelete: 'set null' }),
+  declaredAt: timestamp("declared_at").defaultNow().notNull(),
 });
 
 // Relations
@@ -338,6 +442,12 @@ export const insertEventCredentialSchema = createInsertSchema(eventCredentials).
   createdAt: true,
 });
 
+export const insertParticipantRegistrySchema = createInsertSchema(participantRegistry).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
 export const insertAuditLogSchema = createInsertSchema(auditLogs).omit({
   id: true,
   timestamp: true,
@@ -346,6 +456,17 @@ export const insertAuditLogSchema = createInsertSchema(auditLogs).omit({
 export const insertEmailLogSchema = createInsertSchema(emailLogs).omit({
   id: true,
   sentAt: true,
+});
+
+export const insertManualRoundEntrySchema = createInsertSchema(manualRoundEntries).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertEventWinnerSchema = createInsertSchema(eventWinners).omit({
+  id: true,
+  declaredAt: true,
 });
 
 // TypeScript types
@@ -393,8 +514,17 @@ export type InsertTeamMember = z.infer<typeof insertTeamMemberSchema>;
 export type EventCredential = typeof eventCredentials.$inferSelect;
 export type InsertEventCredential = z.infer<typeof insertEventCredentialSchema>;
 
+export type ParticipantRegistry = typeof participantRegistry.$inferSelect;
+export type InsertParticipantRegistry = z.infer<typeof insertParticipantRegistrySchema>;
+
 export type AuditLog = typeof auditLogs.$inferSelect;
 export type InsertAuditLog = z.infer<typeof insertAuditLogSchema>;
 
 export type EmailLog = typeof emailLogs.$inferSelect;
 export type InsertEmailLog = z.infer<typeof insertEmailLogSchema>;
+
+export type ManualRoundEntry = typeof manualRoundEntries.$inferSelect;
+export type InsertManualRoundEntry = z.infer<typeof insertManualRoundEntrySchema>;
+
+export type EventWinner = typeof eventWinners.$inferSelect;
+export type InsertEventWinner = z.infer<typeof insertEventWinnerSchema>;

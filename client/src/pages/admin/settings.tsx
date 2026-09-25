@@ -16,7 +16,8 @@ interface SystemSettings {
   email: {
     provider: string;
     configured: boolean;
-    apiKey: string | null;
+    host: string | null;
+    user: string | null;
     from: string | null;
   };
 }
@@ -91,14 +92,12 @@ export default function AdminSettings() {
                       <p className="text-xs text-green-600">✓ Configured</p>
                     </div>
                     <div className="space-y-2">
-                      <Label htmlFor="email-apikey">API Key</Label>
+                      <Label htmlFor="email-host">SMTP Host</Label>
                       <Input
-                        id="email-apikey"
-                        value={systemSettings.email.apiKey || ""}
+                        id="email-host"
+                        value={systemSettings.email.host || ""}
                         disabled
-                        type="password"
-                        autoComplete="off"
-                        data-testid="input-email-apikey"
+                        data-testid="input-email-host"
                       />
                       <p className="text-xs text-green-600">✓ Configured</p>
                     </div>
@@ -118,10 +117,10 @@ export default function AdminSettings() {
                 <>
                   <div className="bg-yellow-50 border border-yellow-200 rounded-md p-4 mb-4">
                     <p className="text-sm text-yellow-800">
-                      ⚠️ Resend is not configured. Emails will be logged but not sent.
+                      ⚠️ SMTP is not configured. Emails will be logged but not sent.
                     </p>
                     <p className="text-xs text-yellow-700 mt-1">
-                      To enable email sending, configure RESEND_API_KEY and RESEND_FROM_EMAIL
+                      To enable email sending, configure SMTP_HOST, SMTP_USER, SMTP_PASS, and SMTP_FROM_EMAIL
                     </p>
                   </div>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -129,20 +128,19 @@ export default function AdminSettings() {
                       <Label htmlFor="email-provider">Email Provider</Label>
                       <Input
                         id="email-provider"
-                        placeholder="Resend"
+                        placeholder="SMTP"
                         disabled
                         data-testid="input-email-provider"
                       />
                       <p className="text-xs text-gray-500">Not configured</p>
                     </div>
                     <div className="space-y-2">
-                      <Label htmlFor="email-apikey">API Key</Label>
+                      <Label htmlFor="email-host">SMTP Host</Label>
                       <Input
-                        id="email-apikey"
-                        placeholder="re_..."
+                        id="email-host"
+                        placeholder="smtp.titan.email"
                         disabled
-                        type="password"
-                        data-testid="input-email-apikey"
+                        data-testid="input-email-host"
                       />
                       <p className="text-xs text-gray-500">Not configured</p>
                     </div>

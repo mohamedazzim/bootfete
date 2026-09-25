@@ -10,6 +10,10 @@ class RedisClient {
   private readonly MAX_RETRIES = 3;
 
   private constructor() {
+    // Skip Redis connection entirely during tests to avoid noisy connection errors
+    if (process.env.NODE_ENV === 'test' || process.env.DISABLE_REDIS === 'true') {
+      return;
+    }
     this.initializeClient();
   }
 

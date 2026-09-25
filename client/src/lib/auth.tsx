@@ -36,27 +36,44 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [token]);
 
   async function fetchCurrentUser() {
-    try {
-      const response = await fetch('/api/auth/me', {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
+    // Only a definitive 401 invalidates the session. Transient failures
+    // (5xx, network) are retried so a slow backend doesn't log users out
+    // on every page refresh.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const response = await fetch('/api/auth/me', {
+          headers: {
+            'Authorization': `Bearer ${token}`
+          }
+        });
 
-      if (response.ok) {
-        const userData = await response.json();
-        setUser(userData);
-      } else {
-        localStorage.removeItem('token');
-        setToken(null);
+        if (response.ok) {
+          const userData = await response.json();
+          setUser(userData);
+          setIsLoading(false);
+          return;
+        }
+
+        if (response.status === 401) {
+          localStorage.removeItem('token');
+          setToken(null);
+          setIsLoading(false);
+          return;
+        }
+        // Non-401: fall through to retry
+      } catch (error) {
+        // Network error: fall through to retry
+        console.error('Failed to fetch current user:', error);
       }
-    } catch (error) {
-      console.error('Failed to fetch current user:', error);
-      localStorage.removeItem('token');
-      setToken(null);
-    } finally {
-      setIsLoading(false);
+
+      if (attempt < 2) {
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+      }
     }
+
+    // All retries exhausted without a 401: keep the token but let the
+    // app render unauthenticated rather than purging a valid session.
+    setIsLoading(false);
   }
 
   async function login(username: string, password: string) {
@@ -82,6 +99,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setLocation('/admin/dashboard');
     } else if (data.user.role === 'event_admin') {
       setLocation('/event-admin/dashboard');
+    } else if (data.user.role === 'registration_committee') {
+      setLocation('/registration-committee/dashboard');
     } else {
       setLocation('/participant/dashboard');
     }
@@ -110,6 +129,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setLocation('/admin/dashboard');
     } else if (data.user.role === 'event_admin') {
       setLocation('/event-admin/dashboard');
+    } else if (data.user.role === 'registration_committee') {
+      setLocation('/registration-committee/dashboard');
     } else {
       setLocation('/participant/dashboard');
     }

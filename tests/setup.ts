@@ -1,4 +1,7 @@
 import { beforeAll, afterAll, jest } from '@jest/globals';
+import dns from 'dns';
+
+dns.setDefaultResultOrder('ipv4first');
 
 // Global test setup
 beforeAll(async () => {
@@ -19,5 +22,6 @@ afterAll(async () => {
   console.log('🏁 Test suite completed');
 });
 
-// Global test timeout
-jest.setTimeout(30000);
+// Global test timeout — integration tests make multiple HTTP round trips to a
+// remote serverless Postgres (Neon), which can be slow under load.
+jest.setTimeout(120000);

@@ -3,7 +3,7 @@ import { useLocation } from 'wouter';
 import { useAuth } from '@/lib/auth';
 import EventAdminLayout from '@/components/layouts/EventAdminLayout';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Settings, Play, Users, Calendar } from 'lucide-react';
+import { Settings, Play, Users, Calendar, Trophy } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import type { Event } from '@shared/schema';
 
@@ -18,6 +18,16 @@ export default function EventAdminDashboard() {
 
   const { data, isLoading } = useQuery<MyEventResponse>({
     queryKey: ['/api/event-admin/my-event'],
+    refetchInterval: 3000, // Auto-refresh every 3 seconds for live updates
+  });
+
+  const { data: stats } = useQuery<{
+    totalTeams: number;
+    teamsPerEvent: { eventId: string; eventName: string; count: number }[];
+    teamsPerCollege: { college: string; count: number }[];
+  }>({
+    queryKey: ['/api/event-admin/stats'],
+    refetchInterval: 3000, // Auto-refresh every 3 seconds for live updates
   });
 
   if (isLoading) {
@@ -146,6 +156,33 @@ export default function EventAdminDashboard() {
                 </div>
               </CardContent>
             </Card>
+
+
+            {/* Results & Winners Button */}
+            <Card
+              className="cursor-pointer hover:shadow-2xl transition-all duration-300 transform hover:-translate-y-1 border-2 hover:border-yellow-400"
+              onClick={() => setLocation(`/event-admin/events/${event.id}/results`)}
+            >
+              <CardContent className="p-8">
+                <div className="text-center">
+                  <div className="inline-flex items-center justify-center w-20 h-20 rounded-full bg-gradient-to-br from-yellow-500 to-yellow-600 mb-6 shadow-lg">
+                    <Trophy className="h-10 w-10 text-white ml-0.5" />
+                  </div>
+                  <h3 className="text-2xl font-bold text-gray-900 mb-3">
+                    Results & Winners
+                  </h3>
+                  <p className="text-gray-600 mb-6">
+                    Declare results, promote qualifiers, and announce winners
+                  </p>
+                  <Button
+                    className="w-full bg-yellow-600 hover:bg-yellow-700 text-white py-6 text-lg font-semibold"
+                    data-testid="button-results-control"
+                  >
+                    Manage Results
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
           </div>
 
           {/* Event Info Footer */}
@@ -156,8 +193,56 @@ export default function EventAdminDashboard() {
               Category: <span className="font-semibold capitalize">{event.category.replace('_', ' ')}</span>
             </p>
           </div>
+          <div className="mt-12">
+            <h2 className="text-xl font-bold mb-4 text-center">Event Analytics</h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-lg">Teams Overview</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {stats?.teamsPerEvent && stats.teamsPerEvent.length > 0 ? (
+                    <div className="space-y-2">
+                      {stats.teamsPerEvent.map((stat) => (
+                        <div key={stat.eventId} className="flex justify-between items-center border-b pb-2 last:border-0">
+                          <span className="font-medium">{stat.eventName}</span>
+                          <span className="bg-indigo-100 text-indigo-700 px-2 py-1 rounded text-sm font-bold">{stat.count}</span>
+                        </div>
+                      ))}
+                      <div className="pt-2 flex justify-between items-center border-t mt-2">
+                        <span className="font-bold">Total Teams</span>
+                        <span className="font-bold text-lg">{stats.totalTeams}</span>
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="text-gray-500 text-sm">No registrations found.</p>
+                  )}
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-lg">College Distribution</CardTitle>
+                </CardHeader>
+                <CardContent className="max-h-[300px] overflow-y-auto">
+                  {stats?.teamsPerCollege && stats.teamsPerCollege.length > 0 ? (
+                    <div className="space-y-2">
+                      {stats.teamsPerCollege.map((stat, idx) => (
+                        <div key={idx} className="flex justify-between items-center border-b pb-2 last:border-0">
+                          <span className="truncate max-w-[70%] text-sm" title={stat.college}>{stat.college}</span>
+                          <span className="bg-purple-100 text-purple-700 px-2 py-1 rounded text-sm font-bold">{stat.count}</span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-gray-500 text-sm">No college data available.</p>
+                  )}
+                </CardContent>
+              </Card>
+            </div>
+          </div>
         </div>
       </div>
-    </EventAdminLayout>
+    </EventAdminLayout >
   );
 }

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import AdminLayout from '@/components/layouts/AdminLayout';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
@@ -28,13 +28,34 @@ export default function EmailLogsPage() {
   const [dateRange, setDateRange] = useState<DateRange | undefined>(undefined);
   const [page, setPage] = useState<number>(1);
   const [selectedLog, setSelectedLog] = useState<EmailLog | null>(null);
+  const [selectedLogDetail, setSelectedLogDetail] = useState<EmailLog | null>(null);
   const [testEmailDialogOpen, setTestEmailDialogOpen] = useState<boolean>(false);
   const [testEmailAddress, setTestEmailAddress] = useState<string>('');
   const [testEmailName, setTestEmailName] = useState<string>('Test User');
   const [testResult, setTestResult] = useState<{ success: boolean; message: string; messageId?: string } | null>(null);
-  const logsPerPage = 50;
+  const logsPerPage = 50; // Reduced from 100 to 50 for better performance
 
-  const buildQueryKey = () => {
+  // Reset page to 1 when filters change
+  useEffect(() => {
+    setPage(1);
+  }, [statusFilter, templateTypeFilter, dateRange?.from, dateRange?.to]);
+
+  const buildQueryUrl = () => {
+    const params = new URLSearchParams();
+    if (statusFilter !== 'all') params.append('status', statusFilter);
+    if (templateTypeFilter !== 'all') params.append('templateType', templateTypeFilter);
+    if (dateRange?.from) params.append('startDate', dateRange.from.toISOString());
+    if (dateRange?.to) params.append('endDate', dateRange.to.toISOString());
+
+    // Add server-side pagination to prevent 507 errors from large datasets
+    params.append('limit', logsPerPage.toString());
+    params.append('offset', ((page - 1) * logsPerPage).toString());
+
+    const queryString = params.toString();
+    return queryString ? `/api/email-logs?${queryString}` : '/api/email-logs';
+  };
+
+  const buildCountUrl = () => {
     const params = new URLSearchParams();
     if (statusFilter !== 'all') params.append('status', statusFilter);
     if (templateTypeFilter !== 'all') params.append('templateType', templateTypeFilter);
@@ -42,13 +63,45 @@ export default function EmailLogsPage() {
     if (dateRange?.to) params.append('endDate', dateRange.to.toISOString());
 
     const queryString = params.toString();
-    return queryString ? `/api/email-logs?${queryString}` : '/api/email-logs';
+    return queryString ? `/api/email-logs/count?${queryString}` : '/api/email-logs/count';
   };
 
   const { data: emailLogs, isLoading } = useQuery<EmailLog[]>({
-    queryKey: [buildQueryKey()],
+    queryKey: [
+      '/api/email-logs',
+      statusFilter,
+      templateTypeFilter,
+      dateRange?.from?.toISOString(),
+      dateRange?.to?.toISOString(),
+      page,
+      logsPerPage
+    ],
+    queryFn: () => fetch(buildQueryUrl(), {
+      headers: {
+        'Authorization': `Bearer ${localStorage.getItem('token')}`
+      }
+    }).then(res => res.json())
   });
 
+  const { data: totalCountData } = useQuery<{ count: number }>({
+    queryKey: [
+      '/api/email-logs/count',
+      statusFilter,
+      templateTypeFilter,
+      dateRange?.from?.toISOString(),
+      dateRange?.to?.toISOString()
+    ],
+    queryFn: () => fetch(buildCountUrl(), {
+      headers: {
+        'Authorization': `Bearer ${localStorage.getItem('token')}`
+      }
+    }).then(res => res.json())
+  });
+
+  const totalCount = totalCountData?.count || 0;
+  const totalPages = Math.ceil(totalCount / logsPerPage);
+
+  // Client-side filtering only for search (email search)
   const filteredLogs = emailLogs?.filter(log => {
     if (searchEmail && !log.recipientEmail.toLowerCase().includes(searchEmail.toLowerCase())) {
       return false;
@@ -56,8 +109,7 @@ export default function EmailLogsPage() {
     return true;
   }) || [];
 
-  const totalPages = Math.ceil(filteredLogs.length / logsPerPage);
-  const paginatedLogs = filteredLogs.slice((page - 1) * logsPerPage, page * logsPerPage);
+  const paginatedLogs = filteredLogs;
 
   const getStatusBadgeVariant = (status: string) => {
     switch (status) {
@@ -80,6 +132,15 @@ export default function EmailLogsPage() {
         variant: 'destructive'
       });
       return;
+    }
+
+    // Warn user about pagination limitation
+    if (filteredLogs.length === logsPerPage) {
+      toast({
+        title: 'Export Notice',
+        description: `Exporting current page only (${filteredLogs.length} records). For full export, remove filters or export multiple pages.`,
+        duration: 5000
+      });
     }
 
     const headers = ['Sent At', 'Recipient Name', 'Recipient Email', 'Subject', 'Template Type', 'Status', 'Error Message'];
@@ -115,7 +176,7 @@ export default function EmailLogsPage() {
   const testEmailMutation = useMutation({
     mutationFn: async (emailData: { to: string; name: string }) => {
       const response = await apiRequest('POST', '/api/test-email', emailData);
-      return response;
+      return await response.json();
     },
     onSuccess: (data: any) => {
       queryClient.invalidateQueries({ queryKey: ['/api/email-logs'] });
@@ -456,7 +517,23 @@ export default function EmailLogsPage() {
                                 <Button
                                   variant="ghost"
                                   size="sm"
-                                  onClick={() => setSelectedLog(log)}
+                                  onClick={async () => {
+                                    setSelectedLog(log);
+                                    // Fetch full details including metadata
+                                    try {
+                                      const response = await fetch(`/api/email-logs/${log.id}`, {
+                                        headers: {
+                                          'Authorization': `Bearer ${localStorage.getItem('token')}`
+                                        }
+                                      });
+                                      if (response.ok) {
+                                        const fullLog = await response.json();
+                                        setSelectedLogDetail(fullLog);
+                                      }
+                                    } catch (error) {
+                                      console.error('Failed to fetch email log details:', error);
+                                    }
+                                  }}
                                   data-testid={`button-view-details-${log.id}`}
                                 >
                                   <Eye className="h-4 w-4" />
@@ -515,12 +592,17 @@ export default function EmailLogsPage() {
                                           </p>
                                         </div>
                                       )}
-                                      {selectedLog.metadata != null && (
+                                      {selectedLogDetail?.metadata != null && (
                                         <div className="col-span-2">
                                           <label className="text-sm font-medium text-gray-500">Metadata</label>
-                                          <pre className="text-xs mt-1 bg-gray-50 p-3 rounded-md overflow-x-auto" data-testid="dialog-text-metadata">
-                                            {JSON.stringify(selectedLog.metadata, null, 2) as string}
+                                          <pre className="text-xs mt-1 bg-gray-50 p-3 rounded-md overflow-x-auto max-h-64 overflow-y-auto" data-testid="dialog-text-metadata">
+                                            {JSON.stringify(selectedLogDetail.metadata, null, 2) as string}
                                           </pre>
+                                        </div>
+                                      )}
+                                      {!selectedLogDetail && selectedLog && (
+                                        <div className="col-span-2 text-center py-4">
+                                          <p className="text-sm text-gray-500">Loading full details...</p>
                                         </div>
                                       )}
                                     </div>
@@ -535,10 +617,10 @@ export default function EmailLogsPage() {
                   </Table>
                 </div>
 
-                {totalPages > 1 && (
+                {paginatedLogs && paginatedLogs.length > 0 && (
                   <div className="flex items-center justify-between mt-4">
                     <div className="text-sm text-gray-500" data-testid="text-pagination-info">
-                      Showing {(page - 1) * logsPerPage + 1} to {Math.min(page * logsPerPage, filteredLogs.length)} of {filteredLogs.length} logs
+                      Showing {(page - 1) * logsPerPage + 1} to {Math.min((page - 1) * logsPerPage + filteredLogs.length, totalCount)} of {totalCount} email logs
                     </div>
                     <div className="flex items-center gap-2">
                       <Button
@@ -551,13 +633,13 @@ export default function EmailLogsPage() {
                         Previous
                       </Button>
                       <span className="text-sm" data-testid="text-current-page">
-                        Page {page} of {totalPages}
+                        Page {page} of {totalPages || 1}
                       </span>
                       <Button
                         variant="outline"
                         size="sm"
-                        onClick={() => setPage(p => Math.min(totalPages, p + 1))}
-                        disabled={page === totalPages}
+                        onClick={() => setPage(p => p + 1)}
+                        disabled={page >= totalPages}
                         data-testid="button-next-page"
                       >
                         Next

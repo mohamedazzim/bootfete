@@ -6,7 +6,11 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Users, Search, Filter } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Users, Search, Filter, Eye, Download } from 'lucide-react';
+import { queryClient, apiRequest } from '@/lib/queryClient';
+import { useToast } from '@/hooks/use-toast';
 import type { Participant, Event, User } from '@shared/schema';
 
 interface TeamGroupedParticipant {
@@ -16,6 +20,7 @@ interface TeamGroupedParticipant {
   registrationType: 'team' | 'solo';
   eventId: string;
   eventName: string;
+  paperTopic?: string | null;
   status: string;
   registeredAt: Date;
   user: {
@@ -23,16 +28,61 @@ interface TeamGroupedParticipant {
     email: string;
   };
   event: Event;
+  teamMembers?: {
+    memberName: string;
+    memberRollNo: string;
+    memberDept: string;
+    memberEmail: string;
+    memberPhone: string;
+  }[];
+  credentials?: {
+    username: string;
+    password: string;
+    rollNo?: string | null;
+  } | null;
 }
 
 export default function AllParticipantsPage() {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedEvent, setSelectedEvent] = useState<string>('all');
   const [selectedStatus, setSelectedStatus] = useState<string>('all');
+  const [selectedTeamParticipant, setSelectedTeamParticipant] = useState<TeamGroupedParticipant | null>(null);
 
   const { data: participants, isLoading } = useQuery<TeamGroupedParticipant[]>({
     queryKey: ['/api/event-admin/participants'],
   });
+
+  const { toast } = useToast();
+  const [isExporting, setIsExporting] = useState(false);
+
+  const handleExport = async () => {
+    try {
+      setIsExporting(true);
+      const res = await apiRequest('GET', '/api/event-admin/participants/export');
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'participants_credentials.csv';
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+      toast({
+        title: "Export Successful",
+        description: "Participant credentials have been downloaded.",
+      });
+    } catch (error) {
+      console.error("Export failed:", error);
+      toast({
+        title: "Export Failed",
+        description: "Could not download credentials.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsExporting(false);
+    }
+  };
 
   const uniqueEvents = useMemo(() => {
     if (!participants) return [];
@@ -50,9 +100,9 @@ export default function AllParticipantsPage() {
 
     return participants.filter(participant => {
       const matchesSearch =
-        participant.displayName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        participant.user.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        participant.eventName.toLowerCase().includes(searchTerm.toLowerCase());
+        (participant.displayName || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (participant.user?.email || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (participant.eventName || '').toLowerCase().includes(searchTerm.toLowerCase());
 
       const matchesEvent = selectedEvent === 'all' || participant.eventId === selectedEvent;
       const matchesStatus = selectedStatus === 'all' || participant.status === selectedStatus;
@@ -117,11 +167,17 @@ export default function AllParticipantsPage() {
               </h1>
               <p className="text-gray-600 mt-1">Manage participants across all your assigned events</p>
             </div>
-            <div className="text-right">
-              <div className="text-3xl font-bold text-indigo-600" data-testid="text-total-participants">
-                {participants?.length || 0}
+            <div className="flex flex-col items-end gap-2">
+              <div className="text-right">
+                <div className="text-3xl font-bold text-indigo-600" data-testid="text-total-participants">
+                  {participants?.length || 0}
+                </div>
+                <div className="text-sm text-gray-600">Total Participants</div>
               </div>
-              <div className="text-sm text-gray-600">Total Participants</div>
+              <Button onClick={handleExport} disabled={isExporting} variant="outline" size="sm" className="gap-2">
+                <Download className="h-4 w-4" />
+                {isExporting ? 'Exporting...' : 'Export Credentials'}
+              </Button>
             </div>
           </div>
         </div>
@@ -194,38 +250,88 @@ export default function AllParticipantsPage() {
                     <TableHeader>
                       <TableRow>
                         <TableHead>Participant/Team</TableHead>
-                        <TableHead>Event Name</TableHead>
+                        <TableHead>Event Name / Paper Topic</TableHead>
                         <TableHead>Type</TableHead>
+                        <TableHead>Event Credentials</TableHead>
                         <TableHead>Status</TableHead>
+                        <TableHead className="text-right">Actions</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {filteredParticipants.map((participant) => (
-                        <TableRow key={participant.id} data-testid={`row-participant-${participant.id}`}>
-                          <TableCell>
-                            <div>
-                              <div className="font-medium" data-testid={`text-participant-name-${participant.id}`}>
-                                {participant.displayName}
+                      {filteredParticipants.map((participant) => {
+                        const eventName = participant.eventName || '';
+                        const isPaperEvent = eventName.toLowerCase().includes('paper') ||
+                          eventName.toLowerCase().includes('quanta');
+
+                        return (
+                          <TableRow key={participant.id} data-testid={`row-participant-${participant.id}`}>
+                            <TableCell>
+                              <div>
+                                <div className="font-medium" data-testid={`text-participant-name-${participant.id}`}>
+                                  {participant.user.fullName}
+                                </div>
+                                <div className="text-sm text-gray-500">
+                                  {participant.credentials?.rollNo ? (
+                                    <span className="font-mono text-xs bg-gray-100 px-1 rounded mr-1">
+                                      {participant.credentials.rollNo}
+                                    </span>
+                                  ) : null}
+                                  {participant.registrationType === 'team' ? `Team of ${participant.teamSize}` : 'Solo'}
+                                </div>
                               </div>
-                              <div className="text-sm text-gray-500">{participant.user.email}</div>
-                            </div>
-                          </TableCell>
-                          <TableCell data-testid={`text-event-name-${participant.id}`}>
-                            {participant.eventName}
-                          </TableCell>
-                          <TableCell>
-                            {participant.registrationType === 'team' ? (
-                              <Badge variant="default" className="gap-1">
-                                <Users className="h-3 w-3" />
-                                {participant.teamSize}
-                              </Badge>
-                            ) : (
-                              <Badge variant="secondary">Solo</Badge>
-                            )}
-                          </TableCell>
-                          <TableCell>{getStatusBadge(participant.status)}</TableCell>
-                        </TableRow>
-                      ))}
+                            </TableCell>
+                            <TableCell data-testid={`text-event-name-${participant.id}`}>
+                              {isPaperEvent && participant.paperTopic ? (
+                                <div>
+                                  <div className="font-medium">{participant.paperTopic}</div>
+                                  <div className="text-sm text-gray-500">{participant.eventName}</div>
+                                </div>
+                              ) : (
+                                participant.eventName
+                              )}
+                            </TableCell>
+                            <TableCell>
+                              {participant.registrationType === 'team' ? (
+                                <Badge variant="default" className="gap-1">
+                                  <Users className="h-3 w-3" />
+                                  {participant.teamSize}
+                                </Badge>
+                              ) : (
+                                <Badge variant="secondary">Solo</Badge>
+                              )}
+                            </TableCell>
+                            <TableCell>
+                              {participant.credentials ? (
+                                <div className="text-sm">
+                                  <div className="flex items-center gap-1">
+                                    <span className="text-gray-500 text-xs">ID:</span>
+                                    <code className="bg-gray-100 px-1 rounded">{participant.credentials.username}</code>
+                                  </div>
+                                  <div className="flex items-center gap-1">
+                                    <span className="text-gray-500 text-xs">PW:</span>
+                                    <code className="bg-gray-100 px-1 rounded">{participant.credentials.password}</code>
+                                  </div>
+                                </div>
+                              ) : (
+                                <span className="text-gray-400 italic text-xs">No Creds</span>
+                              )}
+                            </TableCell>
+                            <TableCell>{getStatusBadge(participant.status)}</TableCell>
+                            <TableCell className="text-right">
+                              {participant.registrationType === 'team' && (
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => setSelectedTeamParticipant(participant)}
+                                >
+                                  <Eye className="h-4 w-4 mr-2" />
+                                  View Team
+                                </Button>
+                              )}
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
                     </TableBody>
                   </Table>
                 </div>
@@ -292,6 +398,71 @@ export default function AllParticipantsPage() {
             </CardContent>
           </Card>
         </div>
+
+        {/* Team Details Dialog */}
+        <Dialog open={!!selectedTeamParticipant} onOpenChange={(open) => !open && setSelectedTeamParticipant(null)}>
+          <DialogContent className="max-w-2xl">
+            <DialogHeader>
+              <DialogTitle>Team Details</DialogTitle>
+              <DialogDescription>
+                Viewing team members for {selectedTeamParticipant?.displayName}
+              </DialogDescription>
+            </DialogHeader>
+
+            {selectedTeamParticipant && (
+              <div className="space-y-6">
+                <div className="grid grid-cols-2 gap-4 border p-4 rounded-md bg-muted/20">
+                  <div>
+                    <h4 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-1">Team Leader</h4>
+                    <p className="font-medium">{selectedTeamParticipant.user.fullName}</p>
+                    <p className="text-sm text-muted-foreground">{selectedTeamParticipant.user.email}</p>
+                  </div>
+                  <div>
+                    <h4 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-1">Event</h4>
+                    <p className="font-medium">{selectedTeamParticipant.eventName}</p>
+                    <p className="text-sm text-muted-foreground">Team Size: {selectedTeamParticipant.teamSize}</p>
+                  </div>
+                </div>
+
+                <div>
+                  <h4 className="font-semibold mb-3 flex items-center gap-2">
+                    <Users className="h-4 w-4" />
+                    Team Members ({selectedTeamParticipant.teamMembers?.length || 0})
+                  </h4>
+                  {selectedTeamParticipant.teamMembers && selectedTeamParticipant.teamMembers.length > 0 ? (
+                    <div className="border rounded-md overflow-hidden">
+                      <Table>
+                        <TableHeader>
+                          <TableRow className="bg-muted/50">
+                            <TableHead>Name</TableHead>
+                            <TableHead>Roll No</TableHead>
+                            <TableHead>Department</TableHead>
+                            <TableHead>Email</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {selectedTeamParticipant.teamMembers.map((member, index) => (
+                            <TableRow key={index}>
+                              <TableCell className="font-medium">{member.memberName}</TableCell>
+                              <TableCell className="font-mono text-sm">{member.memberRollNo}</TableCell>
+                              <TableCell>{member.memberDept}</TableCell>
+                              <TableCell className="text-sm text-muted-foreground">{member.memberEmail}</TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  ) : (
+                    <p className="text-center text-muted-foreground py-4 italic">No team members found.</p>
+                  )}
+                </div>
+              </div>
+            )}
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setSelectedTeamParticipant(null)}>Close</Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
         {filteredParticipants.length > 0 && (
           <div className="text-sm text-gray-500 text-center">

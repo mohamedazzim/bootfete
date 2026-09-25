@@ -5,13 +5,15 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AuthProvider, useAuth } from "@/lib/auth";
 import { WebSocketProvider } from "@/contexts/WebSocketContext";
+import AppHeader from "@/components/AppHeader";
 import NotFound from "@/pages/not-found";
 import Login from "@/pages/login";
 import AdminDashboard from "@/pages/admin/dashboard";
 import EventsPage from "@/pages/admin/events";
 import EventCreatePage from "@/pages/admin/event-create";
 import EventEditPage from "@/pages/admin/event-edit";
-import EventDetailsPage from "@/pages/admin/event-details";
+import TestManagerPage from "@/pages/admin/test-manager";
+import AdminEventDetails from "@/pages/admin/event-details";
 import EventAdminsPage from "@/pages/admin/event-admins";
 import EventAdminCreatePage from "@/pages/admin/event-admin-create";
 import EventAdminEditPage from "@/pages/admin/event-admin-edit";
@@ -40,8 +42,12 @@ import ParticipantEventDetailsPage from "@/pages/participant/event-details";
 import TakeTestPage from "@/pages/participant/take-test";
 import TestResultsPage from "@/pages/participant/test-results";
 import MyTestsPage from "@/pages/participant/my-tests";
-import LeaderboardPage from "@/pages/participant/leaderboard";
+
 import EventAdminLeaderboardPage from "@/pages/event-admin/leaderboard";
+import EventResultsPage from "@/pages/event-admin/event-results";
+import RoundSubmissionsPage from "@/pages/event-admin/round-submissions";
+import EvaluateSubmissionPage from "@/pages/event-admin/evaluate-submission";
+import EvaluatedLeaderboardPage from "@/pages/event-admin/evaluated-leaderboard";
 import RegistrationFormsPage from "@/pages/admin/registration-forms";
 import RegistrationFormCreatePage from "@/pages/admin/registration-form-create";
 import RegistrationFormEditPage from "@/pages/admin/registration-form-edit";
@@ -114,6 +120,9 @@ function Router() {
 
       <Route path="/register/:slug" component={PublicRegistrationFormPage} />
       <Route path="/register/event/:eventId" component={EventRegistrationPage} />
+      <Route path="/admin/tests">
+        <ProtectedRoute component={TestManagerPage} allowedRoles={['super_admin']} />
+      </Route>
 
       <Route path="/admin/dashboard">
         <ProtectedRoute component={AdminDashboard} allowedRoles={['super_admin']} />
@@ -121,6 +130,7 @@ function Router() {
       <Route path="/admin/events">
         <ProtectedRoute component={EventsPage} allowedRoles={['super_admin']} />
       </Route>
+      {/* IMPORTANT: Specific routes must come BEFORE parameterized routes */}
       <Route path="/admin/events/new">
         <ProtectedRoute component={EventCreatePage} allowedRoles={['super_admin']} />
       </Route>
@@ -128,7 +138,7 @@ function Router() {
         <ProtectedRoute component={EventEditPage} allowedRoles={['super_admin']} />
       </Route>
       <Route path="/admin/events/:id">
-        <ProtectedRoute component={EventDetailsPage} allowedRoles={['super_admin']} />
+        <ProtectedRoute component={AdminEventDetails} allowedRoles={['super_admin']} />
       </Route>
       <Route path="/admin/event-admins">
         <ProtectedRoute component={EventAdminsPage} allowedRoles={['super_admin']} />
@@ -173,7 +183,7 @@ function Router() {
         <ProtectedRoute component={SuperAdminOverridesPage} allowedRoles={['super_admin']} />
       </Route>
       <Route path="/admin/email-logs">
-        <ProtectedRoute component={EmailLogsPage} allowedRoles={['super_admin', 'event_admin']} />
+        <ProtectedRoute component={EmailLogsPage} allowedRoles={['super_admin']} />
       </Route>
       <Route path="/admin/settings">
         <ProtectedRoute component={AdminSettingsPage} allowedRoles={['super_admin']} />
@@ -208,22 +218,22 @@ function Router() {
         <ProtectedRoute component={EventRoundsPage} allowedRoles={['event_admin']} />
       </Route>
       <Route path="/event-admin/rounds/:roundId/questions/new">
-        <ProtectedRoute component={QuestionCreatePage} allowedRoles={['event_admin']} />
+        <ProtectedRoute component={QuestionCreatePage} allowedRoles={['event_admin', 'super_admin']} />
       </Route>
       <Route path="/event-admin/rounds/:roundId/questions/bulk-upload">
-        <ProtectedRoute component={QuestionsBulkUploadPage} allowedRoles={['event_admin']} />
+        <ProtectedRoute component={QuestionsBulkUploadPage} allowedRoles={['event_admin', 'super_admin']} />
       </Route>
       <Route path="/event-admin/rounds/:roundId/questions/:questionId/edit">
-        <ProtectedRoute component={QuestionEditPage} allowedRoles={['event_admin']} />
+        <ProtectedRoute component={QuestionEditPage} allowedRoles={['event_admin', 'super_admin']} />
       </Route>
       <Route path="/event-admin/rounds/:roundId/questions">
-        <ProtectedRoute component={RoundQuestionsPage} allowedRoles={['event_admin']} />
+        <ProtectedRoute component={RoundQuestionsPage} allowedRoles={['event_admin', 'super_admin']} />
       </Route>
       <Route path="/event-admin/rounds/:roundId/rules">
-        <ProtectedRoute component={RoundRulesPage} allowedRoles={['event_admin']} />
+        <ProtectedRoute component={RoundRulesPage} allowedRoles={['event_admin', 'super_admin']} />
       </Route>
       <Route path="/event-admin/rounds/:roundId/monitor">
-        <ProtectedRoute component={RoundMonitorPage} allowedRoles={['event_admin']} />
+        <ProtectedRoute component={RoundMonitorPage} allowedRoles={['event_admin', 'super_admin']} />
       </Route>
       <Route path="/event-admin/events/:eventId/participants">
         <ProtectedRoute component={EventParticipantsPage} allowedRoles={['event_admin']} />
@@ -240,6 +250,18 @@ function Router() {
       <Route path="/event-admin/events/:eventId/leaderboard">
         <ProtectedRoute component={EventAdminLeaderboardPage} allowedRoles={['event_admin']} />
       </Route>
+      <Route path="/event-admin/events/:eventId/results">
+        <ProtectedRoute component={EventResultsPage} allowedRoles={['event_admin', 'super_admin']} />
+      </Route>
+      <Route path="/event-admin/rounds/:roundId/submissions">
+        <ProtectedRoute component={RoundSubmissionsPage} allowedRoles={['event_admin', 'super_admin']} />
+      </Route>
+      <Route path="/event-admin/attempts/:attemptId/evaluate">
+        <ProtectedRoute component={EvaluateSubmissionPage} allowedRoles={['event_admin', 'super_admin']} />
+      </Route>
+      <Route path="/event-admin/rounds/:roundId/evaluated-leaderboard">
+        <ProtectedRoute component={EvaluatedLeaderboardPage} allowedRoles={['event_admin', 'super_admin']} />
+      </Route>
 
       <Route path="/reports">
         <ProtectedRoute component={DownloadReportsPage} allowedRoles={['super_admin', 'event_admin']} />
@@ -252,7 +274,7 @@ function Router() {
         <Redirect to="/participant/dashboard" />
       </Route>
       <Route path="/participant/events/:eventId">
-        <ProtectedRoute component={ParticipantEventsPage} allowedRoles={['participant']} />
+        <ProtectedRoute component={ParticipantEventDetailsPage} allowedRoles={['participant']} />
       </Route>
       <Route path="/participant/events">
         <ProtectedRoute component={ParticipantEventsPage} allowedRoles={['participant']} />
@@ -266,12 +288,7 @@ function Router() {
       <Route path="/participant/my-tests">
         <ProtectedRoute component={MyTestsPage} allowedRoles={['participant']} />
       </Route>
-      <Route path="/participant/rounds/:roundId/leaderboard">
-        <ProtectedRoute component={LeaderboardPage} allowedRoles={['participant']} />
-      </Route>
-      <Route path="/participant/events/:eventId/leaderboard">
-        <ProtectedRoute component={LeaderboardPage} allowedRoles={['participant']} />
-      </Route>
+
 
       <Route component={NotFound} />
     </Switch>
@@ -284,8 +301,13 @@ function App() {
       <AuthProvider>
         <WebSocketProvider>
           <TooltipProvider>
-            <Toaster />
-            <Router />
+            <div className="min-h-screen flex flex-col">
+              <AppHeader />
+              <div className="flex-1">
+                <Toaster />
+                <Router />
+              </div>
+            </div>
           </TooltipProvider>
         </WebSocketProvider>
       </AuthProvider>

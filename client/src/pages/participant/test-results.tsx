@@ -14,6 +14,7 @@ interface TestAttemptWithDetails extends TestAttempt {
   answers: Answer[];
   event?: Event;
   eventEnded?: boolean;
+  canViewResults?: boolean;
 }
 
 export default function TestResultsPage() {
@@ -23,6 +24,7 @@ export default function TestResultsPage() {
   const { data: attempt, isLoading } = useQuery<TestAttemptWithDetails>({
     queryKey: ['/api/attempts', attemptId],
     enabled: !!attemptId,
+    refetchInterval: 5000, // Poll every 5 seconds to check if results are available
   });
 
   if (isLoading) {
@@ -45,11 +47,12 @@ export default function TestResultsPage() {
     );
   }
 
-  // Check if event has ended - CRITICAL: Default to false to hide results until event ends
-  const eventEnded = attempt.eventEnded ?? false;
+  // Use key from API (canViewResults)
+  // Logic: canViewResults is true ONLY if admin clicked "Show Answers"
+  const canViewResults = attempt.canViewResults ?? false;
 
-  // If event hasn't ended, show submission confirmation
-  if (!eventEnded) {
+  // If answers are not released yet, show waiting screen
+  if (!canViewResults) {
     return (
       <ParticipantLayout>
         <div className="p-4 md:p-8 max-w-3xl mx-auto">
@@ -63,23 +66,25 @@ export default function TestResultsPage() {
             <CardContent>
               <div className="text-center space-y-4">
                 <p className="text-green-800 text-lg font-semibold" data-testid="text-submission-message">
-                  Submission Received
+                  Test Submitted Successfully
                 </p>
                 <p className="text-green-700 text-base" data-testid="text-wait-message">
-                  Wait till the test duration completely
+                  Please wait for the admin to release the answers.
                 </p>
                 <p className="text-sm text-green-600 mt-2" data-testid="text-results-info">
-                  Your scores and correct answers will be visible after the test duration ends.
+                  Your score and answer breakdown will be available once the admin enables it.
                 </p>
-                {attempt.event?.endDate && (
-                  <p className="text-sm text-green-600" data-testid="text-event-end-time">
-                    Event ends: {new Date(attempt.event.endDate).toLocaleString()}
-                  </p>
-                )}
               </div>
             </CardContent>
           </Card>
-          <div className="mt-6 flex justify-center">
+          <div className="mt-6 flex flex-col items-center gap-4">
+            <Button
+              onClick={() => window.location.reload()}
+              variant="outline"
+              className="w-full max-w-xs"
+            >
+              Check for Results
+            </Button>
             <Button
               onClick={() => setLocation('/participant/dashboard')}
               size="lg"
@@ -97,6 +102,9 @@ export default function TestResultsPage() {
   const totalQuestions = attempt.questions.length;
   const answeredQuestions = attempt.answers.length;
   const correctAnswers = attempt.answers.filter(a => a.isCorrect).length;
+  // Answers awaiting evaluation (isCorrect null/undefined) are neither correct nor incorrect
+  const pendingAnswers = attempt.answers.filter(a => a.isCorrect === null || a.isCorrect === undefined).length;
+  const incorrectAnswers = answeredQuestions - correctAnswers - pendingAnswers;
 
   const getScoreColor = (percentage: number) => {
     if (percentage >= 80) return 'text-green-600';
@@ -182,7 +190,7 @@ export default function TestResultsPage() {
             </CardHeader>
             <CardContent>
               <div className="text-3xl font-bold text-red-600" data-testid="text-incorrect">
-                {answeredQuestions - correctAnswers}
+                {incorrectAnswers}
               </div>
             </CardContent>
           </Card>
@@ -261,7 +269,9 @@ export default function TestResultsPage() {
             {attempt.questions.map((question, index) => {
               const answer = attempt.answers.find(a => a.questionId === question.id);
               const isCorrect = answer?.isCorrect;
-              const isAutoGraded = question.questionType === 'multiple_choice' || question.questionType === 'true_false';
+              // Mirror the backend grading rule: a question is auto-graded when it
+              // has a correctAnswer (MCQ/true-false/short) or expectedOutput (coding).
+              const isAutoGraded = !!(question.correctAnswer || question.expectedOutput);
 
               return (
                 <div
@@ -295,7 +305,7 @@ export default function TestResultsPage() {
                         <span className={isCorrect ? 'text-green-600' : 'text-gray-600'}>
                           {answer?.pointsAwarded || 0}
                         </span>
-                        <span className="text-gray-400"> / {question.points}</span>
+                        <span className="text-gray-400"> / 1</span>
                       </div>
                     </div>
                   </div>
@@ -340,15 +350,7 @@ export default function TestResultsPage() {
         </Card>
 
         <div className="mt-6 flex justify-center gap-4">
-          <Button
-            onClick={() => setLocation(`/participant/rounds/${attempt.roundId}/leaderboard`)}
-            size="lg"
-            variant="default"
-            data-testid="button-leaderboard"
-          >
-            <Trophy className="mr-2 h-5 w-5" />
-            See Leaderboard
-          </Button>
+
           <Button
             onClick={() => setLocation('/participant/dashboard')}
             size="lg"

@@ -10,6 +10,84 @@ import { useAuth } from '@/lib/auth';
 import { ArrowLeft, Calendar, Clock, FileText, Shield, CheckCircle } from 'lucide-react';
 import type { Event, EventRules, Round } from '@shared/schema';
 
+function RoundItem({ round, eventId }: { round: Round; eventId: string }) {
+  const [, setLocation] = useLocation();
+  const { toast } = useToast();
+
+  const startTestMutation = useMutation({
+    mutationFn: async () => {
+      const response = await apiRequest('POST', `/api/events/${eventId}/rounds/${round.id}/start`, {});
+      return response.json();
+    },
+    onSuccess: (data: any) => {
+      toast({
+        title: 'Test started',
+        description: 'You can now take the test',
+      });
+      setLocation(`/participant/test/${data.id}`);
+    },
+    onError: (error: any) => {
+      toast({
+        title: 'Failed to start test',
+        description: error.message,
+        variant: 'destructive',
+      });
+    },
+  });
+
+  return (
+    <div
+      className="flex flex-col md:flex-row justify-between items-start md:items-center p-4 border rounded-lg gap-4"
+      data-testid={`card-round-${round.id}`}
+    >
+      <div className="flex-1 w-full">
+        <div className="font-medium">Round {round.roundNumber}: {round.name}</div>
+        {round.description && (
+          <div className="text-sm text-gray-600 mt-1">{round.description}</div>
+        )}
+        <div className="flex items-center gap-4 mt-2">
+          <div>
+            <div className="text-xs text-gray-500">Duration</div>
+            <div className="text-sm font-medium">{round.duration} mins</div>
+          </div>
+          <Badge variant="outline">{round.status}</Badge>
+        </div>
+      </div>
+      <div className="flex-shrink-0 w-full md:w-auto">
+        {round.status === 'not_started' && (
+          <Button
+            disabled
+            className="w-full md:w-auto"
+            data-testid={`button-start-test-${round.id}`}
+          >
+            Not Started
+          </Button>
+        )}
+        {round.status === 'in_progress' && (
+          <Button
+            onClick={() => startTestMutation.mutate()}
+            disabled={startTestMutation.isPending}
+            className="w-full md:w-auto"
+            data-testid={`button-start-test-${round.id}`}
+          >
+            {startTestMutation.isPending ? 'Starting...' : 'Take Test'}
+          </Button>
+        )}
+        {round.status === 'completed' && (
+          <Button
+            variant="outline"
+            disabled
+            className="w-full md:w-auto"
+            data-testid={`button-start-test-${round.id}`}
+          >
+            Completed
+          </Button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function ParticipantEventDetailsPage() {
   const { eventId } = useParams();
   const [, setLocation] = useLocation();
@@ -135,80 +213,9 @@ export default function ParticipantEventDetailsPage() {
                 </CardHeader>
                 <CardContent>
                   <div className="space-y-3">
-                    {rounds.map((round) => {
-                      const startTestMutation = useMutation({
-                        mutationFn: async () => {
-                          return apiRequest('POST', `/api/events/${eventId}/rounds/${round.id}/start`, {});
-                        },
-                        onSuccess: (data: any) => {
-                          toast({
-                            title: 'Test started',
-                            description: 'You can now take the test',
-                          });
-                          setLocation(`/participant/test/${data.id}`);
-                        },
-                        onError: (error: any) => {
-                          toast({
-                            title: 'Failed to start test',
-                            description: error.message,
-                            variant: 'destructive',
-                          });
-                        },
-                      });
-
-                      return (
-                        <div
-                          key={round.id}
-                          className="flex flex-col md:flex-row justify-between items-start md:items-center p-4 border rounded-lg gap-4"
-                          data-testid={`card-round-${round.id}`}
-                        >
-                          <div className="flex-1 w-full">
-                            <div className="font-medium">Round {round.roundNumber}: {round.name}</div>
-                            {round.description && (
-                              <div className="text-sm text-gray-600 mt-1">{round.description}</div>
-                            )}
-                            <div className="flex items-center gap-4 mt-2">
-                              <div>
-                                <div className="text-xs text-gray-500">Duration</div>
-                                <div className="text-sm font-medium">{round.duration} mins</div>
-                              </div>
-                              <Badge variant="outline">{round.status}</Badge>
-                            </div>
-                          </div>
-                          <div className="flex-shrink-0 w-full md:w-auto">
-                            {round.status === 'not_started' && (
-                              <Button
-                                disabled
-                                className="w-full md:w-auto"
-                                data-testid={`button-start-test-${round.id}`}
-                              >
-                                Not Started
-                              </Button>
-                            )}
-                            {round.status === 'in_progress' && (
-                              <Button
-                                onClick={() => startTestMutation.mutate()}
-                                disabled={startTestMutation.isPending}
-                                className="w-full md:w-auto"
-                                data-testid={`button-start-test-${round.id}`}
-                              >
-                                {startTestMutation.isPending ? 'Starting...' : 'Take Test'}
-                              </Button>
-                            )}
-                            {round.status === 'completed' && (
-                              <Button
-                                variant="outline"
-                                disabled
-                                className="w-full md:w-auto"
-                                data-testid={`button-start-test-${round.id}`}
-                              >
-                                Completed
-                              </Button>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    })}
+                    {rounds.map((round) => (
+                      <RoundItem key={round.id} round={round} eventId={eventId ?? ''} />
+                    ))}
                   </div>
                 </CardContent>
               </Card>

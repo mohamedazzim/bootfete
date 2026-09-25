@@ -10,12 +10,17 @@ import { Textarea } from '@/components/ui/textarea';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Form, FormControl, FormDescription, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { useToast } from '@/hooks/use-toast';
 import { apiRequest, queryClient } from '@/lib/queryClient';
 import { insertRoundSchema } from '@shared/schema';
 import type { Round } from '@shared/schema';
 import { z } from 'zod';
 import { ArrowLeft } from 'lucide-react';
+import { toLocalISOString } from '@/lib/utils';
+import { useAuth } from '@/lib/auth';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { AlertTriangle } from 'lucide-react';
 
 const formSchema = insertRoundSchema.extend({
   startTime: z.string().min(1, 'Start time is required'),
@@ -27,6 +32,8 @@ export default function RoundEditPage() {
   const { eventId, roundId } = useParams();
   const [, setLocation] = useLocation();
   const { toast } = useToast();
+  const { user } = useAuth();
+  const isEventAdmin = user?.role === 'event_admin';
 
   const { data: round, isLoading } = useQuery<Round>({
     queryKey: ['/api/rounds', roundId],
@@ -42,7 +49,8 @@ export default function RoundEditPage() {
       roundNumber: round.roundNumber,
       duration: round.duration,
       status: round.status,
-      startTime: round.startTime ? new Date(round.startTime).toISOString().slice(0, 16) : '',
+      startTime: round.startTime ? toLocalISOString(round.startTime) : '',
+      conductMedium: round.conductMedium || 'online',
     } : undefined,
   });
 
@@ -132,6 +140,15 @@ export default function RoundEditPage() {
         <Card className="max-w-2xl">
           <CardHeader>
             <CardTitle>Round Details</CardTitle>
+            {isEventAdmin && (
+              <Alert className="mb-4 bg-yellow-50 border-yellow-200">
+                <AlertTriangle className="h-4 w-4 text-yellow-600" />
+                <AlertTitle className="text-yellow-800">Restricted Access</AlertTitle>
+                <AlertDescription className="text-yellow-700">
+                  As an Event Admin, you cannot modify the schedule or status. Please contact a Super Admin for these changes.
+                </AlertDescription>
+              </Alert>
+            )}
           </CardHeader>
           <CardContent>
             <Form {...form}>
@@ -164,6 +181,45 @@ export default function RoundEditPage() {
                           value={field.value || ''}
                           data-testid="input-description"
                         />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                <FormField
+                  control={form.control}
+                  name="conductMedium"
+                  render={({ field }) => (
+                    <FormItem className="space-y-3 rounded-lg border p-4">
+                      <FormLabel className="text-base">Conduct Medium</FormLabel>
+                      <FormDescription>
+                        Select how this round will be conducted.
+                      </FormDescription>
+                      <FormControl>
+                        <RadioGroup
+                          onValueChange={field.onChange}
+                          defaultValue={field.value}
+                          value={field.value}
+                          className="flex flex-col space-y-1"
+                        >
+                          <FormItem className="flex items-center space-x-3 space-y-0">
+                            <FormControl>
+                              <RadioGroupItem value="online" />
+                            </FormControl>
+                            <FormLabel className="font-normal">
+                              Online Test
+                            </FormLabel>
+                          </FormItem>
+                          <FormItem className="flex items-center space-x-3 space-y-0">
+                            <FormControl>
+                              <RadioGroupItem value="physical" />
+                            </FormControl>
+                            <FormLabel className="font-normal">
+                              Physical/Manual Round
+                            </FormLabel>
+                          </FormItem>
+                        </RadioGroup>
                       </FormControl>
                       <FormMessage />
                     </FormItem>
@@ -205,6 +261,7 @@ export default function RoundEditPage() {
                             {...field}
                             onChange={(e) => field.onChange(parseInt(e.target.value))}
                             data-testid="input-duration"
+                            disabled={isEventAdmin}
                           />
                         </FormControl>
                         <FormDescription>Test duration</FormDescription>
@@ -222,13 +279,13 @@ export default function RoundEditPage() {
                       <FormLabel>Status</FormLabel>
                       <Select onValueChange={field.onChange} defaultValue={field.value}>
                         <FormControl>
-                          <SelectTrigger data-testid="select-status">
+                          <SelectTrigger data-testid="select-status" disabled={isEventAdmin}>
                             <SelectValue placeholder="Select status" />
                           </SelectTrigger>
                         </FormControl>
                         <SelectContent>
-                          <SelectItem value="upcoming">Upcoming</SelectItem>
-                          <SelectItem value="active">Active</SelectItem>
+                          <SelectItem value="not_started">Not Started (Upcoming)</SelectItem>
+                          <SelectItem value="in_progress">In Progress (Active)</SelectItem>
                           <SelectItem value="completed">Completed</SelectItem>
                         </SelectContent>
                       </Select>
@@ -248,6 +305,7 @@ export default function RoundEditPage() {
                           type="datetime-local"
                           {...field}
                           data-testid="input-start-time"
+                          disabled={isEventAdmin}
                         />
                       </FormControl>
                       <FormMessage />

@@ -56,6 +56,7 @@ export default function RoundQuestionsPage() {
       true_false: 'bg-green-100 text-green-800',
       short_answer: 'bg-yellow-100 text-yellow-800',
       coding: 'bg-purple-100 text-purple-800',
+      image_mcq: 'bg-pink-100 text-pink-800',
     };
 
     return (
@@ -93,12 +94,12 @@ export default function RoundQuestionsPage() {
               <h1 className="text-3xl font-bold text-gray-900" data-testid="heading-questions">Questions Management</h1>
               <p className="text-gray-600 mt-1">Manage questions for this round</p>
             </div>
-            <div className="flex gap-2 w-full md:w-auto">
+            <div className="flex gap-2 w-full md:w-auto flex-wrap">
               <Button
-                variant="outline"
                 onClick={() => setLocation(`/event-admin/rounds/${roundId}/questions/bulk-upload`)}
                 data-testid="button-bulk-upload"
                 className="flex-1 md:flex-none"
+                variant="outline"
               >
                 <FileQuestion className="mr-2 h-4 w-4" />
                 Bulk Upload

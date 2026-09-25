@@ -25,7 +25,7 @@ export default function ReportGenerateSymposiumPage() {
 
   const generateReportMutation = useMutation({
     mutationFn: async () => {
-      return await apiRequest('/api/reports/generate/symposium', 'POST', {});
+      return await apiRequest('POST', '/api/reports/generate/symposium', {});
     },
     onSuccess: () => {
       toast({
@@ -91,7 +91,7 @@ export default function ReportGenerateSymposiumPage() {
             <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
               <h4 className="font-medium text-amber-900 mb-2">Note</h4>
               <p className="text-sm text-amber-800">
-                This report will aggregate data from <strong>all events</strong> in the system. 
+                This report will aggregate data from <strong>all events</strong> in the system.
                 Generation may take a few moments depending on the amount of data.
               </p>
             </div>
@@ -132,7 +132,7 @@ export default function ReportGenerateSymposiumPage() {
             <AlertDialogHeader>
               <AlertDialogTitle>Generate Symposium Report?</AlertDialogTitle>
               <AlertDialogDescription>
-                This will create a comprehensive report aggregating data from all events in the system. 
+                This will create a comprehensive report aggregating data from all events in the system.
                 This operation may take a few moments to complete.
               </AlertDialogDescription>
             </AlertDialogHeader>

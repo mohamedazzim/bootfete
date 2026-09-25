@@ -12,14 +12,15 @@ import { useToast } from "@/hooks/use-toast";
 import AdminLayout from "@/components/layouts/AdminLayout";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { nanoid } from "nanoid";
-import type { Event, RegistrationForm } from "@shared/schema";
+import type { RegistrationForm } from "@shared/schema";
 
 interface FormField {
   id: string;
   label: string;
-  type: 'text' | 'email' | 'tel' | 'number';
+  type: 'text' | 'email' | 'tel' | 'number' | 'select';
   required: boolean;
   placeholder?: string;
+  options?: string[];
 }
 
 export default function RegistrationFormEditPage() {
@@ -37,10 +38,6 @@ export default function RegistrationFormEditPage() {
   const { data: form, isLoading } = useQuery<RegistrationForm>({
     queryKey: ['/api/registration-forms', formId, 'details'],
     enabled: !!formId,
-  });
-
-  const { data: events } = useQuery<Event[]>({
-    queryKey: ['/api/events'],
   });
 
   useEffect(() => {
@@ -306,6 +303,7 @@ export default function RegistrationFormEditPage() {
                                   <SelectItem value="email">Email</SelectItem>
                                   <SelectItem value="tel">Phone</SelectItem>
                                   <SelectItem value="number">Number</SelectItem>
+                                  <SelectItem value="select">Select (Dropdown)</SelectItem>
                                 </SelectContent>
                               </Select>
                             </div>
@@ -320,6 +318,21 @@ export default function RegistrationFormEditPage() {
                               />
                             </div>
                           </div>
+
+                          {/* Options for Select type */}
+                          {field.type === 'select' && (
+                            <div className="mt-3 p-3 bg-muted/50 rounded-md">
+                              <label className="text-xs font-medium text-muted-foreground mb-2 block">Options (one per line)</label>
+                              <Textarea
+                                value={(field.options || []).join('\n')}
+                                onChange={(e) => updateField(field.id, { options: e.target.value.split('\n').filter(o => o.trim()) })}
+                                placeholder="Veg\nNon-veg"
+                                className="min-h-[80px] font-mono text-sm"
+                                data-testid={`input-options-${field.id}`}
+                              />
+                              <p className="text-xs text-muted-foreground mt-1">Enter each option on a new line</p>
+                            </div>
+                          )}
 
                           <div className="flex items-center gap-2">
                             <Checkbox
@@ -426,12 +439,24 @@ export default function RegistrationFormEditPage() {
                           <label className="text-sm font-medium block">
                             {field.label || 'Field Label'} {field.required && <span className="text-destructive">*</span>}
                           </label>
-                          <Input
-                            type={field.type}
-                            placeholder={field.placeholder || `Enter ${field.label || 'value'}...`}
-                            disabled
-                            className="bg-muted/50 border-2"
-                          />
+                          {field.type === 'select' ? (
+                            <select
+                              disabled
+                              className="w-full bg-muted/50 border-2 rounded-md px-3 py-2 text-sm"
+                            >
+                              <option value="">{field.placeholder || 'Select an option...'}</option>
+                              {(field.options || []).map((opt, i) => (
+                                <option key={i} value={opt}>{opt}</option>
+                              ))}
+                            </select>
+                          ) : (
+                            <Input
+                              type={field.type}
+                              placeholder={field.placeholder || `Enter ${field.label || 'value'}...`}
+                              disabled
+                              className="bg-muted/50 border-2"
+                            />
+                          )}
                         </div>
                       ))
                     ) : (

@@ -58,7 +58,7 @@ export default function RegistrationCommitteeLayout({ children }: { children: Re
   return (
     <div className="flex min-h-screen flex-col md:flex-row" data-testid="layout-registration-committee">
       {/* Mobile Header */}
-      <header className="md:hidden bg-white border-b p-4 flex items-center justify-between sticky top-0 z-10">
+      <header className="md:hidden bg-white border-b p-4 flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Sheet open={open} onOpenChange={setOpen}>
             <SheetTrigger asChild>

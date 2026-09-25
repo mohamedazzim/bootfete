@@ -1,186 +1,550 @@
-import '../config/resend.config';
+﻿// Dual Email Provider Service - Supports Brevo (300/day) and Resend (200/day)
+// Auto-switches between providers when limits are reached
+// Resets daily at 6:00 AM IST
+
+// @ts-ignore - No type definitions available for sib-api-v3-sdk
+// @ts-ignore
+// import SibApiV3Sdk from 'sib-api-v3-sdk'; // SDK Removed - causing server hang
+
 import { Resend } from 'resend';
 import { storage } from '../storage';
+import { redisClient } from './redisClient';
 import {
   generateRegistrationApprovedEmail,
   generateCredentialsEmail,
   generateTestStartReminderEmail,
   generateResultPublishedEmail,
   generateAdminNotificationEmail,
-  generateRegistrationReceivedEmail
+  generateRegistrationReceivedEmail,
+  generateConsolidatedRegistrationEmail,
+  generateTestQualificationEmail,
+  generateTestQualificationWithFinalsDetailsEmail,
+  generateConsolidatedCredentialsEmail,
+  generateWinnerAnnouncementEmail
 } from '../templates/emailTemplates';
+
+
+// Provider Configuration
+export type EmailProvider = 'brevo' | 'resend';
+
+interface ProviderConfig {
+  name: EmailProvider;
+  dailyLimit: number;
+}
+
+const PROVIDERS: Record<EmailProvider, ProviderConfig> = {
+  brevo: { name: 'brevo', dailyLimit: 300 },
+  resend: { name: 'resend', dailyLimit: 200 }
+};
+
+// Redis keys for persistence
+const REDIS_KEYS = {
+  ACTIVE_PROVIDER: 'email:active_provider',
+  PROVIDER_PREFERENCE: 'email:provider_preference'
+};
+
+// Brevo Configuration
+// Brevo Configuration
+// Using fetch instead of SDK because SDK hangs on server environment
+const brevoApiStub = {};
+// Removed brevoClient and brevoApi global init as we use fetch locally in method
+
+
+// Resend Configuration
+const resend = new Resend('re_MrfD8V24_9vaGegk8Au5vu9mxFiR45Xx9');
 
 interface EmailOptions {
   to: string;
   subject: string;
-  html: string;
-  metadata?: any;
+  htmlContent: string;
+  recipientName?: string;
+  tags?: string[];
 }
 
-class EmailService {
-  private resend: Resend | null;
-  private isDevelopmentMode: boolean;
-  private fromEmail: string;
+interface SendResult {
+  success: boolean;
+  messageId?: string;
+  error?: string;
+  provider: EmailProvider;
+  retryCount?: number;
+}
 
-  constructor() {
-    const resendApiKey = process.env.RESEND_API_KEY;
-    this.isDevelopmentMode = !resendApiKey;
+interface ProviderStats {
+  provider: EmailProvider;
+  used: number;
+  limit: number;
+  remaining: number;
+  percentUsed: number;
+}
 
-    if (resendApiKey) {
-      this.resend = new Resend(resendApiKey);
-      this.fromEmail = process.env.RESEND_FROM_EMAIL || 'BootFeet 2K26 <onboarding@resend.dev>';
-      console.log('✅ Email service initialized with Resend:');
-      console.log(`   API Key: ${resendApiKey.substring(0, 10)}...`);
-      console.log(`   From: ${this.fromEmail}`);
-    } else {
-      this.resend = null;
-      this.fromEmail = 'BootFeet 2K26 <noreply@bootfeet.com>';
-      console.log('⚠️  Email service running in DEVELOPMENT MODE - emails will be logged, not sent');
-      console.log('   Missing RESEND_API_KEY. Set this secret to enable email sending.');
+interface EmailProviderStatus {
+  activeProvider: EmailProvider;
+  preferredProvider: EmailProvider;
+  providers: {
+    brevo: ProviderStats;
+    resend: ProviderStats;
+  };
+  totalUsed: number;
+  totalLimit: number;
+  resetTime: string;
+  autoSwitchEnabled: boolean;
+}
+
+export class EmailService {
+  private static instance: EmailService;
+  private fromEmail = { name: 'BootFete 2K26', email: 'info@bootfete2k26.tech' };
+  // Brevo is primary - Resend domain not verified (returns 403)
+  private activeProvider: EmailProvider = 'brevo';
+  private preferredProvider: EmailProvider = 'brevo';
+  private initialized = false;
+
+  constructor() { }
+
+  static getInstance(): EmailService {
+    if (!EmailService.instance) {
+      EmailService.instance = new EmailService();
     }
+    return EmailService.instance;
   }
 
-  private categorizeError(error: any): string {
-    const errorString = String(error).toLowerCase();
-    const errorMessage = error instanceof Error ? error.message : '';
-
-    if (errorString.includes('authentication') || errorString.includes('auth') ||
-      errorString.includes('invalid') || errorString.includes('unauthorized')) {
-      return 'AUTHENTICATION_FAILED';
-    }
-
-    if (errorString.includes('rate limit') || errorString.includes('too many')) {
-      return 'RATE_LIMITED';
-    }
-
-    if (errorString.includes('timeout') || errorString.includes('etimedout')) {
-      return 'TIMEOUT';
-    }
-
-    if (errorString.includes('network') || errorString.includes('econnrefused')) {
-      return 'NETWORK_ERROR';
-    }
-
-    if (errorString.includes('validation') || errorString.includes('invalid email')) {
-      return 'VALIDATION_ERROR';
-    }
-
-    return 'UNKNOWN_ERROR';
-  }
-
-  private getErrorDetails(error: any, category: string): string {
-    const errorMessage = error instanceof Error ? error.message : String(error);
-
-    switch (category) {
-      case 'AUTHENTICATION_FAILED':
-        return `Resend authentication failed. Check RESEND_API_KEY. Error: ${errorMessage}`;
-      case 'RATE_LIMITED':
-        return `Rate limit exceeded. Please try again later. Error: ${errorMessage}`;
-      case 'TIMEOUT':
-        return `Request timed out. Check network connectivity. Error: ${errorMessage}`;
-      case 'NETWORK_ERROR':
-        return `Network error occurred: ${errorMessage}`;
-      case 'VALIDATION_ERROR':
-        return `Email validation error: ${errorMessage}`;
-      default:
-        return errorMessage;
-    }
-  }
-
-  private async sendWithRetry(
-    emailData: { from: string; to: string; subject: string; html: string },
-    maxRetries: number = 3,
-    attempt: number = 1
-  ): Promise<{ success: boolean; messageId?: string; error?: string; retryCount: number; errorCategory?: string }> {
-    if (this.isDevelopmentMode || !this.resend) {
-      console.log('\n📧 [DEV MODE] Email would be sent:');
-      console.log('   To:', emailData.to);
-      console.log('   From:', emailData.from);
-      console.log('   Subject:', emailData.subject);
-      console.log('   (Email content logged to email_logs table)\n');
-      return {
-        success: true,
-        messageId: `dev-mode-${Date.now()}`,
-        retryCount: 0
-      };
-    }
+  // Initialize provider from Redis (call this on app start)
+  async initialize(): Promise<void> {
+    if (this.initialized) return;
 
     try {
-      console.log(`📤 Attempting to send email to ${emailData.to} (attempt ${attempt}/${maxRetries})`);
-      const result = await this.resend.emails.send(emailData);
+      const client = redisClient.getClient();
+      if (client) {
+        const savedProvider = await client.get(REDIS_KEYS.ACTIVE_PROVIDER);
+        const savedPreference = await client.get(REDIS_KEYS.PROVIDER_PREFERENCE);
 
-      if (result.error) {
-        throw new Error(result.error.message || 'Unknown Resend error');
+        if (savedProvider && (savedProvider === 'brevo' || savedProvider === 'resend')) {
+          this.activeProvider = savedProvider as EmailProvider;
+        }
+        if (savedPreference && (savedPreference === 'brevo' || savedPreference === 'resend')) {
+          this.preferredProvider = savedPreference as EmailProvider;
+        }
       }
 
-      console.log(`✅ Email sent successfully! Message ID: ${result.data?.id}`);
-      return { success: true, messageId: result.data?.id, retryCount: attempt - 1 };
-    } catch (error) {
-      const errorCategory = this.categorizeError(error);
-      const errorDetails = this.getErrorDetails(error, errorCategory);
+      console.log(`[EmailService] Initialized with provider: ${this.activeProvider} (preferred: ${this.preferredProvider})`);
+      this.initialized = true;
+    } catch (e) {
+      console.error('[EmailService] Failed to load provider from Redis, using default:', e);
+      this.initialized = true;
+    }
+  }
 
-      console.error(`❌ Email send failed (attempt ${attempt}/${maxRetries})`);
-      console.error(`   Error Category: ${errorCategory}`);
-      console.error(`   Error Details: ${errorDetails}`);
+  // Get the start of the current day at 6 AM IST
+  private getDayStartIST(): Date {
+    const now = new Date();
+    // IST is UTC+5:30
+    const istOffset = 5.5 * 60 * 60 * 1000;
+    const utcNow = now.getTime() + (now.getTimezoneOffset() * 60 * 1000);
+    const istNow = new Date(utcNow + istOffset);
 
-      const isRetryable = this.isRetryableError(error);
+    // Set to 6 AM IST today
+    const dayStart = new Date(istNow);
+    dayStart.setHours(6, 0, 0, 0);
 
-      if (isRetryable && attempt < maxRetries) {
-        const delayMs = Math.pow(2, attempt - 1) * 1000;
-        console.log(`   🔄 Error is retryable. Retrying in ${delayMs}ms...`);
-        await new Promise(resolve => setTimeout(resolve, delayMs));
-        return this.sendWithRetry(emailData, maxRetries, attempt + 1);
+    // If current time is before 6 AM IST, use yesterday's 6 AM
+    if (istNow.getHours() < 6) {
+      dayStart.setDate(dayStart.getDate() - 1);
+    }
+
+    // Convert back to UTC
+    return new Date(dayStart.getTime() - istOffset);
+  }
+
+  // Get email count for a provider since 6 AM IST
+  async getProviderUsageToday(provider: EmailProvider): Promise<number> {
+    try {
+      const dayStart = this.getDayStartIST();
+      const count = await storage.getEmailLogCountSince(dayStart, provider);
+      return count;
+    } catch (e) {
+      console.error(`[EmailService] Failed to get usage for ${provider}:`, e);
+      return 0;
+    }
+  }
+
+  // Get stats for all providers
+  async getProviderStats(): Promise<EmailProviderStatus> {
+    await this.initialize();
+
+    const brevoUsed = await this.getProviderUsageToday('brevo');
+    const resendUsed = await this.getProviderUsageToday('resend');
+
+    const brevoLimit = PROVIDERS.brevo.dailyLimit;
+    const resendLimit = PROVIDERS.resend.dailyLimit;
+
+    const dayStart = this.getDayStartIST();
+    const nextReset = new Date(dayStart);
+    nextReset.setDate(nextReset.getDate() + 1);
+
+    return {
+      activeProvider: this.activeProvider,
+      preferredProvider: this.preferredProvider,
+      providers: {
+        brevo: {
+          provider: 'brevo',
+          used: brevoUsed,
+          limit: brevoLimit,
+          remaining: Math.max(0, brevoLimit - brevoUsed),
+          percentUsed: Math.round((brevoUsed / brevoLimit) * 100)
+        },
+        resend: {
+          provider: 'resend',
+          used: resendUsed,
+          limit: resendLimit,
+          remaining: Math.max(0, resendLimit - resendUsed),
+          percentUsed: Math.round((resendUsed / resendLimit) * 100)
+        }
+      },
+      totalUsed: brevoUsed + resendUsed,
+      totalLimit: brevoLimit + resendLimit,
+      resetTime: nextReset.toISOString(),
+      autoSwitchEnabled: true
+    };
+  }
+
+  // Check if provider has capacity
+  async hasCapacity(provider: EmailProvider): Promise<boolean> {
+    const used = await this.getProviderUsageToday(provider);
+    return used < PROVIDERS[provider].dailyLimit;
+  }
+
+  // Auto-switch to provider with capacity
+  async autoSwitchIfNeeded(): Promise<EmailProvider> {
+    await this.initialize();
+
+    // Check if current provider has capacity
+    if (await this.hasCapacity(this.activeProvider)) {
+      return this.activeProvider;
+    }
+
+    // Try to switch to the other provider
+    const otherProvider: EmailProvider = this.activeProvider === 'brevo' ? 'resend' : 'brevo';
+
+    if (await this.hasCapacity(otherProvider)) {
+      console.log(`[EmailService] Auto-switching from ${this.activeProvider} to ${otherProvider} (limit reached)`);
+      await this.setActiveProvider(otherProvider);
+      return otherProvider;
+    }
+
+    // Both providers at limit
+    console.warn('[EmailService] Both providers at daily limit!');
+    return this.activeProvider;
+  }
+
+  // Set the active provider
+  async setActiveProvider(provider: EmailProvider): Promise<void> {
+    this.activeProvider = provider;
+    try {
+      const client = redisClient.getClient();
+      if (client) {
+        await client.set(REDIS_KEYS.ACTIVE_PROVIDER, provider);
+      }
+      console.log(`[EmailService] Active provider set to: ${provider}`);
+    } catch (e) {
+      console.error('[EmailService] Failed to save provider to Redis:', e);
+    }
+  }
+
+  // Set preferred provider (user preference)
+  async setPreferredProvider(provider: EmailProvider): Promise<void> {
+    this.preferredProvider = provider;
+    await this.setActiveProvider(provider);
+    try {
+      const client = redisClient.getClient();
+      if (client) {
+        await client.set(REDIS_KEYS.PROVIDER_PREFERENCE, provider);
+      }
+    } catch (e) {
+      console.error('[EmailService] Failed to save preference to Redis:', e);
+    }
+  }
+
+  // Get current active provider
+  getActiveProvider(): EmailProvider {
+    return this.activeProvider;
+  }
+
+  getFromAddress(): { name: string; email: string } {
+    return { ...this.fromEmail };
+  }
+
+  // Send via Brevo (Using Fetch)
+  private async sendViaBREVO(options: EmailOptions): Promise<SendResult> {
+    try {
+      console.log(`[Brevo] Sending to ${options.to}`);
+
+      const apiKey = process.env.BREVO_API_KEY || '';
+
+      const payload = {
+        sender: this.fromEmail,
+        to: [{ email: options.to, name: options.recipientName }],
+        subject: options.subject,
+        htmlContent: options.htmlContent,
+        tags: options.tags || []
+      };
+
+      const response = await fetch('https://api.brevo.com/v3/smtp/email', {
+        method: 'POST',
+        headers: {
+          'accept': 'application/json',
+          'api-key': apiKey,
+          'content-type': 'application/json'
+        },
+        body: JSON.stringify(payload)
+      });
+
+      if (!response.ok) {
+        let errorBody;
+        try {
+          errorBody = await response.json();
+        } catch (e) {
+          errorBody = await response.text();
+        }
+        console.error('[Brevo] API Failed:', response.status, errorBody);
+        return {
+          success: false,
+          error: typeof errorBody === 'string' ? errorBody : JSON.stringify(errorBody),
+          provider: 'brevo'
+        };
       }
 
-      console.error(`   ❌ Max retries reached or error is not retryable. Giving up.`);
+      const data: any = await response.json();
+      console.log(`[Brevo] Success! ID: ${data.messageId}`);
+      return { success: true, messageId: data.messageId, provider: 'brevo' };
+
+    } catch (error: any) {
+      console.error('[Brevo] Network Failed:', error.message);
       return {
         success: false,
-        error: errorDetails,
-        retryCount: attempt - 1,
-        errorCategory
+        error: error.message,
+        provider: 'brevo'
       };
     }
   }
 
-  private isRetryableError(error: any): boolean {
-    if (!error) return false;
+  // Send via Resend
+  private async sendViaResend(options: EmailOptions): Promise<SendResult> {
+    try {
+      console.log(`[Resend] Sending to ${options.to}`);
 
-    const errorString = String(error).toLowerCase();
+      const { data, error } = await resend.emails.send({
+        from: `${this.fromEmail.name} <${this.fromEmail.email}>`,
+        to: options.to,
+        subject: options.subject,
+        html: options.htmlContent,
+        tags: options.tags?.map(t => ({ name: 'type', value: t })) || []
+      });
 
-    const retryablePatterns = [
-      'network',
-      'timeout',
-      'econnrefused',
-      'econnreset',
-      'etimedout',
-      'temporary failure',
-      'connection timeout',
-      'socket hang up',
-      '5',
-    ];
+      if (error) {
+        console.error('[Resend] Failed:', error);
+        return { success: false, error: error.message, provider: 'resend' };
+      }
 
-    return retryablePatterns.some(pattern => errorString.includes(pattern));
+      console.log(`[Resend] Success! ID: ${data?.id}`);
+      return { success: true, messageId: data?.id, provider: 'resend' };
+
+    } catch (error: any) {
+      console.error('[Resend] Failed:', error.message);
+      return { success: false, error: error.message, provider: 'resend' };
+    }
   }
 
+  // Main send method with auto-switch and retry
   async sendEmail(
-    options: EmailOptions,
+    to: string,
+    subject: string,
+    htmlContent: string,
+    templateType: string = 'generic',
+    recipientName?: string,
+    metadata?: any
+  ): Promise<SendResult> {
+    await this.initialize();
+
+    // Auto-switch if current provider is at limit
+    const provider = await this.autoSwitchIfNeeded();
+
+    const options: EmailOptions = {
+      to,
+      subject,
+      htmlContent,
+      recipientName,
+      tags: [templateType]
+    };
+
+    // Try with active provider
+    let result: SendResult;
+    if (provider === 'brevo') {
+      result = await this.sendViaBREVO(options);
+    } else {
+      result = await this.sendViaResend(options);
+    }
+
+    // If failed, try the other provider
+    if (!result.success) {
+      const fallbackProvider: EmailProvider = provider === 'brevo' ? 'resend' : 'brevo';
+      console.log(`[EmailService] Primary failed, trying fallback provider: ${fallbackProvider}`);
+
+      if (await this.hasCapacity(fallbackProvider)) {
+        if (fallbackProvider === 'brevo') {
+          result = await this.sendViaBREVO(options);
+        } else {
+          result = await this.sendViaResend(options);
+        }
+      }
+    }
+
+    // Log the email
+    await this.logEmail(
+      { to, subject, html: htmlContent, metadata },
+      templateType,
+      recipientName,
+      result
+    );
+
+    return result;
+  }
+
+  // --- Template Methods ---
+
+  async sendRegistrationReceived(to: string, name: string, eventName: string, registrationId?: string) {
+    const html = generateRegistrationReceivedEmail(name, eventName, registrationId);
+    return this.sendEmail(to, `Registration Successful - ${eventName}`, html, 'registration_received', name, { eventName });
+  }
+
+  async sendConsolidatedRegistrationReceived(to: string, name: string, events: Array<{ name: string }>, details: any) {
+    const html = generateConsolidatedRegistrationEmail(name, events, details);
+    const eventNames = events.map(e => e.name).join(', ');
+    return this.sendEmail(
+      to,
+      `Registration Successful - ${events.length} Events`,
+      html,
+      'registration_received_consolidated',
+      name,
+      { eventNames, eventCount: events.length }
+    );
+  }
+
+  async sendRegistrationApproved(to: string, name: string, eventName: string, username: string, password: string) {
+    const html = generateRegistrationApprovedEmail(name, eventName, username, password);
+    return this.sendEmail(to, `Registration Approved - ${eventName}`, html, 'registration_approved', name, { eventName, username });
+  }
+
+  async sendCredentials(to: string, name: string, eventName: string, username: string, password: string) {
+    const html = generateCredentialsEmail(name, eventName, username, password);
+    return this.sendEmail(to, `Your Credentials for ${eventName}`, html, 'credentials_distribution', name, { eventName, username });
+  }
+
+  async sendConsolidatedCredentials(
+    to: string,
+    name: string,
+    credentials: Array<{ eventName: string; username: string; password: string }>
+  ) {
+    const html = generateConsolidatedCredentialsEmail(name, credentials);
+    const eventNames = credentials.map(c => c.eventName).join(', ');
+    return this.sendEmail(
+      to,
+      `Registration Confirmed - ${credentials.length} Event${credentials.length > 1 ? 's' : ''}`,
+      html,
+      'credentials_consolidated',
+      name,
+      { eventNames, eventCount: credentials.length }
+    );
+  }
+
+  async sendTestStartReminder(to: string, name: string, eventName: string, roundName: string, startTime: Date) {
+    const html = generateTestStartReminderEmail(name, eventName, roundName, startTime);
+    return this.sendEmail(to, `Test Starting Soon - ${roundName}`, html, 'test_start_reminder', name, { eventName, roundName, startTime });
+  }
+
+  async sendResultPublished(to: string, name: string, eventName: string, score: number, rank: number) {
+    const html = generateResultPublishedEmail(name, eventName, score, rank);
+    return this.sendEmail(to, `Results Published - ${eventName}`, html, 'result_published', name, { eventName, score, rank });
+  }
+
+  async sendTestQualification(
+    to: string,
+    name: string,
+    eventName: string,
+    roundName: string,
+    score: number,
+    maxScore: number
+  ) {
+    const html = generateTestQualificationEmail(name, eventName, roundName, score, maxScore);
+    return this.sendEmail(
+      to,
+      `Round Qualification Update - ${eventName}`,
+      html,
+      'test_result_qualified',
+      name,
+      { eventName, roundName, score, maxScore }
+    );
+  }
+
+  async sendTestQualificationWithFinalsDetails(
+    to: string,
+    name: string,
+    eventName: string,
+    roundName: string,
+    score: number,
+    maxScore: number,
+    finalsRoom: string,
+    finalsTime: string,
+    message?: string
+  ) {
+    const html = generateTestQualificationWithFinalsDetailsEmail(name, eventName, roundName, score, maxScore, finalsRoom, finalsTime, message);
+    return this.sendEmail(
+      to,
+      `ðŸŽ‰ You're Qualified! Finals Details - ${eventName}`,
+      html,
+      'test_result_qualified_with_finals',
+      name,
+      { eventName, roundName, score, maxScore, finalsRoom, finalsTime, message }
+    );
+  }
+
+  async sendWinnerAnnouncement(
+    to: string,
+    name: string,
+    eventName: string,
+    roundName: string,
+    venueRoom: string,
+    dateTime: string,
+    message?: string
+  ) {
+    const html = generateWinnerAnnouncementEmail(name, eventName, roundName, venueRoom, dateTime, message);
+    return this.sendEmail(
+      to,
+      `ðŸ† Congratulations! You are a Winner in ${eventName}`,
+      html,
+      'winner_announcement',
+      name,
+      { eventName, roundName, venueRoom, dateTime, message }
+    );
+  }
+
+  async sendGeneralEmail(to: string, name: string, subject: string, content: string) {
+    return this.sendEmail(
+      to,
+      subject,
+      `<html><body><h1>Hello ${name},</h1><p>${content}</p></body></html>`,
+      'general_notification',
+      name
+    );
+  }
+
+  // --- Logging ---
+
+
+  private async logEmail(
+    options: { to: string; subject: string; html: string; metadata?: any },
     templateType: string,
-    recipientName?: string
-  ): Promise<{ success: boolean; messageId?: string; error?: string }> {
-    const emailData = {
-      from: this.fromEmail,
-      to: options.to,
-      subject: options.subject,
-      html: options.html
-    };
-
-    const result = await this.sendWithRetry(emailData);
-
-    const metadata = {
-      ...(options.metadata || {}),
-      retryCount: result.retryCount
-    };
-
+    recipientName: string | undefined,
+    result: SendResult
+  ) {
     try {
       await storage.createEmailLog({
         recipientEmail: options.to,
@@ -188,181 +552,17 @@ class EmailService {
         subject: options.subject,
         templateType,
         status: result.success ? 'sent' : 'failed',
-        metadata,
+        metadata: {
+          ...(options.metadata || {}),
+          provider: result.provider,
+          retryCount: result.retryCount || 0
+        },
         errorMessage: result.error || null
       });
-    } catch (logError) {
-      console.warn('⚠️  Failed to log email to database:', logError instanceof Error ? logError.message : 'Unknown error');
-    }
-
-    if (result.success) {
-      if (this.isDevelopmentMode) {
-        console.log(`✅ [DEV MODE] Email logged successfully: ${templateType} to ${options.to}`);
-      } else {
-        console.log(`✅ Email sent successfully to ${options.to} (${templateType})`);
-      }
-
-      const eventName = options.metadata?.eventName || 'N/A';
-      this.notifySuperAdmin(
-        templateType,
-        options.to,
-        recipientName || 'Unknown',
-        eventName,
-        options.metadata || {}
-      ).catch(err => {
-        console.error('Failed to notify superadmin:', err);
-      });
-    } else {
-      console.error(`❌ Email send failed to ${options.to}:`, result.error);
-    }
-
-    return result;
-  }
-
-  async sendRegistrationReceived(
-    to: string,
-    name: string,
-    eventName: string,
-    registrationId: string
-  ): Promise<{ success: boolean; messageId?: string; error?: string }> {
-    const html = generateRegistrationReceivedEmail(name, eventName, registrationId);
-    return this.sendEmail(
-      {
-        to,
-        subject: `Registration Received - ${eventName}`,
-        html,
-        metadata: { eventName, registrationId }
-      },
-      'registration_received',
-      name
-    );
-  }
-
-  async sendRegistrationApproved(
-    to: string,
-    name: string,
-    eventName: string,
-    username: string,
-    password: string
-  ): Promise<{ success: boolean; messageId?: string; error?: string }> {
-    const html = generateRegistrationApprovedEmail(name, eventName, username, password);
-    return this.sendEmail(
-      {
-        to,
-        subject: `Registration Approved - ${eventName}`,
-        html,
-        metadata: { eventName, username }
-      },
-      'registration_approved',
-      name
-    );
-  }
-
-  async sendCredentials(
-    to: string,
-    name: string,
-    eventName: string,
-    username: string,
-    password: string
-  ): Promise<{ success: boolean; messageId?: string; error?: string }> {
-    const html = generateCredentialsEmail(name, eventName, username, password);
-    return this.sendEmail(
-      {
-        to,
-        subject: `Your Credentials for ${eventName}`,
-        html,
-        metadata: { eventName, username }
-      },
-      'credentials_distribution',
-      name
-    );
-  }
-
-  async sendTestStartReminder(
-    to: string,
-    name: string,
-    eventName: string,
-    roundName: string,
-    startTime: Date
-  ): Promise<{ success: boolean; messageId?: string; error?: string }> {
-    const html = generateTestStartReminderEmail(name, eventName, roundName, startTime);
-    return this.sendEmail(
-      {
-        to,
-        subject: `Test Starting Soon - ${roundName}`,
-        html,
-        metadata: { eventName, roundName, startTime: startTime.toISOString() }
-      },
-      'test_start_reminder',
-      name
-    );
-  }
-
-  async sendResultPublished(
-    to: string,
-    name: string,
-    eventName: string,
-    score: number,
-    rank: number
-  ): Promise<{ success: boolean; messageId?: string; error?: string }> {
-    const html = generateResultPublishedEmail(name, eventName, score, rank);
-    return this.sendEmail(
-      {
-        to,
-        subject: `Results Published - ${eventName}`,
-        html,
-        metadata: { eventName, score, rank }
-      },
-      'result_published',
-      name
-    );
-  }
-
-  private async notifySuperAdmin(
-    emailType: string,
-    recipientEmail: string,
-    recipientName: string,
-    eventName: string,
-    additionalDetails: Record<string, any>
-  ): Promise<void> {
-    try {
-      const superadmins = await storage.getUsers();
-      const superadmin = superadmins.find(u => u.role === 'super_admin');
-
-      if (!superadmin || !superadmin.email) {
-        console.warn('⚠️  No superadmin found to notify about email activity');
-        return;
-      }
-
-      const html = generateAdminNotificationEmail(
-        emailType,
-        recipientEmail,
-        recipientName,
-        eventName,
-        additionalDetails
-      );
-
-      const emailData = {
-        from: this.fromEmail,
-        to: superadmin.email,
-        subject: `📧 Email Activity: ${emailType} sent to ${recipientName}`,
-        html
-      };
-
-      if (this.isDevelopmentMode || !this.resend) {
-        console.log('\n📧 [DEV MODE] Admin notification would be sent:');
-        console.log('   To:', superadmin.email);
-        console.log('   Subject:', emailData.subject);
-      } else {
-        const result = await this.resend.emails.send(emailData);
-        if (!result.error) {
-          console.log(`✅ Admin notification sent to ${superadmin.email}`);
-        }
-      }
-    } catch (error) {
-      console.error('❌ Failed to send admin notification:', error instanceof Error ? error.message : 'Unknown error');
+    } catch (e) {
+      console.error('[EmailService] Log failed:', e);
     }
   }
 }
 
-export const emailService = new EmailService();
+export const emailService = EmailService.getInstance();

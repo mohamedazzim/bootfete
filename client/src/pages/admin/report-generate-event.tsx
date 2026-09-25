@@ -22,7 +22,7 @@ export default function ReportGenerateEventPage() {
 
   const generateReportMutation = useMutation({
     mutationFn: async (eventId: string) => {
-      return await apiRequest('/api/reports/generate/event', 'POST', { eventId });
+      return await apiRequest('POST', '/api/reports/generate/event', { eventId });
     },
     onSuccess: () => {
       toast({

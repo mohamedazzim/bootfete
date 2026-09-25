@@ -27,29 +27,28 @@ export class WebSocketService {
   static async notifyRoundStatus(eventId: string, roundId: string, status: string, round: any) {
     if (!io) return;
 
-    io.to('super_admin').emit('roundStatus', {
+    const payload = {
       eventId,
       roundId,
       status,
       round
-    });
-    io.to(`event:${eventId}`).emit('roundStatus', {
-      eventId,
-      roundId,
-      status,
-      round
-    });
+    };
 
-    // Get all participants for this event and emit to each one individually
-    const participants = await storage.getParticipantsByEventId(eventId);
-    participants.forEach(participant => {
-      io.to(`participant:${participant.id}`).emit('roundStatus', {
-        eventId,
-        roundId,
-        status,
-        round
+    // Emit to super admins immediately
+    io.to('super_admin').emit('roundStatus', payload);
+
+    // Emit to event admin room
+    io.to(`event:${eventId}`).emit('roundStatus', payload);
+
+    // Emit only to participants registered for this event
+    try {
+      const participants = await storage.getParticipantsByEventId(eventId);
+      participants.forEach((participant) => {
+        io.to(`participant:${participant.userId}`).emit('roundStatus', payload);
       });
-    });
+    } catch (error) {
+      console.error('Failed to notify event participants of round status:', error);
+    }
   }
 
   // Super admin override - notify all admins and affected users
@@ -105,6 +104,13 @@ export class WebSocketService {
     io.to('registration_committee').emit('registrationConfirmed', registration);
     if (registration.eventId) {
       io.to(`event:${registration.eventId}`).emit('registrationConfirmed', registration);
+      
+      // Also emit credentialsCreated to ensure credential queries refetch immediately
+      // This triggers Event Admin dashboard to update participant/credential lists
+      io.to(`event:${registration.eventId}`).emit('credentialsCreated', {
+        eventId: registration.eventId,
+        organizerName: registration.organizerName
+      });
     }
   }
 
@@ -130,5 +136,35 @@ export class WebSocketService {
       eventId,
       credentials
     });
+  }
+
+  // Generic data refresh - for triggering UI updates
+  static notifyDataRefresh(type: string, eventId?: string) {
+    if (!io) return;
+
+    const data = { type, eventId };
+    io.to('super_admin').emit('dataRefresh', data);
+    io.to('registration_committee').emit('dataRefresh', data);
+    if (eventId) {
+      io.to(`event:${eventId}`).emit('dataRefresh', data);
+    }
+  }
+
+  // Manual round entry added
+  static notifyManualRoundEntry(eventId: string, entry: any) {
+    if (!io) return;
+
+    io.to('super_admin').emit('manualRoundEntry', { eventId, entry });
+    io.to(`event:${eventId}`).emit('manualRoundEntry', { eventId, entry });
+  }
+
+  // Winner declared
+  static notifyWinnerDeclared(eventId: string, eventName: string, winner: any) {
+    if (!io) return;
+
+    const data = { eventId, eventName, winner };
+    io.to('super_admin').emit('winnerDeclared', data);
+    io.to(`event:${eventId}`).emit('winnerDeclared', data);
+    io.to('registration_committee').emit('winnerDeclared', data);
   }
 }

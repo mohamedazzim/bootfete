@@ -5,10 +5,11 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { ArrowLeft, Trophy, Medal, Award, Clock, Users, CheckCircle, PlayCircle, AlertCircle, Share2, Printer } from 'lucide-react';
+import { ArrowLeft, Trophy, Medal, Award, Clock, Users, CheckCircle, PlayCircle, AlertCircle, Printer } from 'lucide-react';
 import { useWebSocket } from '@/contexts/WebSocketContext';
 import { useEffect } from 'react';
-import { queryClient } from '@/lib/queryClient';
+import { queryClient, apiRequest } from '@/lib/queryClient';
+import type { Round } from '@shared/schema';
 
 interface LeaderboardEntry {
     rank: number;
@@ -16,8 +17,19 @@ interface LeaderboardEntry {
     userName: string;
     totalScore: number;
     maxScore?: number;
-    submittedAt: Date;
+    submittedAt: string | null;
 }
+
+type LeaderboardApiResponse =
+    | LeaderboardEntry[]
+    | {
+        scope: 'admin' | 'participant';
+        answersVisible: boolean;
+        canSelectParticipants?: boolean;
+        leaderboard?: LeaderboardEntry[];
+        participantResult?: any;
+        message?: string;
+    };
 
 interface RoundStatistics {
     roundId: string;
@@ -27,10 +39,11 @@ interface RoundStatistics {
     activeParticipants: number;
     completedParticipants: number;
     pendingParticipants: number;
-    testDuration: number;
-    startedAt?: Date;
-    endsAt?: Date;
     canShareResults: boolean;
+    testDuration: number;
+    startedAt?: string | null;
+    endsAt?: string | null;
+    showAnswers: boolean;
 }
 
 export default function RoundMonitorPage() {
@@ -39,33 +52,36 @@ export default function RoundMonitorPage() {
     const { isConnected } = useWebSocket();
 
     // Fetch round statistics
-    const { data: stats, isLoading: statsLoading } = useQuery<RoundStatistics>({
+    const { data: stats, isLoading: statsLoading, error: statsError } = useQuery<RoundStatistics>({
         queryKey: [`/api/rounds/${roundId}/statistics`],
         enabled: !!roundId,
-        refetchInterval: isConnected ? false : 5000, // Poll every 5s if WebSocket disconnected
+        refetchInterval: isConnected ? false : 5000,
     });
 
     // Fetch leaderboard
-    const { data: leaderboard, isLoading: leaderboardLoading } = useQuery<LeaderboardEntry[]>({
+    const { data: leaderboardResponse, isLoading: leaderboardLoading } = useQuery<LeaderboardApiResponse>({
         queryKey: [`/api/rounds/${roundId}/leaderboard`],
         enabled: !!roundId,
         refetchInterval: isConnected ? false : 5000,
     });
 
-    // Listen for WebSocket updates
+    const leaderboard: LeaderboardEntry[] | undefined = Array.isArray(leaderboardResponse)
+        ? leaderboardResponse
+        : leaderboardResponse?.leaderboard;
+
+    // Fetch round details for eventId
+    const { data: round } = useQuery<Round>({
+        queryKey: [`/api/rounds/${roundId}`],
+        enabled: !!roundId,
+    });
+
+    // When WebSocket is disconnected, keep the monitor fresh with polling.
     useEffect(() => {
-        // Refresh when test is submitted
-        const handleTestSubmitted = () => {
+        if (isConnected) return;
+
+        const interval = setInterval(() => {
             queryClient.invalidateQueries({ queryKey: [`/api/rounds/${roundId}/statistics`] });
             queryClient.invalidateQueries({ queryKey: [`/api/rounds/${roundId}/leaderboard`] });
-        };
-
-        // Manual listener (events already handled in WebSocketContext)
-        // This is just to ensure we catch any missed updates
-        const interval = setInterval(() => {
-            if (!isConnected) {
-                queryClient.invalidateQueries({ queryKey: [`/api/rounds/${roundId}/statistics`] });
-            }
         }, 10000);
 
         return () => clearInterval(interval);
@@ -75,9 +91,17 @@ export default function RoundMonitorPage() {
         window.print();
     };
 
-    const handleShareResults = async () => {
-        // TODO: Implement result sharing
-        alert('Result sharing will be implemented');
+    const showAnswers = async () => {
+        if (!stats) return;
+        if (stats.showAnswers) return;
+        if (!stats.canShareResults) return;
+        try {
+            await apiRequest('POST', `/api/rounds/${roundId}/toggle-answers`, { show: true });
+            queryClient.invalidateQueries({ queryKey: [`/api/rounds/${roundId}/statistics`] });
+            queryClient.invalidateQueries({ queryKey: [`/api/rounds/${roundId}/leaderboard`] });
+        } catch (error) {
+            console.error("Failed to show answers", error);
+        }
     };
 
     if (statsLoading || leaderboardLoading) {
@@ -90,10 +114,10 @@ export default function RoundMonitorPage() {
         );
     }
 
-    if (!stats) {
+    if (statsError || !stats) {
         return (
             <EventAdminLayout>
-                <div className="p-4 md:p-8 max-w-7xl mx-auto  ">
+                <div className="p-4 md:p-8 max-w-7xl mx-auto">
                     <Button
                         variant="ghost"
                         onClick={() => setLocation('/event-admin/dashboard')}
@@ -105,7 +129,10 @@ export default function RoundMonitorPage() {
                     <Card>
                         <CardContent className="text-center py-12">
                             <AlertCircle className="h-16 w-16 mx-auto text-gray-300 mb-4" />
-                            <p className="text-gray-600">Round not found or no data available</p>
+                            <h3 className="text-lg font-medium text-gray-900">Unable to load monitor</h3>
+                            <p className="text-gray-600 mt-2">
+                                {(statsError as Error)?.message || "Round not found or no data available"}
+                            </p>
                         </CardContent>
                     </Card>
                 </div>
@@ -146,12 +173,22 @@ export default function RoundMonitorPage() {
                                 <Printer className="mr-2 h-4 w-4" />
                                 Print
                             </Button>
-                            {stats.canShareResults && (
-                                <Button onClick={handleShareResults} size="sm">
-                                    <Share2 className="mr-2 h-4 w-4" />
-                                    Share Results
-                                </Button>
-                            )}
+
+                            {/* Toggle Show Answers Button */}
+                            <Button
+                                onClick={showAnswers}
+                                size="sm"
+                                variant={stats.showAnswers ? "outline" : "default"}
+                                disabled={!stats.canShareResults || stats.showAnswers}
+                                title={!stats.canShareResults
+                                    ? 'Waiting for all participants to submit'
+                                    : stats.showAnswers
+                                        ? 'Answers are already visible'
+                                        : undefined
+                                }
+                            >
+                                {stats.showAnswers ? "Answers Visible" : "Show Answers"}
+                            </Button>
                         </div>
                     </div>
 
@@ -296,7 +333,7 @@ export default function RoundMonitorPage() {
                                                 <TableCell className="text-right text-sm text-gray-600">
                                                     <div className="flex items-center justify-end gap-1">
                                                         <Clock className="h-3 w-3" />
-                                                        {new Date(entry.submittedAt).toLocaleTimeString()}
+                                                        {entry.submittedAt ? new Date(entry.submittedAt).toLocaleTimeString() : '—'}
                                                     </div>
                                                 </TableCell>
                                             </TableRow>
@@ -328,7 +365,7 @@ export default function RoundMonitorPage() {
                 )}
 
                 {/* Completion Message */}
-                {stats.canShareResults && (
+                {stats.status === 'completed' && (
                     <Card className="mt-6 border-green-200 bg-green-50">
                         <CardContent className="py-4">
                             <div className="flex items-center justify-between">
@@ -338,10 +375,16 @@ export default function RoundMonitorPage() {
                                         Round completed! All participants have finished.
                                     </span>
                                 </div>
-                                <Button onClick={handleShareResults} size="sm" className="print:hidden">
-                                    <Share2 className="mr-2 h-4 w-4" />
-                                    Share Results Now
-                                </Button>
+                                {round?.eventId && (
+                                    <Button
+                                        size="sm"
+                                        className="bg-green-700 hover:bg-green-800 text-white"
+                                        onClick={() => setLocation(`/event-admin/events/${round.eventId}/results`)}
+                                    >
+                                        <Trophy className="mr-2 h-4 w-4" />
+                                        Process Results
+                                    </Button>
+                                )}
                             </div>
                         </CardContent>
                     </Card>

@@ -96,6 +96,8 @@ export default function MyTestsPage() {
                             <span className="font-semibold text-blue-600" data-testid={`text-score-${attempt.id}`}>
                               {attempt.totalScore} points
                             </span>
+                          ) : attempt.status === 'completed' ? (
+                            <span className="text-gray-400">Awaiting results</span>
                           ) : (
                             <span className="text-gray-400">Pending</span>
                           )}

@@ -49,7 +49,9 @@ export default function EventCreatePage() {
         name: data.name,
         description: data.description,
         type: data.type,
-        category: data.type, // Category should match type (technical/non_technical)
+        // The create form exposes a single "Event Type" select; keep category in
+        // sync so registration-form category filtering matches the chosen type.
+        category: data.type,
         status: data.status,
         createdBy: user?.id || '',
         startDate: data.startDate ? new Date(data.startDate) : null,

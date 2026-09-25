@@ -14,13 +14,14 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Switch } from "@/components/ui/switch";
 import { Link } from "wouter";
-import { Copy, Plus, Edit, Trash2 } from "lucide-react";
+import { Copy, Plus, Edit, Trash2, QrCode } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import AdminLayout from "@/components/layouts/AdminLayout";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { RegistrationForm, Event } from "@shared/schema";
 
 import { useState } from "react";
+import QRCodeLib from "qrcode";
 
 export default function RegistrationFormsPage() {
   const { toast } = useToast();
@@ -80,6 +81,45 @@ export default function RegistrationFormsPage() {
       title: "Link copied",
       description: "Registration form link copied to clipboard",
     });
+  };
+
+  const generateAndDownloadQR = async (slug: string, title: string) => {
+    try {
+      const link = `${window.location.origin}/register/${slug}`;
+      const qrCodeDataUrl = await QRCodeLib.toDataURL(link, {
+        width: 400,
+        margin: 2,
+        errorCorrectionLevel: 'H',
+        type: 'image/png',
+      });
+
+      // Convert data URL to blob for better download handling
+      const response = await fetch(qrCodeDataUrl);
+      const blob = await response.blob();
+      const blobUrl = URL.createObjectURL(blob);
+
+      // Create download link
+      const downloadLink = document.createElement('a');
+      downloadLink.href = blobUrl;
+      downloadLink.download = `registration-qr-${slug}.png`;
+      document.body.appendChild(downloadLink);
+      downloadLink.click();
+      document.body.removeChild(downloadLink);
+
+      // Clean up blob URL
+      URL.revokeObjectURL(blobUrl);
+
+      toast({
+        title: "QR Code downloaded",
+        description: "QR code saved successfully as PNG",
+      });
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: "Failed to generate QR code",
+        variant: "destructive",
+      });
+    }
   };
 
   return (
@@ -154,7 +194,7 @@ export default function RegistrationFormsPage() {
                         <code className="flex-1 bg-muted px-3 py-2 rounded text-sm break-all" data-testid={`text-link-${form.id}`}>
                           {window.location.origin}/register/{form.formSlug}
                         </code>
-                        <div className="flex gap-2">
+                        <div className="flex flex-wrap gap-2">
                           <Button
                             variant="outline"
                             size="sm"
@@ -164,6 +204,16 @@ export default function RegistrationFormsPage() {
                           >
                             <Copy className="h-4 w-4 mr-2" />
                             Copy
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="flex-1 md:flex-none"
+                            onClick={() => generateAndDownloadQR(form.formSlug, form.title)}
+                            data-testid={`button-qr-${form.id}`}
+                          >
+                            <QrCode className="h-4 w-4 mr-2" />
+                            QR Code
                           </Button>
                           <Link href={`/admin/registration-forms/${form.id}/edit`} className="flex-1 md:flex-none">
                             <Button

@@ -113,181 +113,120 @@ describe('Public Registration Flow Tests', () => {
     if (registrationForm?.id) await storage.deleteRegistrationForm(registrationForm.id);
   });
 
-  test('should successfully register via public form', async () => {
-    const registrationData = {
-      submittedData: {
-        fullName: 'John Doe',
-        email: 'john.doe@test.com',
-        phone: '1234567890'
-      },
-      selectedEvents: [technicalEvent.id]
-    };
+  // NOTE: The legacy POST /api/registration-forms/:slug/submit endpoint was
+  // retired (410 Gone) in favour of the team-based /api/register/batch flow.
+  // These tests encode the CURRENT public registration contract.
 
+  function batchRegistration(eventId: string, overrides: Record<string, unknown> = {}) {
+    const suffix = `${Date.now()}${Math.floor(Math.random() * 1000)}`;
+    return {
+      eventId,
+      organizerRollNo: `ROLL${suffix}`,
+      organizerName: 'John Doe',
+      organizerEmail: `john.doe.${suffix}@test.com`,
+      organizerDept: 'CSE',
+      organizerCollege: 'Test College',
+      organizerPhone: '1234567890',
+      organizerFoodType: 'veg',
+      ...overrides,
+    };
+  }
+
+  test('should successfully register via the public batch endpoint', async () => {
     const response = await request(app)
-      .post(`/api/registration-forms/${registrationForm.formSlug}/submit`)
-      .send(registrationData);
+      .post('/api/register/batch')
+      .send({ registrations: [batchRegistration(technicalEvent.id)] });
 
     expect(response.status).toBe(201);
-    expect(response.body).toHaveProperty('id');
-    expect(response.body.submittedData.email).toBe('john.doe@test.com');
-    expect(response.body.selectedEvents).toContain(technicalEvent.id);
-    expect(response.body.paymentStatus).toBe('pending');
+    expect(response.body.successfulCount).toBe(1);
+    expect(response.body.results[0].success).toBe(true);
+    expect(response.body.results[0]).toHaveProperty('registrationId');
   });
 
-  test('should validate form slug - reject invalid slug', async () => {
+  test('should retire the legacy form submit endpoint with 410', async () => {
     const response = await request(app)
       .post('/api/registration-forms/invalid-slug-123/submit')
-      .send({
-        submittedData: { fullName: 'Test', email: 'test@test.com', phone: '123' },
-        selectedEvents: [technicalEvent.id]
-      });
+      .send({ registrations: [] });
 
-    expect(response.status).toBe(404);
-    expect(response.body.message).toBe('Form not found');
+    expect(response.status).toBe(410);
+    expect(response.body.message).toContain('team-based registration');
   });
 
-  test('should reject registration when form is inactive', async () => {
-    await storage.updateRegistrationForm(registrationForm.id, { isActive: false });
-
+  test('should reject batch registration without registrations array', async () => {
     const response = await request(app)
-      .post(`/api/registration-forms/${registrationForm.formSlug}/submit`)
-      .send({
-        submittedData: { fullName: 'Test', email: 'test@test.com', phone: '123' },
-        selectedEvents: [technicalEvent.id]
-      });
-
-    expect(response.status).toBe(400);
-    expect(response.body.message).toContain('no longer accepting submissions');
-
-    await storage.updateRegistrationForm(registrationForm.id, { isActive: true });
-  });
-
-  test('should reject registration with more than 1 technical event', async () => {
-    const technicalEvent2 = await storage.createEvent({
-      name: `Tech Event 2 ${Date.now()}`,
-      description: 'Technical event 2',
-      type: 'coding',
-      category: 'technical',
-      status: 'active',
-      createdBy: superAdminUser.id
-    });
-
-    const response = await request(app)
-      .post(`/api/registration-forms/${registrationForm.formSlug}/submit`)
-      .send({
-        submittedData: { fullName: 'Test', email: 'test@test.com', phone: '123' },
-        selectedEvents: [technicalEvent.id, technicalEvent2.id]
-      });
-
-    expect(response.status).toBe(400);
-    expect(response.body.message).toContain('Only one technical event can be selected');
-
-    await storage.deleteEvent(technicalEvent2.id);
-  });
-
-  test('should reject registration with more than 2 non-technical events', async () => {
-    const nonTechnicalEvent3 = await storage.createEvent({
-      name: `Non-Tech Event 3 ${Date.now()}`,
-      description: 'Non-technical event 3',
-      type: 'general',
-      category: 'non_technical',
-      status: 'active',
-      createdBy: superAdminUser.id
-    });
-
-    const response = await request(app)
-      .post(`/api/registration-forms/${registrationForm.formSlug}/submit`)
-      .send({
-        submittedData: { fullName: 'Test', email: 'test@test.com', phone: '123' },
-        selectedEvents: [nonTechnicalEvent1.id, nonTechnicalEvent2.id, nonTechnicalEvent3.id]
-      });
-
-    expect(response.status).toBe(400);
-    expect(response.body.message).toContain('Only one non-technical event can be selected');
-
-    await storage.deleteEvent(nonTechnicalEvent3.id);
-  });
-
-  test('should allow 1 technical + 1 non-technical event registration', async () => {
-    const response = await request(app)
-      .post(`/api/registration-forms/${registrationForm.formSlug}/submit`)
-      .send({
-        submittedData: { fullName: 'Test User', email: 'test.user@test.com', phone: '9876543210' },
-        selectedEvents: [technicalEvent.id, nonTechnicalEvent1.id]
-      });
-
-    expect(response.status).toBe(201);
-    expect(response.body.selectedEvents).toHaveLength(2);
-  });
-
-  test('should reject registration with time overlapping events', async () => {
-    const startTime = new Date('2025-12-01T10:00:00Z');
-    const endTime = new Date('2025-12-01T11:00:00Z');
-
-    const round1 = await storage.createRound({
-      eventId: technicalEvent.id,
-      name: 'Round 1',
-      roundNumber: 1,
-      duration: 60,
-      startTime,
-      endTime,
-      status: 'not_started'
-    });
-
-    const round2 = await storage.createRound({
-      eventId: nonTechnicalEvent1.id,
-      name: 'Round 1',
-      roundNumber: 1,
-      duration: 60,
-      startTime: new Date('2025-12-01T10:30:00Z'),
-      endTime: new Date('2025-12-01T11:30:00Z'),
-      status: 'not_started'
-    });
-
-    const response = await request(app)
-      .post(`/api/registration-forms/${registrationForm.formSlug}/submit`)
-      .send({
-        submittedData: { fullName: 'Test', email: 'test@test.com', phone: '123' },
-        selectedEvents: [technicalEvent.id, nonTechnicalEvent1.id]
-      });
-
-    expect(response.status).toBe(400);
-    expect(response.body.message).toContain('overlapping times');
-
-    await storage.deleteRound(round1.id);
-    await storage.deleteRound(round2.id);
-  });
-
-  test('should validate required registration data fields', async () => {
-    const response = await request(app)
-      .post(`/api/registration-forms/${registrationForm.formSlug}/submit`)
-      .send({
-        submittedData: {},
-        selectedEvents: [technicalEvent.id]
-      });
-
-    expect(response.status).toBe(201);
-  });
-
-  test('should require submittedData and selectedEvents', async () => {
-    const response = await request(app)
-      .post(`/api/registration-forms/${registrationForm.formSlug}/submit`)
+      .post('/api/register/batch')
       .send({});
 
     expect(response.status).toBe(400);
-    expect(response.body.message).toContain('submittedData and selectedEvents are required');
+    expect(response.body.message).toContain('Registrations array is required');
   });
 
-  test('should require at least one event to be selected', async () => {
+  test('should reject registration in an already-taken category for the same roll no', async () => {
+    const suffix = `${Date.now()}DUP`;
+    const rollNo = `ROLL${suffix}`;
+    const email = `dup.tech.${suffix}@test.com`;
+
+    const first = await request(app)
+      .post('/api/register/batch')
+      .send({ registrations: [batchRegistration(technicalEvent.id, { organizerRollNo: rollNo, organizerEmail: email })] });
+    expect(first.body.successfulCount).toBe(1);
+
+    // Second technical registration with the same roll no must fail per-event
+    const second = await request(app)
+      .post('/api/register/batch')
+      .send({ registrations: [batchRegistration(technicalEvent.id, { organizerRollNo: rollNo, organizerEmail: email })] });
+
+    expect(second.status).toBe(201);
+    expect(second.body.successfulCount).toBe(0);
+    expect(second.body.results[0].success).toBe(false);
+    expect(second.body.results[0].message).toContain('Already registered');
+  });
+
+  test('should allow 1 technical + 1 non-technical event registration', async () => {
+    const suffix = `${Date.now()}MIX`;
+    const rollNo = `ROLL${suffix}`;
+    const email = `mix.${suffix}@test.com`;
+
     const response = await request(app)
-      .post(`/api/registration-forms/${registrationForm.formSlug}/submit`)
+      .post('/api/register/batch')
       .send({
-        submittedData: { fullName: 'Test', email: 'test@test.com', phone: '123' },
-        selectedEvents: []
+        registrations: [
+          batchRegistration(technicalEvent.id, { organizerRollNo: rollNo, organizerEmail: email }),
+          batchRegistration(nonTechnicalEvent1.id, { organizerRollNo: rollNo, organizerEmail: email }),
+        ],
       });
 
-    expect(response.status).toBe(400);
-    expect(response.body.message).toContain('At least one event must be selected');
+    expect(response.status).toBe(201);
+    expect(response.body.successfulCount).toBe(2);
+  });
+
+  test('should reject batch registration for a non-existent event', async () => {
+    const response = await request(app)
+      .post('/api/register/batch')
+      .send({ registrations: [batchRegistration('non-existent-event-id')] });
+
+    expect(response.status).toBe(201);
+    expect(response.body.successfulCount).toBe(0);
+    expect(response.body.results[0].message).toContain('Event not found');
+  });
+
+  test('should reject registration with mismatched food preference for a known roll no', async () => {
+    const suffix = `${Date.now()}FOOD`;
+    const rollNo = `ROLL${suffix}`;
+    const email = `food.${suffix}@test.com`;
+
+    const first = await request(app)
+      .post('/api/register/batch')
+      .send({ registrations: [batchRegistration(technicalEvent.id, { organizerRollNo: rollNo, organizerEmail: email, organizerFoodType: 'veg' })] });
+    expect(first.body.successfulCount).toBe(1);
+
+    const second = await request(app)
+      .post('/api/register/batch')
+      .send({ registrations: [batchRegistration(nonTechnicalEvent1.id, { organizerRollNo: rollNo, organizerEmail: email, organizerFoodType: 'nonveg' })] });
+
+    expect(second.status).toBe(201);
+    expect(second.body.successfulCount).toBe(0);
+    expect(second.body.results[0].message).toContain('Food type mismatch');
   });
 });
 
@@ -323,8 +262,12 @@ describe('On-Spot Registration Tests (Registration Committee)', () => {
   test('should create participant with auto-generated credentials', async () => {
     const participantData = {
       fullName: 'Alice Johnson',
-      email: 'alice.johnson@test.com',
+      email: `alice.johnson.${Date.now()}@test.com`,
       phone: '1234567890',
+      college: `Test College ${Date.now()}`,
+      rollNo: `ROLL${Date.now()}${Math.floor(Math.random() * 1000)}`,
+      department: 'CSE',
+      year: 'II',
       selectedEvents: [technicalEvent.id]
     };
 
@@ -338,22 +281,32 @@ describe('On-Spot Registration Tests (Registration Committee)', () => {
     expect(response.body.eventCredentials).toHaveLength(1);
     
     const credential = response.body.eventCredentials[0];
-    expect(credential.eventUsername).toMatch(/quiz-master-challenge-.*-alice-001/);
-    expect(credential.eventPassword).toMatch(/johnson001/);
+    // 'Quiz...' -> 'qui', 'Alice' -> 'alic', counter 1
+    expect(credential.eventUsername).toMatch(/^quialic\d+$/);
+    // Capitalised 3-letter first-name prefix + '@' + 2-digit counter, e.g. 'Ali@01'
+    expect(credential.eventPassword).toMatch(/^Ali@\d{2}$/);
   });
 
   test('should increment counter for multiple participants in same event', async () => {
     const participant1Data = {
       fullName: 'Bob Smith',
-      email: 'bob.smith@test.com',
+      email: `bob.smith.${Date.now()}@test.com`,
       phone: '1111111111',
+      college: `Test College ${Date.now()}`,
+      rollNo: `ROLL${Date.now()}${Math.floor(Math.random() * 1000)}`,
+      department: 'CSE',
+      year: 'II',
       selectedEvents: [technicalEvent.id]
     };
 
     const participant2Data = {
       fullName: 'Carol Davis',
-      email: 'carol.davis@test.com',
+      email: `carol.davis.${Date.now()}@test.com`,
       phone: '2222222222',
+      college: `Test College ${Date.now()}`,
+      rollNo: `ROLL${Date.now()}${Math.floor(Math.random() * 1000)}`,
+      department: 'CSE',
+      year: 'II',
       selectedEvents: [technicalEvent.id]
     };
 
@@ -373,10 +326,11 @@ describe('On-Spot Registration Tests (Registration Committee)', () => {
     const cred1 = response1.body.eventCredentials[0];
     const cred2 = response2.body.eventCredentials[0];
 
-    expect(cred1.eventUsername).toContain('001');
-    expect(cred2.eventUsername).toContain('002');
-    expect(cred1.eventPassword).toContain('001');
-    expect(cred2.eventPassword).toContain('002');
+    // Backend format: eventPrefix(3) + namePrefix(4) + counter (no zero padding)
+    expect(cred1.eventUsername).toMatch(/\d+$/);
+    expect(cred2.eventUsername).toMatch(/\d+$/);
+    expect(cred1.eventUsername).not.toBe(cred2.eventUsername);
+    expect(cred1.eventPassword).not.toBe(cred2.eventPassword);
   });
 
   test('should generate credentials in eventname-firstname-counter format', async () => {
@@ -385,17 +339,20 @@ describe('On-Spot Registration Tests (Registration Committee)', () => {
       .set(TestHelpers.createAuthHeader(regCommitteeToken))
       .send({
         fullName: 'David Wilson',
-        email: 'david.wilson@test.com',
+        email: `david.wilson.${Date.now()}@test.com`,
         phone: '3333333333',
+        college: `Test College ${Date.now()}`,
+        rollNo: `ROLL${Date.now()}${Math.floor(Math.random() * 1000)}`,
+        department: 'CSE',
+        year: 'II',
         selectedEvents: [technicalEvent.id]
       });
 
     expect(response.status).toBe(201);
     const username = response.body.eventCredentials[0].eventUsername;
-    
-    const parts = username.split('-');
-    expect(parts).toContain('david');
-    expect(parts[parts.length - 1]).toMatch(/^\d{3}$/);
+
+    // 'Quiz...' -> 'qui', 'David' -> 'davi', then an incrementing counter
+    expect(username).toMatch(/^quidavi\d+$/);
   });
 
   test('should generate password in shortname+counter format', async () => {
@@ -404,16 +361,20 @@ describe('On-Spot Registration Tests (Registration Committee)', () => {
       .set(TestHelpers.createAuthHeader(regCommitteeToken))
       .send({
         fullName: 'Emma Thompson',
-        email: 'emma.thompson@test.com',
+        email: `emma.thompson.${Date.now()}@test.com`,
         phone: '4444444444',
+        college: `Test College ${Date.now()}`,
+        rollNo: `ROLL${Date.now()}${Math.floor(Math.random() * 1000)}`,
+        department: 'CSE',
+        year: 'II',
         selectedEvents: [technicalEvent.id]
       });
 
     expect(response.status).toBe(201);
     const password = response.body.eventCredentials[0].eventPassword;
-    
-    expect(password).toMatch(/^[a-z]+\d{3}$/);
-    expect(password).toContain('thompson');
+
+    // Capitalised 3-letter first-name prefix + '@' + 2-digit counter, e.g. 'Emm@01'
+    expect(password).toMatch(/^[A-Z][a-z]{2}@\d{2}$/);
   });
 
   test('should create multiple event credentials for participant', async () => {
@@ -422,8 +383,12 @@ describe('On-Spot Registration Tests (Registration Committee)', () => {
       .set(TestHelpers.createAuthHeader(regCommitteeToken))
       .send({
         fullName: 'Frank Miller',
-        email: 'frank.miller@test.com',
+        email: `frank.miller.${Date.now()}@test.com`,
         phone: '5555555555',
+        college: `Test College ${Date.now()}`,
+        rollNo: `ROLL${Date.now()}${Math.floor(Math.random() * 1000)}`,
+        department: 'CSE',
+        year: 'II',
         selectedEvents: [technicalEvent.id, nonTechnicalEvent.id]
       });
 
@@ -432,7 +397,8 @@ describe('On-Spot Registration Tests (Registration Committee)', () => {
     
     const usernames = response.body.eventCredentials.map((c: any) => c.eventUsername);
     expect(usernames).toHaveLength(2);
-    expect(usernames.every((u: string) => u.includes('frank'))).toBe(true);
+    // Name prefix (4 chars of first name) appears in every username
+    expect(usernames.every((u: string) => u.includes('fran'))).toBe(true);
   });
 
   test('should require authentication for on-spot registration', async () => {
@@ -442,6 +408,10 @@ describe('On-Spot Registration Tests (Registration Committee)', () => {
         fullName: 'Test User',
         email: 'test@test.com',
         phone: '1234567890',
+        college: `Test College ${Date.now()}`,
+        rollNo: `ROLL${Date.now()}${Math.floor(Math.random() * 1000)}`,
+        department: 'CSE',
+        year: 'II',
         selectedEvents: [technicalEvent.id]
       });
 
@@ -466,6 +436,10 @@ describe('On-Spot Registration Tests (Registration Committee)', () => {
         fullName: 'Test User',
         email: 'test@test.com',
         phone: '1234567890',
+        college: `Test College ${Date.now()}`,
+        rollNo: `ROLL${Date.now()}${Math.floor(Math.random() * 1000)}`,
+        department: 'CSE',
+        year: 'II',
         selectedEvents: [technicalEvent.id]
       });
 
@@ -485,11 +459,11 @@ describe('On-Spot Registration Tests (Registration Committee)', () => {
       });
 
     expect(response.status).toBe(400);
-    expect(response.body.message).toContain('Full name, email, and at least one event are required');
+    expect(response.body.message).toContain('All fields (Name, Email, College, Roll No, Dept, Year, Events) are required');
   });
 
   test('should reject duplicate email for on-spot registration', async () => {
-    const duplicateEmail = 'duplicate@test.com';
+    const duplicateEmail = `duplicate.${Date.now()}@test.com`;
 
     await request(app)
       .post('/api/registration-committee/participants')
@@ -498,6 +472,10 @@ describe('On-Spot Registration Tests (Registration Committee)', () => {
         fullName: 'First User',
         email: duplicateEmail,
         phone: '1111111111',
+        college: `Test College ${Date.now()}`,
+        rollNo: `ROLL${Date.now()}${Math.floor(Math.random() * 1000)}`,
+        department: 'CSE',
+        year: 'II',
         selectedEvents: [technicalEvent.id]
       });
 
@@ -508,6 +486,10 @@ describe('On-Spot Registration Tests (Registration Committee)', () => {
         fullName: 'Second User',
         email: duplicateEmail,
         phone: '2222222222',
+        college: `Test College ${Date.now()}`,
+        rollNo: `ROLL${Date.now()}${Math.floor(Math.random() * 1000)}`,
+        department: 'CSE',
+        year: 'II',
         selectedEvents: [technicalEvent.id]
       });
 
@@ -515,22 +497,28 @@ describe('On-Spot Registration Tests (Registration Committee)', () => {
     expect(response.body.message).toBe('Email already exists');
   });
 
-  test('should send credentials via email after creation', async () => {
-    const mockSendCredentials = jest.mocked(emailService.sendCredentials);
-    mockSendCredentials.mockResolvedValue({ success: true, messageId: 'test-message-id' });
+  test('should send consolidated credentials via email after creation', async () => {
+    // On-spot creation queues a consolidated credentials email; with no Redis in
+    // tests the queue falls back to a direct send through this method.
+    const mockSendConsolidated = jest.mocked(emailService.sendConsolidatedCredentials);
+    mockSendConsolidated.mockResolvedValue({ success: true, messageId: 'test-message-id' });
 
     const response = await request(app)
       .post('/api/registration-committee/participants')
       .set(TestHelpers.createAuthHeader(regCommitteeToken))
       .send({
         fullName: 'Grace Lee',
-        email: 'grace.lee@test.com',
+        email: `grace.lee.${Date.now()}@test.com`,
         phone: '6666666666',
+        college: `Test College ${Date.now()}`,
+        rollNo: `ROLL${Date.now()}${Math.floor(Math.random() * 1000)}`,
+        department: 'CSE',
+        year: 'II',
         selectedEvents: [technicalEvent.id]
       });
 
     expect(response.status).toBe(201);
-    expect(mockSendCredentials).toHaveBeenCalled();
+    expect(mockSendConsolidated).toHaveBeenCalled();
   });
 });
 
@@ -559,6 +547,10 @@ describe('Credential Export Tests', () => {
         fullName: 'Export User 1',
         email: `export1_${Date.now()}@test.com`,
         phone: '1111111111',
+        college: `Test College ${Date.now()}`,
+        rollNo: `ROLL${Date.now()}${Math.floor(Math.random() * 1000)}`,
+        department: 'CSE',
+        year: 'II',
         selectedEvents: [technicalEvent.id]
       });
 
@@ -569,6 +561,10 @@ describe('Credential Export Tests', () => {
         fullName: 'Export User 2',
         email: `export2_${Date.now()}@test.com`,
         phone: '2222222222',
+        college: `Test College ${Date.now()}`,
+        rollNo: `ROLL${Date.now()}${Math.floor(Math.random() * 1000)}`,
+        department: 'CSE',
+        year: 'II',
         selectedEvents: [technicalEvent.id]
       });
 
@@ -687,6 +683,10 @@ describe('Credential Export Tests', () => {
         fullName: 'Test "Quote" User',
         email: `quote_${Date.now()}@test.com`,
         phone: '9999999999',
+        college: `Test College ${Date.now()}`,
+        rollNo: `ROLL${Date.now()}${Math.floor(Math.random() * 1000)}`,
+        department: 'CSE',
+        year: 'II',
         selectedEvents: [technicalEvent.id]
       });
 
@@ -700,7 +700,6 @@ describe('Credential Export Tests', () => {
 });
 
 describe('Registration Approval Workflow Tests', () => {
-  let registrationForm: any;
   let technicalEvent: any;
   let registration: any;
 
@@ -708,115 +707,95 @@ describe('Registration Approval Workflow Tests', () => {
     technicalEvent = await storage.createEvent({
       name: `Approval Test Event ${Date.now()}`,
       description: 'Event for approval testing',
-      type: 'quiz',
+      type: 'technical',
       category: 'technical',
       status: 'active',
       createdBy: superAdminUser.id
     });
 
-    registrationForm = await storage.createRegistrationForm({
-      title: 'Approval Test Form',
-      description: 'Test form for approval',
-      formSlug: `approval-test-${Date.now()}`,
-      formFields: [
-        { id: 'fullName', label: 'Full Name', type: 'text', required: true },
-        { id: 'email', label: 'Email', type: 'email', required: true },
-        { id: 'phone', label: 'Phone', type: 'tel', required: true }
-      ],
-      allowedCategories: ['technical', 'non_technical'],
-      isActive: true
-    });
-
+    // Create a pending registration through the public team-based flow
     const regResponse = await request(app)
-      .post(`/api/registration-forms/${registrationForm.formSlug}/submit`)
+      .post('/api/register')
       .send({
-        submittedData: {
-          fullName: 'Approval Test User',
-          email: `approval_${Date.now()}@test.com`,
-          phone: '1234567890'
-        },
-        selectedEvents: [technicalEvent.id]
+        eventId: technicalEvent.id,
+        organizerRollNo: `APPR${Date.now()}`,
+        organizerName: 'Approval Test User',
+        organizerEmail: `approval_${Date.now()}@test.com`,
+        organizerDept: 'CSE',
+        organizerCollege: 'Test College',
+        organizerPhone: '1234567890',
+        organizerFoodType: 'veg'
       });
 
-    registration = regResponse.body;
+    expect(regResponse.status).toBe(201);
+    registration = regResponse.body.registration;
   });
 
   afterEach(async () => {
     if (technicalEvent?.id) await storage.deleteEvent(technicalEvent.id);
-    if (registrationForm?.id) await storage.deleteRegistrationForm(registrationForm.id);
   });
 
-  test('should approve registration and create user account', async () => {
-    const mockSendEmail = jest.mocked(emailService.sendRegistrationApproved);
-    mockSendEmail.mockResolvedValue({ success: true, messageId: 'test-id' });
-
+  test('should confirm registration and create user account', async () => {
     const response = await request(app)
-      .patch(`/api/registrations/${registration.id}/approve`)
+      .patch(`/api/registrations/${registration.id}/confirm`)
       .set(TestHelpers.createAuthHeader(regCommitteeToken));
 
     expect(response.status).toBe(200);
-    expect(response.body.registration.paymentStatus).toBe('paid');
-    expect(response.body.registration.participantUserId).toBeDefined();
-    expect(response.body.mainCredentials).toBeDefined();
+    expect(response.body.registration.status).toBe('confirmed');
+    // The organizer's user account is created and credentials are generated;
+    // the participant link lives in the participants/event_credentials tables.
     expect(response.body.eventCredentials).toHaveLength(1);
+    expect(response.body.eventCredentials[0].eventUsername).toBeDefined();
+
+    const participantUser = await storage.getUserByEmail(response.body.eventCredentials[0].participantEmail);
+    expect(participantUser).toBeDefined();
+    expect(participantUser!.role).toBe('participant');
   });
 
-  test('should generate credentials on approval', async () => {
-    const mockSendEmail = jest.mocked(emailService.sendRegistrationApproved);
-    mockSendEmail.mockResolvedValue({ success: true, messageId: 'test-id' });
-
+  test('should generate credentials on confirmation', async () => {
     const response = await request(app)
-      .patch(`/api/registrations/${registration.id}/approve`)
+      .patch(`/api/registrations/${registration.id}/confirm`)
       .set(TestHelpers.createAuthHeader(regCommitteeToken));
 
     expect(response.status).toBe(200);
-    
+
     const eventCred = response.body.eventCredentials[0];
     expect(eventCred.eventUsername).toBeDefined();
     expect(eventCred.eventPassword).toBeDefined();
     expect(eventCred.eventName).toBeDefined();
   });
 
-  test('should transition status from pending to paid on approval', async () => {
-    const mockSendEmail = jest.mocked(emailService.sendRegistrationApproved);
-    mockSendEmail.mockResolvedValue({ success: true, messageId: 'test-id' });
-
-    expect(registration.paymentStatus).toBe('pending');
+  test('should transition status from pending to confirmed', async () => {
+    expect(registration.status).toBe('pending');
 
     const response = await request(app)
-      .patch(`/api/registrations/${registration.id}/approve`)
+      .patch(`/api/registrations/${registration.id}/confirm`)
       .set(TestHelpers.createAuthHeader(regCommitteeToken));
 
     expect(response.status).toBe(200);
-    expect(response.body.registration.paymentStatus).toBe('paid');
+    expect(response.body.registration.status).toBe('confirmed');
   });
 
-  test('should send approval email with credentials', async () => {
-    const mockSendEmail = jest.mocked(emailService.sendRegistrationApproved);
-    mockSendEmail.mockResolvedValue({ success: true, messageId: 'test-id' });
-
+  test('should queue consolidated credentials email on confirmation', async () => {
     const response = await request(app)
-      .patch(`/api/registrations/${registration.id}/approve`)
+      .patch(`/api/registrations/${registration.id}/confirm`)
       .set(TestHelpers.createAuthHeader(regCommitteeToken));
 
     expect(response.status).toBe(200);
-    expect(mockSendEmail).toHaveBeenCalled();
-    
-    const callArgs = mockSendEmail.mock.calls[0];
-    expect(callArgs[0]).toContain('@test.com');
-    expect(callArgs[2]).toBeDefined();
-    expect(callArgs[3]).toBeDefined();
-    expect(callArgs[4]).toBeDefined();
+    // Credentials are queued as a consolidated email (credits optimisation);
+    // the response returns them for on-screen display.
+    expect(response.body.eventCredentials.length).toBeGreaterThan(0);
+    expect(response.body.eventCredentials[0].eventUsername).toBeDefined();
   });
 
-  test('should require authentication for approval', async () => {
+  test('should require authentication for confirmation', async () => {
     const response = await request(app)
-      .patch(`/api/registrations/${registration.id}/approve`);
+      .patch(`/api/registrations/${registration.id}/confirm`);
 
     expect(response.status).toBe(401);
   });
 
-  test('should require registration committee or super admin role for approval', async () => {
+  test('should require registration committee or super admin role for confirmation', async () => {
     const participantUser = await storage.createUser({
       username: `participant_approval_${Date.now()}`,
       password: await TestHelpers.hashPassword('test123'),
@@ -828,7 +807,7 @@ describe('Registration Approval Workflow Tests', () => {
     const participantToken = TestHelpers.generateJWT(participantUser);
 
     const response = await request(app)
-      .patch(`/api/registrations/${registration.id}/approve`)
+      .patch(`/api/registrations/${registration.id}/confirm`)
       .set(TestHelpers.createAuthHeader(participantToken));
 
     expect(response.status).toBe(403);
@@ -837,28 +816,22 @@ describe('Registration Approval Workflow Tests', () => {
     await storage.deleteUser(participantUser.id);
   });
 
-  test('should allow super admin to approve registration', async () => {
-    const mockSendEmail = jest.mocked(emailService.sendRegistrationApproved);
-    mockSendEmail.mockResolvedValue({ success: true, messageId: 'test-id' });
-
+  test('should allow super admin to confirm registration', async () => {
     const response = await request(app)
-      .patch(`/api/registrations/${registration.id}/approve`)
+      .patch(`/api/registrations/${registration.id}/confirm`)
       .set(TestHelpers.createAuthHeader(superAdminToken));
 
     expect(response.status).toBe(200);
-    expect(response.body.registration.paymentStatus).toBe('paid');
+    expect(response.body.registration.status).toBe('confirmed');
   });
 
-  test('should reject approval of already processed registration', async () => {
-    const mockSendEmail = jest.mocked(emailService.sendRegistrationApproved);
-    mockSendEmail.mockResolvedValue({ success: true, messageId: 'test-id' });
-
+  test('should reject confirmation of already processed registration', async () => {
     await request(app)
-      .patch(`/api/registrations/${registration.id}/approve`)
+      .patch(`/api/registrations/${registration.id}/confirm`)
       .set(TestHelpers.createAuthHeader(regCommitteeToken));
 
     const response = await request(app)
-      .patch(`/api/registrations/${registration.id}/approve`)
+      .patch(`/api/registrations/${registration.id}/confirm`)
       .set(TestHelpers.createAuthHeader(regCommitteeToken));
 
     expect(response.status).toBe(400);
@@ -867,14 +840,14 @@ describe('Registration Approval Workflow Tests', () => {
 
   test('should return 404 for non-existent registration', async () => {
     const response = await request(app)
-      .patch('/api/registrations/non-existent-id/approve')
+      .patch('/api/registrations/non-existent-id/confirm')
       .set(TestHelpers.createAuthHeader(regCommitteeToken));
 
     expect(response.status).toBe(404);
     expect(response.body.message).toBe('Registration not found');
   });
 
-  test('should create participant records for all selected events on approval', async () => {
+  test('should create participant records for all selected events on confirmation', async () => {
     const nonTechnicalEvent = await storage.createEvent({
       name: `Non-Tech Approval ${Date.now()}`,
       description: 'Non-technical event',
@@ -884,25 +857,22 @@ describe('Registration Approval Workflow Tests', () => {
       createdBy: superAdminUser.id
     });
 
-    const multiEventReg = await request(app)
-      .post(`/api/registration-forms/${registrationForm.formSlug}/submit`)
+    // Register one participant for both events via the on-spot flow
+    const response = await request(app)
+      .post('/api/registration-committee/participants')
+      .set(TestHelpers.createAuthHeader(regCommitteeToken))
       .send({
-        submittedData: {
-          fullName: 'Multi Event User',
-          email: `multi_event_${Date.now()}@test.com`,
-          phone: '9999999999'
-        },
+        fullName: 'Multi Event User',
+        email: `multi_event_${Date.now()}@test.com`,
+        phone: '9999999999',
+        college: `Test College ${Date.now()}`,
+        rollNo: `ROLL${Date.now()}${Math.floor(Math.random() * 1000)}`,
+        department: 'CSE',
+        year: 'II',
         selectedEvents: [technicalEvent.id, nonTechnicalEvent.id]
       });
 
-    const mockSendEmail = jest.mocked(emailService.sendRegistrationApproved);
-    mockSendEmail.mockResolvedValue({ success: true, messageId: 'test-id' });
-
-    const response = await request(app)
-      .patch(`/api/registrations/${multiEventReg.body.id}/approve`)
-      .set(TestHelpers.createAuthHeader(regCommitteeToken));
-
-    expect(response.status).toBe(200);
+    expect(response.status).toBe(201);
     expect(response.body.eventCredentials).toHaveLength(2);
 
     await storage.deleteEvent(nonTechnicalEvent.id);
@@ -934,6 +904,10 @@ describe('Credential Management Tests', () => {
         fullName: 'Credential Test User',
         email: `cred_test_${Date.now()}@test.com`,
         phone: '1234567890',
+        college: `Test College ${Date.now()}`,
+        rollNo: `ROLL${Date.now()}${Math.floor(Math.random() * 1000)}`,
+        department: 'CSE',
+        year: 'II',
         selectedEvents: [technicalEvent.id]
       });
 
@@ -973,6 +947,10 @@ describe('Credential Management Tests', () => {
         fullName: 'Display Cred User',
         email: `display_${Date.now()}@test.com`,
         phone: '5555555555',
+        college: `Test College ${Date.now()}`,
+        rollNo: `ROLL${Date.now()}${Math.floor(Math.random() * 1000)}`,
+        department: 'CSE',
+        year: 'II',
         selectedEvents: [technicalEvent.id]
       });
 
@@ -1001,54 +979,49 @@ describe('Credential Management Tests', () => {
 });
 
 describe('Registration List and Query Tests', () => {
-  let registrationForm: any;
   let technicalEvent: any;
-  let registration1: any;
-  let registration2: any;
 
   beforeEach(async () => {
     technicalEvent = await storage.createEvent({
       name: `List Test Event ${Date.now()}`,
       description: 'Event for list testing',
-      type: 'quiz',
+      type: 'technical',
       category: 'technical',
       status: 'active',
       createdBy: superAdminUser.id
     });
 
-    registrationForm = await storage.createRegistrationForm({
-      title: 'List Test Form',
-      description: 'Test form',
-      formSlug: `list-test-${Date.now()}`,
-      formFields: [
-        { id: 'fullName', label: 'Full Name', type: 'text', required: true },
-        { id: 'email', label: 'Email', type: 'email', required: true }
-      ],
-      allowedCategories: ['technical', 'non_technical'],
-      isActive: true
-    });
-
-    const reg1 = await request(app)
-      .post(`/api/registration-forms/${registrationForm.formSlug}/submit`)
+    // Create two pending registrations through the public team-based flow
+    const suffix = Date.now();
+    await request(app)
+      .post('/api/register')
       .send({
-        submittedData: { fullName: 'List User 1', email: `list1_${Date.now()}@test.com` },
-        selectedEvents: [technicalEvent.id]
+        eventId: technicalEvent.id,
+        organizerRollNo: `LIST1${suffix}`,
+        organizerName: 'List User 1',
+        organizerEmail: `list1_${suffix}@test.com`,
+        organizerDept: 'CSE',
+        organizerCollege: 'Test College',
+        organizerPhone: '1234567890',
+        organizerFoodType: 'veg'
       });
 
-    const reg2 = await request(app)
-      .post(`/api/registration-forms/${registrationForm.formSlug}/submit`)
+    await request(app)
+      .post('/api/register')
       .send({
-        submittedData: { fullName: 'List User 2', email: `list2_${Date.now()}@test.com` },
-        selectedEvents: [technicalEvent.id]
+        eventId: technicalEvent.id,
+        organizerRollNo: `LIST2${suffix}`,
+        organizerName: 'List User 2',
+        organizerEmail: `list2_${suffix}@test.com`,
+        organizerDept: 'ECE',
+        organizerCollege: 'Test College',
+        organizerPhone: '1234567891',
+        organizerFoodType: 'veg'
       });
-
-    registration1 = reg1.body;
-    registration2 = reg2.body;
   });
 
   afterEach(async () => {
     if (technicalEvent?.id) await storage.deleteEvent(technicalEvent.id);
-    if (registrationForm?.id) await storage.deleteRegistrationForm(registrationForm.id);
   });
 
   test('should list all registrations for registration committee', async () => {

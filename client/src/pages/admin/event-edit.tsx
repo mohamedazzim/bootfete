@@ -15,6 +15,7 @@ import { insertEventSchema, type Event } from '@shared/schema';
 import { z } from 'zod';
 import { ArrowLeft } from 'lucide-react';
 import { useEffect } from 'react';
+import { toLocalISOString } from '@/lib/utils';
 
 const formSchema = insertEventSchema.extend({
   startDate: z.string().optional(),
@@ -59,8 +60,8 @@ export default function EventEditPage() {
         category: event.category,
         status: event.status,
         createdBy: event.createdBy,
-        startDate: event.startDate ? new Date(event.startDate).toISOString().slice(0, 16) : '',
-        endDate: event.endDate ? new Date(event.endDate).toISOString().slice(0, 16) : '',
+        startDate: event.startDate ? toLocalISOString(event.startDate) : '',
+        endDate: event.endDate ? toLocalISOString(event.endDate) : '',
         minMembers: event.minMembers || 1,
         maxMembers: event.maxMembers || 1,
       });
@@ -73,7 +74,7 @@ export default function EventEditPage() {
         name: data.name,
         description: data.description,
         type: data.type,
-        category: data.type, // Category should match type
+        category: data.category,
         status: data.status,
         startDate: data.startDate ? new Date(data.startDate) : null,
         endDate: data.endDate ? new Date(data.endDate) : null,
