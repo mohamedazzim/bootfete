@@ -23,7 +23,7 @@ const formSchema = insertQuestionSchema.omit({
   expectedOutput: true,
   testCases: true
 }).extend({
-  questionType: z.enum(['mcq', 'true_false', 'short_answer', 'coding', 'image_mcq']),
+  questionType: z.enum(['mcq', 'true_false', 'short_answer', 'coding', 'image_mcq', 'fill_blank']),
 });
 
 type FormData = z.infer<typeof formSchema>;
@@ -208,6 +208,9 @@ export default function QuestionEditPage() {
         questionData.correctAnswer = correctAnswer || 'True';
       } else if (questionType === 'short_answer') {
         questionData.correctAnswer = correctAnswer || null;
+      } else if (questionType === 'fill_blank') {
+        questionData.questionType = 'fill_blank';
+        questionData.correctAnswer = correctAnswer || null;
       } else if (questionType === 'coding') {
         questionData.expectedOutput = correctAnswer || null;
       }
@@ -327,6 +330,7 @@ export default function QuestionEditPage() {
                           <SelectItem value="short_answer">Short Answer</SelectItem>
                           <SelectItem value="coding">Coding Question</SelectItem>
                           <SelectItem value="image_mcq">Image Question</SelectItem>
+                          <SelectItem value="fill_blank">Fill in the Blanks</SelectItem>
                         </SelectContent>
                       </Select>
                       <FormMessage />
@@ -466,14 +470,16 @@ export default function QuestionEditPage() {
                   </div>
                 )}
 
-                {questionType === 'short_answer' && (
+                {(questionType === 'short_answer' || questionType === 'fill_blank') && (
                   <div>
-                    <FormLabel>Expected Answer (Optional)</FormLabel>
+                    <FormLabel>{questionType === 'fill_blank' ? 'Correct Answer (Exact Match)' : 'Expected Answer (Optional)'}</FormLabel>
                     <FormDescription className="mb-2">
-                      Provide a sample answer for reference (manual grading may be required)
+                      {questionType === 'fill_blank'
+                        ? 'The exact word or phrase that correctly fills the blank (case-insensitive auto-graded)'
+                        : 'Provide a sample answer for reference (manual grading may be required)'}
                     </FormDescription>
                     <Input
-                      placeholder="Expected answer..."
+                      placeholder={questionType === 'fill_blank' ? 'e.g. inheritance' : 'Expected answer...'}
                       value={correctAnswer}
                       onChange={(e) => setCorrectAnswer(e.target.value)}
                       data-testid="input-expected-answer"
