@@ -8,23 +8,46 @@ import { redisClient } from "./services/redisClient";
 const JWT_SECRET = process.env.JWT_SECRET || "symposium-secret-key-change-in-production";
 
 export function setupWebSocket(httpServer: HTTPServer) {
+  // Assign the module-level export directly (previously a local `const io`
+  // shadowed it and relied on callers remembering setIO()).
+  // SEC-07: don't combine `origin: '*'` with `credentials: true` (browsers
+  // reject wildcard + credentials, and it's a misconfiguration signal).
+  // Auth travels in `auth.token`, not cookies, so credentials aren't needed.
+  // CORS_ORIGIN can restrict this further in deployments with a separate
+  // frontend domain (comma-separated list supported).
+  const corsOrigins = process.env.CORS_ORIGIN
+    ? process.env.CORS_ORIGIN.split(',').map((o) => o.trim())
+    : '*';
   const io = new Server(httpServer, {
     cors: {
-      origin: '*',
-      credentials: true
+      origin: corsOrigins,
     }
   });
 
-  // Setup Redis Adapter
-  const pubClient = redisClient.getClient();
-  const subClient = pubClient?.duplicate();
+  // C-05/BUG-S-07: attach the Redis adapter for cross-worker pub/sub, and
+  // re-attach on every Redis (re)connect. Previously the adapter was only
+  // attempted once at boot — if Redis wasn't connected yet, the server
+  // silently stayed in single-server mode while PM2 ran 2 cluster workers,
+  // so broadcasts only reached clients on the emitting worker.
+  let adapterSubClient: any = null;
+  const attachRedisAdapter = () => {
+    const pubClient = redisClient.getClient();
+    if (!pubClient) return;
+    try {
+      // Drop the previous duplicate subscriber so reconnects don't leak them.
+      if (adapterSubClient) {
+        adapterSubClient.disconnect().catch(() => {});
+      }
+      adapterSubClient = pubClient.duplicate();
+      io.adapter(createAdapter(pubClient, adapterSubClient));
+      console.log('Socket.io Redis adapter initialized');
+    } catch (err) {
+      console.error('Failed to attach Socket.io Redis adapter:', err);
+    }
+  };
 
-  if (pubClient && subClient) {
-    io.adapter(createAdapter(pubClient, subClient));
-    console.log('Socket.io Redis adapter initialized');
-  } else {
-    console.warn('Redis not available, Socket.io running in single-server mode');
-  }
+  // Fires immediately if Redis is already connected, otherwise on connect.
+  redisClient.onConnect(attachRedisAdapter);
 
   // Authentication middleware
   io.use(async (socket, next) => {

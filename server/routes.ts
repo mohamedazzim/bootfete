@@ -985,8 +985,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (description !== undefined) updateData.description = description
       if (type !== undefined) updateData.type = type
       if (category !== undefined) updateData.category = category
-      if (startDate !== undefined) updateData.startDate = new Date(startDate)
-      if (endDate !== undefined) updateData.endDate = new Date(endDate)
+      // BUG-A-08: explicit null clears the date; new Date(null) would store epoch 1970.
+      if (startDate !== undefined) updateData.startDate = startDate ? new Date(startDate) : null
+      if (endDate !== undefined) updateData.endDate = endDate ? new Date(endDate) : null
       if (status !== undefined) updateData.status = status
       if (minMembers !== undefined) updateData.minMembers = minMembers
       if (maxMembers !== undefined) updateData.maxMembers = maxMembers
@@ -1364,8 +1365,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (description !== undefined) updateData.description = description
         if (roundNumber !== undefined) updateData.roundNumber = roundNumber
         if (duration !== undefined) updateData.duration = duration
-        if (startTime !== undefined) updateData.startTime = new Date(startTime)
-        if (endTime !== undefined) updateData.endTime = new Date(endTime)
+        // BUG-A-08: explicit null clears the time; new Date(null) would store epoch 1970.
+        if (startTime !== undefined) updateData.startTime = startTime ? new Date(startTime) : null
+        if (endTime !== undefined) updateData.endTime = endTime ? new Date(endTime) : null
         if (status !== undefined) updateData.status = status
         if (conductMedium !== undefined) {
           updateData.conductMedium = conductMedium;
@@ -3780,7 +3782,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // Validate each team member
-      const allRollNos = [organizerRollNo]
+      // BUG-B-08: compare normalized roll numbers so "ABC123" vs "abc123"
+      // can't appear twice in one team.
+      const normalizeRollNo = (r: string) => r.trim().toUpperCase();
+      const allRollNos = [normalizeRollNo(organizerRollNo)]
 
       if (teamMembers && teamMembers.length > 0) {
         for (const member of teamMembers) {
@@ -3794,7 +3799,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           }
 
           // Check for duplicate roll numbers in the team
-          if (allRollNos.includes(member.memberRollNo)) {
+          if (allRollNos.includes(normalizeRollNo(member.memberRollNo))) {
             invalidMembers.push({
               rollNo: member.memberRollNo,
               name: member.memberName,
@@ -3802,7 +3807,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             })
             continue
           }
-          allRollNos.push(member.memberRollNo)
+          allRollNos.push(normalizeRollNo(member.memberRollNo))
 
           // Check if member is already registered for this category
           const memberCheck = await storage.checkRollNoCategoryRegistration(
@@ -4459,6 +4464,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
 
+      // BUG-C-03: flip the registration status BEFORE queueing any emails —
+      // previously a confirm failure after queueing sent a false "Registration
+      // Confirmed" email for a registration that stayed pending.
+      const updated = await storage.confirmRegistration(req.params.id, user.id)
+
+      // Invalidate registration caches
+      await cacheService.deletePattern('registrations:*')
+
       // Send CONSOLIDATED credentials email to organizer (credits optimization)
       if (eventCredentialsList.length > 0) {
         const credentials = eventCredentialsList.map(cred => ({
@@ -4500,12 +4513,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
           }
         }
       }
-
-      // Update registration status
-      const updated = await storage.confirmRegistration(req.params.id, user.id)
-
-      // Invalidate registration caches
-      await cacheService.deletePattern('registrations:*')
 
       // Notify via WebSocket for instant UI update
       WebSocketService.notifyRegistrationConfirmed({
@@ -7755,7 +7762,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
         // Get question for points
         const question = await storage.getQuestion(answer.questionId);
-        const points = isCorrect ? 1 : 0; // STATIC 1 POINT PER QUESTION
+        // BUG-D-02: honor the grader's explicit points, else the question's
+        // configured points — not a hardcoded 1 per question.
+        const points = typeof pointsAwarded === 'number' && Number.isFinite(pointsAwarded)
+          ? pointsAwarded
+          : isCorrect ? (question?.points ?? 1) : 0;
 
         // Update the answer
         const updated = await storage.updateAnswer(answerId, {
@@ -7805,7 +7816,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
             const answer = await storage.getAnswer(answerId);
             if (answer) {
               const question = await storage.getQuestion(answer.questionId);
-              const points = isCorrect ? 1 : 0; // STATIC 1 POINT PER QUESTION
+              // BUG-D-02: honor the grader's explicit points, else the
+              // question's configured points — not a hardcoded 1.
+              const points = typeof pointsAwarded === 'number' && Number.isFinite(pointsAwarded)
+                ? pointsAwarded
+                : isCorrect ? (question?.points ?? 1) : 0;
               await storage.updateAnswer(answerId, { isCorrect, pointsAwarded: points });
             }
           }

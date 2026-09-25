@@ -45,6 +45,11 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
 
     const socket = io(window.location.origin, {
       auth: { token },
+      // C-05: prefer a single websocket connection over the polling handshake.
+      // Polling needs consecutive HTTP requests to hit the same PM2 worker
+      // (sticky sessions); websocket-first avoids that requirement, and
+      // polling remains as a fallback for networks that block upgrades.
+      transports: ['websocket', 'polling'],
       reconnection: true,
       reconnectionDelay: 1000,
       reconnectionAttempts: 5

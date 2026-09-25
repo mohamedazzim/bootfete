@@ -1,0 +1,50 @@
+# Example nginx reverse-proxy config for bootfete (C-05).
+#
+# Socket.IO's polling transport requires consecutive HTTP requests from one
+# client to reach the SAME Node worker, otherwise the handshake fails. The app
+# runs 2 PM2 cluster workers, so the upstream MUST pin clients to a worker.
+# `ip_hash` is the simplest way. (The client also tries websocket-first now,
+# and the Redis adapter covers cross-worker broadcasts — but polling fallback
+# still needs this stickiness.)
+#
+# Copy to /etc/nginx/sites-available/bootfete (adjust server_name, ports,
+# and TLS), then: nginx -t && systemctl reload nginx
+
+upstream bootfete_backend {
+    ip_hash;  # C-05: REQUIRED — Socket.IO polling handshake affinity
+    server 127.0.0.1:3000;
+    # Add more app servers here as you scale horizontally.
+}
+
+server {
+    listen 80;
+    server_name your-domain.example.com;
+
+    # Redirect HTTP -> HTTPS (recommended)
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    server_name your-domain.example.com;
+
+    # ssl_certificate     /etc/ssl/certs/your-domain.crt;
+    # ssl_certificate_key /etc/ssl/private/your-domain.key;
+
+    # Allow long-lived websocket connections through the proxy
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+
+    # Socket.IO + API + static assets all served by the Node app
+    location / {
+        proxy_pass http://bootfete_backend;
+        proxy_read_timeout 86400s;   # don't kill idle websocket connections
+        proxy_send_timeout 86400s;
+    }
+}

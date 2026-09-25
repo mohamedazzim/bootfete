@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { useLocation } from 'wouter';
+import { queryClient } from './queryClient';
 
 interface User {
   id: string;
@@ -140,6 +141,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     localStorage.removeItem('token');
     setToken(null);
     setUser(null);
+    // BUG-F-08: clear the react-query cache on logout — otherwise the next
+    // user on a shared device briefly sees the previous user's data.
+    queryClient.clear();
     setLocation('/login');
   }
 

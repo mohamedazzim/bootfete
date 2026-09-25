@@ -1792,6 +1792,11 @@ export class DatabaseStorage implements IStorage {
     event?: Event;
     role?: 'organizer' | 'team_member';
   }> {
+    // BUG-B-08: normalize the roll number (trim + uppercase) and compare
+    // against normalized DB values — otherwise "ABC123" vs "abc123" bypasses
+    // the one-registration-per-category rule.
+    const normalizedRollNo = rollNo.trim().toUpperCase();
+
     // Check if rollNo is an organizer in any registration for this category
     const organizerResult = await db.select({
       registration: registrations,
@@ -1800,7 +1805,7 @@ export class DatabaseStorage implements IStorage {
       .from(registrations)
       .innerJoin(events, eq(registrations.eventId, events.id))
       .where(and(
-        eq(registrations.organizerRollNo, rollNo),
+        sql`UPPER(TRIM(${registrations.organizerRollNo})) = ${normalizedRollNo}`,
         eq(events.category, category),
         or(eq(registrations.status, 'pending'), eq(registrations.status, 'confirmed'))
       ));
@@ -1824,7 +1829,7 @@ export class DatabaseStorage implements IStorage {
       .innerJoin(registrations, eq(teamMembers.registrationId, registrations.id))
       .innerJoin(events, eq(registrations.eventId, events.id))
       .where(and(
-        eq(teamMembers.memberRollNo, rollNo),
+        sql`UPPER(TRIM(${teamMembers.memberRollNo})) = ${normalizedRollNo}`,
         eq(events.category, category),
         or(eq(registrations.status, 'pending'), eq(registrations.status, 'confirmed'))
       ));

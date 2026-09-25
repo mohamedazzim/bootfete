@@ -8,6 +8,10 @@ class RedisClient {
   private isConnected: boolean = false;
   private connectionRetries: number = 0;
   private readonly MAX_RETRIES = 3;
+  // C-05/BUG-S-07: listeners fired every time Redis (re)connects, so the
+  // Socket.IO Redis adapter can be (re)attached after a late or dropped
+  // connection instead of silently running in single-server mode.
+  private connectListeners: Array<() => void> = [];
 
   private constructor() {
     // Skip Redis connection entirely during tests to avoid noisy connection errors
@@ -46,6 +50,11 @@ class RedisClient {
         this.isConnected = true;
         this.connectionRetries = 0;
         metricsService.setRedisConnected(true);
+        // Notify listeners (e.g. Socket.IO adapter attach) on every connect,
+        // including reconnects after a drop.
+        this.connectListeners.forEach((cb) => {
+          try { cb(); } catch (e) { console.error('Redis connect listener error:', e); }
+        });
       });
 
       this.client.on('error', (err) => {
@@ -79,6 +88,15 @@ class RedisClient {
 
   public isAvailable(): boolean {
     return this.isConnected && this.client !== null;
+  }
+
+  // Register a callback fired on every Redis (re)connect.
+  public onConnect(cb: () => void): void {
+    this.connectListeners.push(cb);
+    // If already connected, fire immediately so late subscribers still attach.
+    if (this.isAvailable()) {
+      try { cb(); } catch (e) { console.error('Redis connect listener error:', e); }
+    }
   }
 
   public async getStats(): Promise<{ connected: boolean; info?: string }> {

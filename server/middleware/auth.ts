@@ -205,6 +205,33 @@ export async function requireEventAdminOrSuperAdmin(req: AuthRequest, res: Respo
     }
   }
 
+  // SEC-04: routes like /api/attempts/:attemptId/* and
+  // /api/answers/:answerId/evaluate carry no eventId/roundId, so the check
+  // below used to degrade to "any event_admin". Derive the event via
+  // attempt -> round -> event (or answer -> attempt -> round -> event).
+  if (!eventId && req.params.attemptId) {
+    const attempt = await storage.getTestAttempt(req.params.attemptId);
+    if (attempt) {
+      const round = await storage.getRound(attempt.roundId);
+      if (round) {
+        eventId = round.eventId;
+      }
+    }
+  }
+
+  if (!eventId && req.params.answerId) {
+    const answer = await storage.getAnswer(req.params.answerId);
+    if (answer) {
+      const attempt = await storage.getTestAttempt(answer.attemptId);
+      if (attempt) {
+        const round = await storage.getRound(attempt.roundId);
+        if (round) {
+          eventId = round.eventId;
+        }
+      }
+    }
+  }
+
   // For routes without eventId or roundId (like /api/upload/question-image), 
   // just check if the user is an event_admin
   if (!eventId) {
