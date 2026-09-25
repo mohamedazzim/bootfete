@@ -5,6 +5,7 @@ import EventAdminLayout from '@/components/layouts/EventAdminLayout';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Settings, Play, Users, Calendar, Trophy } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { useWebSocket } from '@/contexts/WebSocketContext';
 import type { Event } from '@shared/schema';
 
 interface MyEventResponse {
@@ -15,10 +16,13 @@ interface MyEventResponse {
 export default function EventAdminDashboard() {
   const { user } = useAuth();
   const [, setLocation] = useLocation();
+  const { isConnected } = useWebSocket();
 
   const { data, isLoading } = useQuery<MyEventResponse>({
     queryKey: ['/api/event-admin/my-event'],
-    refetchInterval: 3000, // Auto-refresh every 3 seconds for live updates
+    // Round-2 M22: socket events (registrationUpdate, roundStatus, ...)
+    // refetch these queries live. Poll only while the socket is down.
+    refetchInterval: isConnected ? false : 3000,
   });
 
   const { data: stats } = useQuery<{
@@ -27,7 +31,7 @@ export default function EventAdminDashboard() {
     teamsPerCollege: { college: string; count: number }[];
   }>({
     queryKey: ['/api/event-admin/stats'],
-    refetchInterval: 3000, // Auto-refresh every 3 seconds for live updates
+    refetchInterval: isConnected ? false : 3000,
   });
 
   if (isLoading) {

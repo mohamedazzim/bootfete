@@ -11,6 +11,7 @@ import { Badge } from '@/components/ui/badge';
 import { useToast } from '@/hooks/use-toast';
 import { FileText, Download, Plus, Loader2 } from 'lucide-react';
 import type { Report } from '@shared/schema';
+import { formatIST } from '@/lib/utils';
 
 export default function ReportsPage() {
   const [, setLocation] = useLocation();
@@ -110,7 +111,9 @@ export default function ReportsPage() {
                             {report.reportType.replace('_', ' ')}
                           </Badge>
                         </TableCell>
-                        <TableCell>{new Date(report.createdAt).toLocaleString()}</TableCell>
+                        {/* Round-2 M24: explicit Asia/Kolkata — bare
+                            toLocaleString() renders in the viewer's timezone. */}
+                        <TableCell>{formatIST(report.createdAt)}</TableCell>
                         <TableCell className="text-right">
                           <Button
                             variant="outline"

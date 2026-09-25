@@ -184,6 +184,13 @@ monitoringService.start();
     import("./services/queueService").then(({ queueService }) => {
       queueService.initializeQueue();
     });
+
+    // Round-2 M1+M7: daily maintenance — cancel stale pending registrations
+    // (frees the re-registration slot) and purge audit/email logs older than
+    // 90 days. Idempotent, so multi-instance PM2 fleets converge safely.
+    import("./services/maintenanceService").then(({ startMaintenanceScheduler }) => {
+      startMaintenanceScheduler();
+    });
   });
 
   // PROD-SCALE: graceful shutdown. PM2 rolling reloads (`pm2 reload`) and

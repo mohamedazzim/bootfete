@@ -97,6 +97,14 @@ export default function EventAdminLayout({ children }: EventAdminLayoutProps) {
                   <span className="hidden sm:inline">Live</span>
                 </Badge>
               )}
+            {/* Round-2 M16: the socket is the realtime lifeline — when it
+                drops, say so persistently instead of silently going stale. */}
+            {!isConnected && (
+              <Badge variant="outline" className="ml-1 md:ml-2 border-red-200 bg-red-50 text-red-700" data-testid="badge-websocket-disconnected" role="status">
+                <Circle className="w-2 h-2 mr-1 fill-red-500 text-red-500 animate-pulse" />
+                <span>Reconnecting…</span>
+              </Badge>
+            )}
             </div>
           </div>
 

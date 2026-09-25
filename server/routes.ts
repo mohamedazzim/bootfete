@@ -143,6 +143,40 @@ async function generateUniqueEventCredentials(
   }
 }
 
+// Round-2 H6: idempotent credential creation with race-free username
+// generation. The old call sites did check-then-insert (two concurrent
+// confirms both "found nothing" -> duplicate key) and derived the username
+// from count+1 (two concurrent confirms read the same count -> same
+// username -> unique violation). Usernames now use a random base plus the
+// existing uniqueness probe; the (participant_user_id, event_id) unique
+// makes the INSERT the arbitration (first writer wins, losers get the row);
+// a 23505 on event_username means a concurrent insert grabbed the probed
+// name between probe and insert, so we regenerate.
+async function ensureEventCredential(
+  participantUserId: string,
+  eventId: string,
+  fullName: string,
+  eventName: string,
+): Promise<{ eventUsername: string; eventPassword: string }> {
+  const existing = await storage.getEventCredentialByUserAndEvent(participantUserId, eventId);
+  if (existing) {
+    return { eventUsername: existing.eventUsername, eventPassword: existing.eventPassword };
+  }
+
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const base = Math.floor(Math.random() * 900000) + 1000;
+    const creds = await generateUniqueEventCredentials(fullName, eventName, base);
+    try {
+      const row = await storage.upsertEventCredential(participantUserId, eventId, creds.username, creds.password);
+      return { eventUsername: row.eventUsername, eventPassword: row.eventPassword };
+    } catch (err: any) {
+      if (err?.code === "23505") continue;
+      throw err;
+    }
+  }
+  throw new Error("Failed to generate unique event credentials");
+}
+
 function timesOverlap(start1: Date | null, end1: Date | null, start2: Date | null, end2: Date | null): boolean {
   if (!start1 || !end1 || !start2 || !end2) return false
   return start1 < end2 && start2 < end1
@@ -2797,27 +2831,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // H-11: coalesce duplicate detector firings. One tab switch fires both
         // 'blur' and 'visibilitychange' client-side; without this a single
         // switch incremented the counters twice and wrongfully eliminated
-        // mobile users (threshold 2) on their first switch.
+        // mobile users (threshold 2) on their first switch. (Read-only check;
+        // the write itself is the atomic logViolation below.)
         const lastLog = violationLogs[violationLogs.length - 1]
         const lastTime = lastLog ? new Date(lastLog.timestamp).getTime() : 0
         if (lastLog && lastLog.type === type && now.getTime() - lastTime < 5000) {
           return res.json(attempt)
         }
 
-        violationLogs.push({
-          type,
-          timestamp: now.toISOString(),
-        })
-
-        const updates: any = { violationLogs }
-
-        if (type === "tab_switch") {
-          updates.tabSwitchCount = (attempt.tabSwitchCount || 0) + 1
-        } else if (type === "refresh") {
-          updates.refreshAttemptCount = (attempt.refreshAttemptCount || 0) + 1
-        }
-
-        const updatedAttempt = await storage.updateTestAttempt(attemptId, updates)
+        // Round-2 H8: atomic single-statement append + counter bump. The old
+        // read-push-write lost strikes under concurrent violations.
+        const updatedAttempt = await storage.logViolation(attemptId, type)
 
         res.json(updatedAttempt)
       } catch (error) {
@@ -4556,19 +4580,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Function to create event credentials (for organizer only)
       const processCredentials = async (userId: string, name: string, email: string, rollNo: string) => {
-        // Check if credentials already exist
+        // Round-2 H6: idempotent upsert + race-free username (no count+1).
         const existingCredential = await storage.getEventCredentialByUserAndEvent(userId, registration.eventId)
 
+        let eventUsername: string
+        let eventPassword: string
         if (!existingCredential) {
-          const count = await storage.getEventCredentialCountForEvent(registration.eventId)
-          const counter = count + 1
-          const { username: eventUsername, password: eventPassword } = await generateUniqueEventCredentials(
-            name,
-            event.name,
-            counter,
-          )
-
-          await storage.createEventCredential(userId, registration.eventId, eventUsername, eventPassword)
+          const created = await ensureEventCredential(userId, registration.eventId, name, event.name)
+          eventUsername = created.eventUsername
+          eventPassword = created.eventPassword
 
           eventCredentialsList.push({
             eventId: registration.eventId,
@@ -4583,7 +4603,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
           // NOTE: Individual emails removed - will send consolidated email after all credentials are collected
         } else {
-          let eventPassword = existingCredential.eventPassword;
+          eventUsername = existingCredential.eventUsername;
+          eventPassword = existingCredential.eventPassword;
           // Check if password is a bcrypt hash ($2a$, $2b$, or $2y$ and 60 chars) - never email a hash
           if (eventPassword && eventPassword.length === 60 && eventPassword.startsWith('$2')) {
             const { password: newPassword } = await generateUniqueEventCredentials(
@@ -4598,7 +4619,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           eventCredentialsList.push({
             eventId: registration.eventId,
             eventName: event.name,
-            eventUsername: existingCredential.eventUsername,
+            eventUsername,
             eventPassword,
             participantName: name,
             participantEmail: email,
@@ -4788,30 +4809,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
           const organizerUserId = await ensureParticipant(registration.organizerName, registration.organizerEmail)
 
           // 2. Ensure Credential for Organizer
-          let credentialUsername = ""
-          let credentialPassword = ""
-
-          const existingCred = await storage.getEventCredentialByUserAndEvent(organizerUserId, registration.eventId)
-          if (existingCred) {
-            credentialUsername = existingCred.eventUsername
-            credentialPassword = existingCred.eventPassword
-          } else {
-            const count = await storage.getEventCredentialCountForEvent(registration.eventId)
-            const creds = await generateUniqueEventCredentials(
-              registration.organizerName,
-              event.name,
-              count + 1
-            )
-            credentialUsername = creds.username
-            credentialPassword = creds.password
-
-            await storage.createEventCredential(
-              organizerUserId,
-              registration.eventId,
-              credentialUsername,
-              credentialPassword
-            )
-          }
+          // Round-2 H6: idempotent upsert + race-free username (no count+1,
+          // no check-then-insert). The CAS at the top of the loop already
+          // guarantees one winner per registration.
+          const createdCred = await ensureEventCredential(
+            organizerUserId,
+            registration.eventId,
+            registration.organizerName,
+            event.name
+          )
+          const credentialUsername = createdCred.eventUsername
+          const credentialPassword = createdCred.eventPassword
 
           // 3. Process Team Members
           if (registration.teamMembers && registration.teamMembers.length > 0) {
@@ -5026,15 +5034,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
           }
 
           // 4. Create Credentials
-          const count = await storage.getEventCredentialCountForEvent(eventId)
-          const counter = count + 1
-          const { username: eventUsername, password: eventPassword } = await generateUniqueEventCredentials(
-            fullName,
-            event.name,
-            counter,
-          )
-
-          await storage.createEventCredential(newUser.id, eventId, eventUsername, eventPassword)
+          // Round-2 H6: idempotent upsert + race-free username (no count+1).
+          const createdCred = await ensureEventCredential(newUser.id, eventId, fullName, event.name)
+          const eventUsername = createdCred.eventUsername
+          const eventPassword = createdCred.eventPassword
 
           eventCredentialsList.push({
             eventId,

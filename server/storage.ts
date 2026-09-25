@@ -100,27 +100,7 @@ export interface IStorage {
   deleteRegistrationForm(id: string): Promise<void>;
 
   // Team-based Registration methods
-  createTeamRegistration(data: {
-    eventId: string;
-    organizerRollNo: string;
-    eventName?: string;
-    organizerName: string;
-    organizerEmail: string;
-    organizerDept: string;
-    organizerCollege?: string;
-    organizerPhone?: string;
-    organizerFoodType: 'veg' | 'nonveg';
-    registrationType: 'solo' | 'team';
-    paperTopic?: string;
-    teamMembers?: Array<{
-      memberRollNo: string;
-      memberName: string;
-      memberEmail: string;
-      memberDept: string;
-      memberPhone?: string;
-      memberFoodType: 'veg' | 'nonveg';
-    }>;
-  }): Promise<Registration>;
+
   createTeamRegistrationAtomic(data: {
     eventId: string;
     organizerRollNo: string;
@@ -703,6 +683,26 @@ export class DatabaseStorage implements IStorage {
 
   async updateTestAttempt(id: string, updateData: Partial<TestAttempt>): Promise<TestAttempt | undefined> {
     const [attempt] = await db.update(testAttempts).set(updateData).where(eq(testAttempts.id, id)).returning();
+    return attempt;
+  }
+
+  // Round-2 H8: atomic violation append + counter bump in ONE statement. The
+  // old route read violationLogs, pushed in JS, and wrote back — concurrent
+  // violations overwrote each other (lost strikes) and the read-modify-write
+  // counter double-counted. This keeps the array append and the increment
+  // inside a single UPDATE, so 500 students hammering violations can't lose
+  // or duplicate strikes.
+  async logViolation(attemptId: string, type: string): Promise<TestAttempt | undefined> {
+    const entry = JSON.stringify([{ type, timestamp: new Date().toISOString() }]);
+    const setClause: Record<string, unknown> = {
+      violationLogs: sql`COALESCE(${testAttempts.violationLogs}, '[]'::jsonb) || ${entry}::jsonb`,
+    };
+    if (type === "tab_switch") {
+      setClause.tabSwitchCount = sql`COALESCE(${testAttempts.tabSwitchCount}, 0) + 1`;
+    } else if (type === "refresh") {
+      setClause.refreshAttemptCount = sql`COALESCE(${testAttempts.refreshAttemptCount}, 0) + 1`;
+    }
+    const [attempt] = await db.update(testAttempts).set(setClause as any).where(eq(testAttempts.id, attemptId)).returning();
     return attempt;
   }
 
@@ -1492,6 +1492,12 @@ export class DatabaseStorage implements IStorage {
       });
     }
 
+    // Round-2 H5: acquire the advisory locks in a deterministic (sorted)
+    // order. Two concurrent team registrations touching {CSE, ECE} and
+    // {ECE, CSE} used to lock in opposite orders — a classic deadlock under
+    // registration spikes.
+    allDepartments.sort();
+
     const normalizedCollege = data.organizerCollege ? data.organizerCollege.trim().toUpperCase() : '';
 
     try {
@@ -1635,79 +1641,11 @@ export class DatabaseStorage implements IStorage {
     }
   }
 
-  async createTeamRegistration(data: {
-    eventId: string;
-    eventName?: string;
-    organizerRollNo: string;
-    organizerName: string;
-    organizerEmail: string;
-    organizerDept: string;
-    organizerCollege?: string;
-    organizerPhone?: string;
-    organizerFoodType: 'veg' | 'nonveg';
-    registrationType: 'solo' | 'team';
-    paperTopic?: string;
-    teamMembers?: Array<{
-      memberRollNo: string;
-      memberName: string;
-      memberEmail: string;
-      memberDept: string;
-      memberPhone?: string;
-      memberFoodType: 'veg' | 'nonveg';
-    }>;
-  }): Promise<Registration> {
-    let registration: Registration | undefined;
+  // Round-2 M8: the non-atomic createTeamRegistration was deleted. It had no
+  // callers (all routes use createTeamRegistrationAtomic) and its multi-
+  // statement insert-then-members flow could strand a registration without
+  // its team members on partial failure.
 
-    for (let attempt = 0; attempt < 5; attempt++) {
-      const teamId = await this.generateTeamId(data.eventId, data.eventName);
-
-      try {
-        const [created] = await db.insert(registrations).values({
-          eventId: data.eventId,
-          organizerRollNo: data.organizerRollNo,
-          organizerName: data.organizerName,
-          organizerEmail: data.organizerEmail,
-          organizerDept: data.organizerDept,
-          organizerCollege: data.organizerCollege || null,
-          organizerPhone: data.organizerPhone || null,
-          organizerFoodType: data.organizerFoodType,
-          registrationType: data.registrationType,
-          paperTopic: data.paperTopic || null,
-          status: 'pending',
-          confirmedBy: null,
-          teamId,
-        }).returning();
-
-        registration = created as Registration;
-        break;
-      } catch (error: any) {
-        if (this.isTeamIdConflict(error)) {
-          continue;
-        }
-        throw error;
-      }
-    }
-
-    if (!registration) {
-      throw new Error('Failed to generate unique team ID for registration');
-    }
-
-    // Add team members if provided
-    if (data.teamMembers && data.teamMembers.length > 0) {
-      await db.insert(teamMembers).values(
-        data.teamMembers.map(member => ({
-          registrationId: registration.id,
-          memberRollNo: member.memberRollNo,
-          memberName: member.memberName,
-          memberEmail: member.memberEmail,
-          memberDept: member.memberDept,
-          memberPhone: member.memberPhone || null,
-          memberFoodType: member.memberFoodType,
-        }))
-      );
-    }
-    return registration;
-  }
 
   // Round-2 M4: optional event filter + pagination. The old getRegistrations()
   // loaded every registration in the database for admin dashboards (50k
@@ -2065,11 +2003,20 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createParticipant(userId: string, eventId: string): Promise<Participant> {
-    const [participant] = await db.insert(participants).values({
+    // Round-2 H9: the (event_id, user_id) unique (migration 001) makes the
+    // insert idempotent — concurrent bulk-confirms used to 500 on the
+    // duplicate key instead of converging.
+    await db.insert(participants).values({
       userId,
       eventId,
       status: 'registered'
-    }).returning();
+    }).onConflictDoNothing({ target: [participants.eventId, participants.userId] });
+    const [participant] = await db.select().from(participants).where(
+      and(eq(participants.eventId, eventId), eq(participants.userId, userId))
+    );
+    if (!participant) {
+      throw new Error("Failed to create participant");
+    }
     return participant;
   }
 
@@ -2080,6 +2027,29 @@ export class DatabaseStorage implements IStorage {
       eventUsername,
       eventPassword,
     }).returning();
+    return credential;
+  }
+
+  // Round-2 H6: idempotent credential creation. The (participant_user_id,
+  // event_id) unique (migration 001) makes the INSERT the arbitration —
+  // the first writer wins, concurrent losers get the existing row instead
+  // of a duplicate-key error or a silent overwrite.
+  async upsertEventCredential(participantUserId: string, eventId: string, eventUsername: string, eventPassword: string): Promise<EventCredential> {
+    await db.insert(eventCredentials).values({
+      participantUserId,
+      eventId,
+      eventUsername,
+      eventPassword,
+    }).onConflictDoNothing({ target: [eventCredentials.participantUserId, eventCredentials.eventId] });
+    const [credential] = await db.select().from(eventCredentials).where(
+      and(
+        eq(eventCredentials.participantUserId, participantUserId),
+        eq(eventCredentials.eventId, eventId),
+      )
+    );
+    if (!credential) {
+      throw new Error("Failed to upsert event credential");
+    }
     return credential;
   }
 

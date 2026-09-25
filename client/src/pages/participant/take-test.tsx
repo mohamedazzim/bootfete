@@ -216,6 +216,44 @@ export default function TakeTestPage() {
     },
   });
 
+  // Round-2 M18: focus trap for the submit-confirm modal. A keyboard-only
+  // student must not be able to Tab out behind the overlay, and Escape
+  // cancels. Focus lands on Cancel (the safe default).
+  const submitDialogRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!showSubmitConfirm) return;
+    const dialog = submitDialogRef.current;
+    if (!dialog) return;
+    const focusable = () =>
+      Array.from(
+        dialog.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+        )
+      ).filter((el) => el.offsetParent !== null);
+    const items = focusable();
+    (items[0] || dialog).focus();
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setShowSubmitConfirm(false);
+        return;
+      }
+      if (e.key !== 'Tab') return;
+      const els = focusable();
+      if (els.length === 0) return;
+      const first = els[0];
+      const last = els[els.length - 1];
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+    dialog.addEventListener('keydown', onKeyDown);
+    return () => dialog.removeEventListener('keydown', onKeyDown);
+  }, [showSubmitConfirm]);
+
   // Round-2 C3/H15/M10: every submit path (manual button, timer expiry,
   // round-end, elimination) goes through this one guarded trigger. The guard
   // prevents double-fire; onError resets it so a failed submit is retryable.
@@ -1059,16 +1097,23 @@ export default function TakeTestPage() {
       {/* Submit Confirmation Modal - In Fullscreen */}
       {showSubmitConfirm && (
         <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center">
-          <Card className="max-w-md">
+          <Card
+            className="max-w-md"
+            ref={submitDialogRef as any}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="submit-confirm-title"
+            tabIndex={-1}
+          >
             <CardHeader className="text-center">
               <div className="mx-auto mb-4 h-12 w-12 rounded-full bg-yellow-100 flex items-center justify-center">
                 <AlertTriangle className="h-6 w-6 text-yellow-600" />
               </div>
-              <CardTitle className="text-xl">Submit Test?</CardTitle>
+              <CardTitle className="text-xl" id="submit-confirm-title">Submit Test?</CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
               <p className="text-sm text-gray-600 text-center">
-                You have answered {Object.keys(answers).length} out of {attempt?.questions.length} questions.
+                You have answered {attempt?.questions.filter(q => (answers[q.id] || '').trim() !== '').length} out of {attempt?.questions.length} questions.
                 Are you sure you want to submit?
               </p>
               <div className="flex gap-3">

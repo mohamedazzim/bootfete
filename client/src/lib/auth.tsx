@@ -58,6 +58,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (response.status === 401) {
           localStorage.removeItem('token');
           setToken(null);
+          // Round-2 H14: the session is dead — cached queries belong to it.
+          queryClient.clear();
           setIsLoading(false);
           return;
         }
@@ -93,6 +95,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     const data = await response.json();
     localStorage.setItem('token', data.token);
+    // Round-2 H14: a different user may be signing in on this device (shared
+    // lab machines) — drop the previous user's cached queries first.
+    queryClient.clear();
     setToken(data.token);
     setUser(data.user);
     
@@ -123,6 +128,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     const data = await response.json();
     localStorage.setItem('token', data.token);
+    // Round-2 H14: a different user may be signing in on this device (shared
+    // lab machines) — drop the previous user's cached queries first.
+    queryClient.clear();
     setToken(data.token);
     setUser(data.user);
     

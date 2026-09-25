@@ -21,15 +21,15 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
 
   const refetchEventQueries = (eventId?: string) => {
     if (!eventId) return;
+    // Round-2 M21: removed seven dead single-string refetches
+    // (`/api/events/${eventId}/registrations`, `.../event-credentials`,
+    // `.../participants`, `.../leaderboard`, `.../rounds`, `.../winners`,
+    // `.../manual-round-entries`). refetchQueries with a single string does
+    // EXACT matching and no query in the app uses those keys — they fired
+    // into the void on every socket event. The array-form keys below are the
+    // ones the event pages actually subscribe to.
     queryClient.refetchQueries({ queryKey: ['/api/events', eventId] });
     queryClient.refetchQueries({ queryKey: ['/api/events', eventId, 'rounds'] });
-    queryClient.refetchQueries({ queryKey: [`/api/events/${eventId}/registrations`] });
-    queryClient.refetchQueries({ queryKey: [`/api/events/${eventId}/event-credentials`] });
-    queryClient.refetchQueries({ queryKey: [`/api/events/${eventId}/participants`] });
-    queryClient.refetchQueries({ queryKey: [`/api/events/${eventId}/leaderboard`] });
-    queryClient.refetchQueries({ queryKey: [`/api/events/${eventId}/rounds`] });
-    queryClient.refetchQueries({ queryKey: [`/api/events/${eventId}/winners`] });
-    queryClient.refetchQueries({ queryKey: [`/api/events/${eventId}/manual-round-entries`] });
   };
   const { user, token } = useAuth();
 
@@ -52,7 +52,11 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
       transports: ['websocket', 'polling'],
       reconnection: true,
       reconnectionDelay: 1000,
-      reconnectionAttempts: 5
+      // Round-2 H11: never stop retrying (an exam must not go dark because
+      // the 5th attempt failed), but cap the backoff so a recovered network
+      // resyncs within 30s instead of minutes.
+      reconnectionAttempts: Infinity,
+      reconnectionDelayMax: 30000
     });
 
     socketRef.current = socket;
@@ -60,6 +64,12 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
     socket.on('connect', () => {
       setIsConnected(true);
       console.log('WebSocket connected');
+      // Round-2 H12: resync on every (re)connect. While the socket was down
+      // the client missed roundStatus events — an attempt whose startedAt
+      // was shifted by pause/resume (or a round whose status flipped) would
+      // otherwise run on stale data until the next manual refresh.
+      queryClient.refetchQueries({ queryKey: ['/api/attempts'] });
+      queryClient.refetchQueries({ queryKey: ['/api/rounds'] });
     });
 
     socket.on('disconnect', () => {

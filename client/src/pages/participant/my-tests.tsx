@@ -111,7 +111,19 @@ export default function MyTestsPage() {
                               : 'N/A'}
                         </TableCell>
                         <TableCell className="text-right">
-                          {attempt.status !== 'in_progress' && (
+                          {/* Round-2 M17: an in_progress attempt used to have
+                              no action at all — a student who lost their tab
+                              could not get back into the exam. */}
+                          {attempt.status === 'in_progress' ? (
+                            <Button
+                              variant="default"
+                              size="sm"
+                              onClick={() => setLocation(`/participant/test/${attempt.id}`)}
+                              data-testid={`button-resume-${attempt.id}`}
+                            >
+                              Resume Test
+                            </Button>
+                          ) : (
                             <Button
                               variant="ghost"
                               size="sm"

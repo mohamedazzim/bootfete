@@ -101,6 +101,14 @@ export default function RegistrationCommitteeLayout({ children }: { children: Re
                 Live
               </Badge>
             )}
+            {/* Round-2 M16: the socket is the realtime lifeline — when it
+                drops, say so persistently instead of silently going stale. */}
+            {!isConnected && (
+              <Badge variant="outline" className="border-red-200 bg-red-50 text-red-700" data-testid="badge-websocket-disconnected" role="status">
+                <Circle className="w-2 h-2 mr-1 fill-red-500 text-red-500 animate-pulse" />
+                Reconnecting…
+              </Badge>
+            )}
           </div>
           <p className="text-sm text-muted-foreground" data-testid="sidebar-subtitle">
             {user?.fullName}

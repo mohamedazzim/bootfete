@@ -11,6 +11,7 @@ import { Loader2, AlertCircle, CheckCircle, ArrowRightLeft } from 'lucide-react'
 import { apiRequest } from '@/lib/queryClient';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/lib/auth';
+import { useWebSocket } from '@/contexts/WebSocketContext';
 
 export default function ParticipantDashboard() {
   const [, setLocation] = useLocation();
@@ -18,6 +19,7 @@ export default function ParticipantDashboard() {
   const [selectedEventId, setSelectedEventId] = useState<string>('');
   const { toast } = useToast();
   const { user } = useAuth();
+  const { isConnected } = useWebSocket();
 
   const { data: credentialData, isLoading } = useQuery<any>({
     queryKey: ['/api/participants/my-credential', selectedEventId],
@@ -26,7 +28,11 @@ export default function ParticipantDashboard() {
       const res = await apiRequest('GET', url);
       return res.json();
     },
-    refetchInterval: 2000, // Faster polling as WebSocket backup
+    // Round-2 C4: the socket pushes credential updates (credentialsCreated /
+    // registrationConfirmed events refetch this exact query). The 2s poll
+    // stays only as a socket-down fallback — at 500 students it was
+    // ~250 req/s of pure waste.
+    refetchInterval: isConnected ? false : 2000,
   });
 
   const { credential, event, eventRules, rounds, team } = credentialData || {};
