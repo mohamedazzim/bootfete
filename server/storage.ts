@@ -1725,12 +1725,18 @@ export class DatabaseStorage implements IStorage {
   }
 
   async confirmRegistration(id: string, confirmedBy: string): Promise<Registration> {
+    // BUG-C-02: confirm only from 'pending' in the UPDATE itself — the JS
+    // status check in the route races with concurrent confirms, which used
+    // to send duplicate credential emails.
     const [registration] = await db.update(registrations).set({
       status: 'confirmed',
       confirmedAt: new Date(),
       confirmedBy,
       updatedAt: new Date()
-    }).where(eq(registrations.id, id)).returning();
+    }).where(and(eq(registrations.id, id), eq(registrations.status, 'pending'))).returning();
+    if (!registration) {
+      throw new Error('Registration is not in pending state or does not exist');
+    }
     return registration;
   }
 

@@ -1480,7 +1480,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
 
   // Get selection pool for the next round
-  app.get("/api/events/:eventId/rounds/:roundNum/selection-pool", requireAuth, requireEventAdmin, async (req: AuthRequest, res: Response) => {
+  // BUG-A-04: was requireEventAdmin (any event_admin could read this PII pool
+  // for any event). requireEventAdminOrSuperAdmin scopes to admins assigned
+  // to :eventId. (publish-results was already scoped via requireRoundAccess.)
+  app.get("/api/events/:eventId/rounds/:roundNum/selection-pool", requireAuth, requireEventAdminOrSuperAdmin, async (req: AuthRequest, res: Response) => {
     try {
       const { eventId, roundNum } = req.params;
       const roundNumber = parseInt(roundNum);
@@ -4526,7 +4529,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         eventCredentials: eventCredentialsList,
         message: `Successfully confirmed registration for ${eventCredentialsList.length} participant(s)`
       })
-    } catch (error) {
+    } catch (error: any) {
+      // BUG-C-02: concurrent confirm race — the registration was confirmed
+      // by another request between our check and the UPDATE.
+      if (error?.message?.includes('not in pending state')) {
+        return res.status(409).json({ message: 'Registration was already processed by another request' })
+      }
       console.error("Confirm registration error:", error)
       res.status(500).json({ message: "Internal server error" })
     }
