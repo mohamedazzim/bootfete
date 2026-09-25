@@ -1,4 +1,4 @@
-import { rateLimit, type RateLimitRequestHandler } from "express-rate-limit";
+import { rateLimit, ipKeyGenerator, type RateLimitRequestHandler } from "express-rate-limit";
 import { RedisStore } from "rate-limit-redis";
 import { redisClient } from "../services/redisClient";
 
@@ -40,7 +40,7 @@ export const loginLimiter: RateLimitRequestHandler = rateLimit({
         : typeof req.body?.email === "string"
           ? req.body.email
           : "";
-    return `${req.ip}:${username.toLowerCase().slice(0, 128)}`;
+    return `${ipKeyGenerator(req.ip ?? "")}:${username.toLowerCase().slice(0, 128)}`;
   },
   message: { message: "Too many login attempts, please try again later" },
 });
@@ -48,10 +48,13 @@ export const loginLimiter: RateLimitRequestHandler = rateLimit({
 /**
  * Lighter bucket for public, unauthenticated endpoints (registration,
  * roll-number lookups) — prevents enumeration and mail-quota abuse.
+ * PUBLIC_API_RATE_LIMIT_MAX overrides the default (ops knob for
+ * high-density NATs, e.g. a campus network registering hundreds of
+ * students behind a few public IPs; also used by the loadtest harness).
  */
 export const publicApiLimiter: RateLimitRequestHandler = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  limit: 100, // 100 requests per window per IP
+  limit: parseInt(process.env.PUBLIC_API_RATE_LIMIT_MAX || "100", 10), // 100 requests per window per IP
   standardHeaders: "draft-7",
   legacyHeaders: false,
   store: buildStore("rl:public:"),
@@ -79,7 +82,7 @@ export const examApiLimiter: RateLimitRequestHandler = rateLimit({
   store: buildStore("rl:exam:"),
   keyGenerator: (req) => {
     const userId = (req as unknown as { user?: { id?: string } }).user?.id;
-    return userId ? `exam:user:${userId}` : `exam:ip:${req.ip}`;
+    return userId ? `exam:user:${userId}` : `exam:ip:${ipKeyGenerator(req.ip ?? "")}`;
   },
   message: { message: "Too many requests, please slow down and retry" },
 });

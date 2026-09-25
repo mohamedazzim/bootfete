@@ -4,13 +4,15 @@
  *
  * Simulates N concurrent students running the REAL exam flow against a
  * deployed target:
- *   register -> login -> event registration -> start attempt ->
+ *   register -> login -> event registration -> admin confirm ->
+ *   event-credential login -> start attempt ->
  *   fetch questions -> answer loop (debounced saves, edits, violations) -> submit
  *
  * Usage:
  *   node loadtest/run.mjs --target https://staging.example.com \
  *     --event-id <uuid> --round-id <uuid> \
- *     --students 500 --ramp 120 --questions 20
+ *     --students 500 --ramp 120 --questions 20 \
+ *     --admin-user <user> --admin-pass <pass>
  *
  *   node loadtest/run.mjs --smoke   # 5 students against http://localhost:5000
  *
@@ -44,6 +46,12 @@ const EVENT_ID = args["event-id"] || process.env.LOADTEST_EVENT_ID || "";
 const ROUND_ID = args["round-id"] || process.env.LOADTEST_ROUND_ID || "";
 const SEED = parseInt(args.seed || "42", 10);
 const REQ_TIMEOUT_MS = 30000;
+// Admin credentials for the confirm-registration step (the real student
+// journey: pending registration -> admin confirm -> event credentials ->
+// participant login). The loadtest models reality, not the stub.
+const ADMIN_USER = args["admin-user"] || process.env.LOADTEST_ADMIN_USER || "";
+const ADMIN_PASS = args["admin-pass"] || process.env.LOADTEST_ADMIN_PASS || "";
+let ADMIN_TOKEN = "";
 
 if (!EVENT_ID || !ROUND_ID) {
   console.error("ERROR: --event-id and --round-id are required (a live round on the target).");
@@ -93,6 +101,7 @@ class Student {
   constructor(id) {
     this.id = id;
     this.cookies = new Map();
+    this.token = null; // Bearer <redacted> captured at login — the app authenticates via Authorization header, not cookies
     this.tag = `loadtest-${SEED}-${id}`;
   }
 
@@ -101,11 +110,17 @@ class Student {
     return [...this.cookies.entries()].map(([k, v]) => `${k}=${v}`).join("; ");
   }
 
-  async req(method, path, body, { retries = 0 } = {}) {
-    const url = TARGET + path;
+  authHeaders() {
     const headers = { "Content-Type": "application/json" };
     const ck = this.cookieHeader();
     if (ck) headers["Cookie"] = ck;
+    if (this.token) headers["Authorization"] = `Bearer ${this.token}`;
+    return headers;
+  }
+
+  async req(method, path, body, { retries = 0 } = {}) {
+    const url = TARGET + path;
+    const headers = this.authHeaders();
     const t0 = performance.now();
     let status = 0;
     try {
@@ -154,9 +169,7 @@ const SAMPLE_ANSWERS = [
 // alongside the plain req() used for fire-and-forget calls.
 Student.prototype.reqJson = async function (method, path, body) {
   const url = TARGET + path;
-  const headers = { "Content-Type": "application/json" };
-  const ck = this.cookieHeader();
-  if (ck) headers["Cookie"] = ck;
+  const headers = this.authHeaders();
   const t0 = performance.now();
   let status = 0, data = null;
   try {
@@ -182,32 +195,69 @@ Student.prototype.reqJson = async function (method, path, body) {
   }
 };
 
+// Admin helper for the confirm-registration step.
+async function adminReqJson(method, path, body) {
+  const res = await fetch(TARGET + path, {
+    method,
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${ADMIN_TOKEN}` },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const text = await res.text().catch(() => "");
+  let data = null;
+  try { data = JSON.parse(text); } catch { data = null; }
+  return { status: res.status, ok: res.status >= 200 && res.status < 400, data };
+}
+
 // Rewire the scenario to use reqJson where ids are needed.
 async function runStudentFull(s) {
-  let r = await s.req("POST", "/api/auth/register", {
+  // 1. user account
+  let r = await s.reqJson("POST", "/api/auth/register", {
     username: s.tag, password: "LoadTest123!", email: `${s.tag}@loadtest.local`,
     fullName: `Load Test ${s.id}`, role: "participant",
   });
-  if (!r.ok && r.status !== 409) return "register";
+  if (!r.ok && r.status !== 409 && !(r.status === 400 && /already exists/i.test(JSON.stringify(r.data)))) return "register";
 
-  r = await s.req("POST", "/api/auth/login", { username: s.tag, password: "LoadTest123!" });
-  if (!r.ok) return "login";
+  // 2. user login -> Bearer <redacted> (the app authenticates via Authorization header)
+  r = await s.reqJson("POST", "/api/auth/login", { username: s.tag, password: "LoadTest123!" });
+  if (!r.ok || !r.data?.token) return "login";
+  s.token = r.data.token;
 
-  r = await s.req("POST", "/api/register", {
+  // 3. event registration (pending)
+  r = await s.reqJson("POST", "/api/register", {
     eventId: EVENT_ID,
-    organizerRollNo: `LT${String(s.id).padStart(5, "0")}`,
+    organizerRollNo: `LT${SEED}${String(s.id).padStart(5, "0")}`,
     organizerName: `Load Test ${s.id}`,
     organizerEmail: `${s.tag}@loadtest.local`,
     organizerDept: "LOAD",
   });
   if (!r.ok && r.status !== 409 && r.status !== 400) return "event-register";
+  const registrationId = r.data?.registration?.id;
+  if (!registrationId) return "event-register";
+
+  // 4. admin confirm -> event credentials (the REAL student journey; the
+  //    stub-era flow skipped this and could never start an attempt)
+  const conf = await adminReqJson("PATCH", `/api/registrations/${registrationId}/confirm`, {});
+  if (!conf.ok) return "confirm";
+  const creds = conf.data?.eventCredentials?.[0] || conf.data?.credentials?.[0];
+  if (!creds?.eventUsername || !creds?.eventPassword) return "confirm";
+
+  // 5. participant login with event credentials
+  s.token = null;
+  r = await s.reqJson("POST", "/api/auth/login", { username: creds.eventUsername, password: creds.eventPassword });
+  if (!r.ok || !r.data?.token) return "participant-login";
+  s.token = r.data.token;
 
   const start = await s.reqJson("POST", `/api/events/${EVENT_ID}/rounds/${ROUND_ID}/start`, {});
   // 400 "already have an attempt" happens on re-runs — treat as ok and skip.
   const attemptId = start.data?.attempt?.id || start.data?.id;
-  const questionIds = (start.data?.questions || start.data?.attempt?.questions || []).map((q) => q.id || q.questionId);
   if (!start.ok && start.status !== 400) return "start";
   if (!attemptId) return "start";
+
+  // The start endpoint returns only the attempt; the client fetches the
+  // question list separately (GET /api/rounds/:id/questions).
+  const qlist = await s.reqJson("GET", `/api/rounds/${ROUND_ID}/questions`);
+  const questionIds = (Array.isArray(qlist.data) ? qlist.data : qlist.data?.questions || []).map((q) => q.id || q.questionId);
+  if (!questionIds.length) return "questions";
 
   const n = Math.min(QUESTIONS, questionIds.length || QUESTIONS);
   for (let q = 0; q < n; q++) {
@@ -238,6 +288,22 @@ const failuresByStage = {};
 
 async function main() {
   console.log(`Bootfete load test — target=${TARGET} students=${STUDENTS} ramp=${RAMP_S}s questions=${QUESTIONS} seed=${SEED}`);
+  if (!ADMIN_USER || !ADMIN_PASS) {
+    console.error("ERROR: --admin-user and --admin-pass (or LOADTEST_ADMIN_USER/PASS) are required: the real student journey needs admin confirm.");
+    process.exit(2);
+  }
+  const al = await fetch(`${TARGET}/api/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username: ADMIN_USER, password: ADMIN_PASS }),
+  });
+  const abody = await al.json().catch(() => ({}));
+  if (!al.ok || !abody.token) {
+    console.error(`ERROR: admin login failed (${al.status}).`);
+    process.exit(2);
+  }
+  ADMIN_TOKEN = abody.token;
+  console.log("admin login ok");
   const t0 = performance.now();
 
   const tick = setInterval(() => {

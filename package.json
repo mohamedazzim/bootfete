@@ -10,6 +10,7 @@
     "check": "tsc",
     "test": "cross-env NODE_ENV=test jest --testPathPatterns=tests/unit",
     "test:all": "cross-env NODE_ENV=test jest",
+    "test:e2e": "node e2e/exam-flow.mjs",
     "db:push": "drizzle-kit push",
     "db:indexes": "node server/create-indexes.js",
     "db:seed": "tsx server/seed.ts"
