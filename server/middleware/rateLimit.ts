@@ -48,10 +48,13 @@ export const loginLimiter: RateLimitRequestHandler = rateLimit({
 /**
  * Lighter bucket for public, unauthenticated endpoints (registration,
  * roll-number lookups) — prevents enumeration and mail-quota abuse.
+ * PUBLIC_API_RATE_LIMIT_MAX overrides the default (ops knob for
+ * high-density NATs, e.g. a campus network registering hundreds of
+ * students behind a few public IPs; also used by the loadtest harness).
  */
 export const publicApiLimiter: RateLimitRequestHandler = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  limit: 100, // 100 requests per window per IP
+  limit: parseInt(process.env.PUBLIC_API_RATE_LIMIT_MAX || "100", 10), // 100 requests per window per IP
   standardHeaders: "draft-7",
   legacyHeaders: false,
   store: buildStore("rl:public:"),
