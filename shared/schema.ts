@@ -1,5 +1,5 @@
 import { sql, relations } from "drizzle-orm";
-import { pgTable, text, varchar, timestamp, integer, boolean, jsonb } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, timestamp, integer, boolean, jsonb, unique } from "drizzle-orm/pg-core";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -13,7 +13,7 @@ export const users: any = pgTable("users", {
   phone: text("phone"),
   role: varchar("role", { enum: ['super_admin', 'event_admin', 'participant', 'registration_committee'] }).notNull(),
   createdBy: varchar("created_by").references(() => users.id, { onDelete: 'set null' }),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
 // Events table - created by super admin
@@ -26,12 +26,12 @@ export const events = pgTable("events", {
   category: varchar("category", { enum: ['technical', 'non_technical'] }).notNull().default('technical'),
   minMembers: integer("min_members").notNull().default(1), // Minimum team members (1 for solo)
   maxMembers: integer("max_members").notNull().default(1), // Maximum team members (1 for solo)
-  startDate: timestamp("start_date"),
-  endDate: timestamp("end_date"),
+  startDate: timestamp("start_date", { withTimezone: true }),
+  endDate: timestamp("end_date", { withTimezone: true }),
   status: varchar("status", { enum: ['active', 'completed', 'draft'] }).notNull().default('active'), // active, completed, draft
   createdBy: varchar("created_by").references(() => users.id, { onDelete: 'set null' }),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
 // Event Admins - assignment of admins to events
@@ -39,7 +39,7 @@ export const eventAdmins = pgTable("event_admins", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   eventId: varchar("event_id").references(() => events.id, { onDelete: 'cascade' }).notNull(),
   adminId: varchar("admin_id").references(() => users.id, { onDelete: 'cascade' }).notNull(),
-  assignedAt: timestamp("assigned_at").defaultNow().notNull(),
+  assignedAt: timestamp("assigned_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
 // Event Rules - proctoring and test rules per event
@@ -53,8 +53,8 @@ export const eventRules = pgTable("event_rules", {
   autoSubmitOnViolation: boolean("auto_submit_on_violation").notNull().default(true),
   maxTabSwitchWarnings: integer("max_tab_switch_warnings").notNull().default(2),
   additionalRules: text("additional_rules"),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
 // Round Type constants
@@ -70,17 +70,17 @@ export const rounds = pgTable("rounds", {
   roundNumber: integer("round_number").notNull(),
   roundType: varchar("round_type", { enum: ['prelims', 'finals'] }).notNull().default('prelims'), // prelims = qualification round, finals = winner declaration
   duration: integer("duration").notNull(), // in minutes
-  startTime: timestamp("start_time"),
-  endTime: timestamp("end_time"),
+  startTime: timestamp("start_time", { withTimezone: true }),
+  endTime: timestamp("end_time", { withTimezone: true }),
   status: text("status").notNull().default('not_started'), // not_started, in_progress, completed
-  startedAt: timestamp("started_at"), // When admin starts the round
-  endedAt: timestamp("ended_at"), // When admin ends the round
+  startedAt: timestamp("started_at", { withTimezone: true }), // When admin starts the round
+  endedAt: timestamp("ended_at", { withTimezone: true }), // When admin ends the round
   resultsPublished: boolean("results_published").notNull().default(false), // Admin can publish results (Emails)
   showAnswers: boolean("show_answers").notNull().default(false), // Admin can show answers to participants
   isManual: boolean("is_manual").notNull().default(false), // true = physical/manual round, false = online test
   conductMedium: varchar("conduct_medium", { enum: ['online', 'physical'] }).notNull().default('online'),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
 // Round Rules - proctoring and test rules per round
@@ -94,8 +94,8 @@ export const roundRules = pgTable("round_rules", {
   autoSubmitOnViolation: boolean("auto_submit_on_violation").notNull().default(true),
   maxTabSwitchWarnings: integer("max_tab_switch_warnings").notNull().default(2),
   additionalRules: text("additional_rules"),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
 // Questions - per round
@@ -115,8 +115,8 @@ export const questions = pgTable("questions", {
   expectedOutput: text("expected_output"),
   testCases: jsonb("test_cases"), // For coding questions
 
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
 // Participants - users registered for events
@@ -124,17 +124,20 @@ export const participants = pgTable("participants", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   eventId: varchar("event_id").references(() => events.id, { onDelete: 'cascade' }).notNull(),
   userId: varchar("user_id").references(() => users.id, { onDelete: 'cascade' }).notNull(),
-  registeredAt: timestamp("registered_at").defaultNow().notNull(),
+  registeredAt: timestamp("registered_at", { withTimezone: true }).defaultNow().notNull(),
   status: text("status").notNull().default('registered'), // registered, completed, disqualified
-});
+},
+  // H-15: a user registers once per event.
+  (t) => [unique("participants_event_user_unique").on(t.eventId, t.userId)],
+);
 
 // Test Attempts - tracking participant test sessions
 export const testAttempts = pgTable("test_attempts", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   roundId: varchar("round_id").references(() => rounds.id, { onDelete: 'cascade' }).notNull(),
   userId: varchar("user_id").references(() => users.id, { onDelete: 'cascade' }).notNull(),
-  startedAt: timestamp("started_at").defaultNow().notNull(),
-  submittedAt: timestamp("submitted_at"),
+  startedAt: timestamp("started_at", { withTimezone: true }).defaultNow().notNull(),
+  submittedAt: timestamp("submitted_at", { withTimezone: true }),
   status: text("status").notNull().default('in_progress'), // in_progress, completed, auto_submitted
 
   // Proctoring violations
@@ -146,8 +149,12 @@ export const testAttempts = pgTable("test_attempts", {
   totalScore: integer("total_score").default(0),
   maxScore: integer("max_score"),
 
-  completedAt: timestamp("completed_at"),
-});
+  completedAt: timestamp("completed_at", { withTimezone: true }),
+},
+  // H-15: one attempt per user per round. The start-test flow is check-then-
+  // insert, so without this a double-click / double request creates two rows.
+  (t) => [unique("test_attempts_user_round_unique").on(t.userId, t.roundId)],
+);
 
 // Answers - participant answers to questions
 export const answers = pgTable("answers", {
@@ -157,8 +164,12 @@ export const answers = pgTable("answers", {
   answer: text("answer").notNull(),
   isCorrect: boolean("is_correct"),
   pointsAwarded: integer("points_awarded").default(0),
-  answeredAt: timestamp("answered_at").defaultNow().notNull(),
-});
+  answeredAt: timestamp("answered_at", { withTimezone: true }).defaultNow().notNull(),
+},
+  // H-15: one row per question per attempt. The save-answer flow is
+  // find-then-insert/update, so concurrent saves could duplicate rows.
+  (t) => [unique("answers_attempt_question_unique").on(t.attemptId, t.questionId)],
+);
 
 // Reports - event-wise and symposium-wide reports
 // Note: generatedBy uses onDelete: 'set null' to preserve report history even if generator is deleted
@@ -170,7 +181,7 @@ export const reports = pgTable("reports", {
   generatedBy: varchar("generated_by").references(() => users.id, { onDelete: 'set null' }),
   reportData: jsonb("report_data").notNull(), // JSON data for the report
   fileUrl: text("file_url"), // URL to the generated PDF/Excel file
-  createdAt: timestamp("created_at").defaultNow().notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
 // Registration Forms - public registration forms for events (general, not tied to specific event)
@@ -183,8 +194,8 @@ export const registrationForms = pgTable("registration_forms", {
   formFields: jsonb("form_fields").notNull().$type<Array<{ id: string, label: string, type: 'text' | 'email' | 'tel' | 'number', required: boolean, placeholder?: string }>>(),
   allowedCategories: jsonb("allowed_categories").notNull().default(sql`'["technical", "non_technical"]'::jsonb`).$type<Array<'technical' | 'non_technical'>>(),
   isActive: boolean("is_active").default(true).notNull(),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-  updatedAt: timestamp("updated_at").defaultNow(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
 });
 
 // Paper Presentation Topics - used when event name matches 'Paper Presentation' or 'Quanta Talks'
@@ -229,7 +240,7 @@ export type DepartmentOption = typeof DEPARTMENT_OPTIONS[number];
 export const registrations = pgTable("registrations", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   eventId: varchar("event_id").references(() => events.id, { onDelete: 'cascade' }).notNull(),
-  teamId: varchar("team_id"), // Generated team ID for display (e.g., BHCWS01)
+  teamId: varchar("team_id").unique(), // Generated team ID for display (e.g., BHCWS01)
   organizerRollNo: varchar("organizer_roll_no").notNull(),
   organizerName: text("organizer_name").notNull(),
   organizerEmail: text("organizer_email").notNull(),
@@ -241,11 +252,15 @@ export const registrations = pgTable("registrations", {
   // Paper Presentation topic - only required when event is Paper Presentation
   paperTopic: text("paper_topic"),
   status: varchar("status", { enum: ['pending', 'confirmed', 'cancelled'] }).notNull().default('pending'),
-  confirmedAt: timestamp("confirmed_at"),
+  confirmedAt: timestamp("confirmed_at", { withTimezone: true }),
   confirmedBy: varchar("confirmed_by").references(() => users.id, { onDelete: 'set null' }),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-  updatedAt: timestamp("updated_at").defaultNow().notNull(),
-});
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+},
+  // H-15: one registration per organizer per event — a double-submitted
+  // registration form must not create two rows.
+  (t) => [unique("registrations_event_organizer_unique").on(t.eventId, t.organizerRollNo)],
+);
 
 // Team Members - members of team registrations (excluding organizer)
 export const teamMembers = pgTable("team_members", {
@@ -257,7 +272,7 @@ export const teamMembers = pgTable("team_members", {
   memberDept: text("member_dept").notNull(),
   memberPhone: text("member_phone"),
   memberFoodType: varchar("member_food_type", { enum: ['veg', 'nonveg'] }).notNull().default('veg'),
-  addedAt: timestamp("added_at").defaultNow().notNull(),
+  addedAt: timestamp("added_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
 // Participant Registry - global participant info by roll_no (food preferences persist across registrations)
@@ -271,8 +286,8 @@ export const participantRegistry = pgTable("participant_registry", {
   phone: text("phone"),
   college: text("college"),
   foodType: varchar("food_type", { enum: ['veg', 'nonveg'] }).notNull().default('veg'),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
 // Event Credentials - event-specific credentials for participants
@@ -283,9 +298,9 @@ export const eventCredentials = pgTable("event_credentials", {
   eventUsername: varchar("event_username").unique().notNull(),
   eventPassword: varchar("event_password").notNull(),
   testEnabled: boolean("test_enabled").notNull().default(false),
-  enabledAt: timestamp("enabled_at"),
+  enabledAt: timestamp("enabled_at", { withTimezone: true }),
   enabledBy: varchar("enabled_by").references(() => users.id, { onDelete: 'set null' }),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
 // Audit Logs - track super admin override actions
@@ -301,7 +316,7 @@ export const auditLogs = pgTable("audit_logs", {
   targetName: text("target_name"),
   changes: jsonb("changes"),
   reason: text("reason"),
-  timestamp: timestamp("timestamp").defaultNow().notNull(),
+  timestamp: timestamp("timestamp", { withTimezone: true }).defaultNow().notNull(),
   ipAddress: text("ip_address"),
 });
 
@@ -314,7 +329,7 @@ export const emailLogs = pgTable("email_logs", {
   templateType: text("template_type").notNull(),
   status: text("status").notNull().default('sent'),
   errorMessage: text("error_message"),
-  sentAt: timestamp("sent_at").notNull().defaultNow(),
+  sentAt: timestamp("sent_at", { withTimezone: true }).notNull().defaultNow(),
   metadata: jsonb("metadata"),
 });
 
@@ -334,8 +349,8 @@ export const manualRoundEntries = pgTable("manual_round_entries", {
   rank: integer("rank"),
   notes: text("notes"),
   enteredBy: varchar("entered_by").references(() => users.id, { onDelete: 'set null' }),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
 // Event Winners - winners for each event with positions
@@ -352,7 +367,7 @@ export const eventWinners = pgTable("event_winners", {
   winningRound: text("winning_round"), // "Round 1", "Finals", etc.
   teamMembers: jsonb("team_members").$type<Array<{ name: string, rollNo: string }>>(),
   declaredBy: varchar("declared_by").references(() => users.id, { onDelete: 'set null' }),
-  declaredAt: timestamp("declared_at").defaultNow().notNull(),
+  declaredAt: timestamp("declared_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
 // Relations

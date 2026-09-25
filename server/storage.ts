@@ -79,6 +79,7 @@ export interface IStorage {
   getAnswer(id: string): Promise<Answer | undefined>;
   createAnswer(answer: InsertAnswer): Promise<Answer>;
   updateAnswer(id: string, answer: Partial<InsertAnswer>): Promise<Answer | undefined>;
+  upsertAnswer(data: { attemptId: string; questionId: string; answer: string }): Promise<Answer>;
 
   getReports(): Promise<Report[]>;
   getReportsByEvent(eventId: string): Promise<Report[]>;
@@ -244,6 +245,7 @@ export interface IStorage {
   updateEventWinner(id: string, winner: Partial<InsertEventWinner>): Promise<EventWinner | undefined>;
   deleteEventWinner(id: string): Promise<void>;
   deleteEventWinnersByEvent(eventId: string): Promise<void>;
+  replaceEventWinners(eventId: string, winners: InsertEventWinner[]): Promise<EventWinner[]>;
 
   // Round 1 qualifiers (from online tests)
   getRound1Qualifiers(eventId: string, limit?: number): Promise<Array<{
@@ -552,29 +554,33 @@ export class DatabaseStorage implements IStorage {
   }
 
   async deleteRoundTestData(roundId: string): Promise<{ deletedAttempts: number; deletedAnswers: number }> {
-    // First, get all test attempts for this round to count answers
-    const attemptIds = await db.select({ id: testAttempts.id })
-      .from(testAttempts)
-      .where(eq(testAttempts.roundId, roundId));
+    // H-02: delete answers + attempts atomically — a crash between the two
+    // used to leave orphaned answers.
+    return await db.transaction(async (tx) => {
+      // First, get all test attempts for this round to count answers
+      const attemptIds = await tx.select({ id: testAttempts.id })
+        .from(testAttempts)
+        .where(eq(testAttempts.roundId, roundId));
 
-    let deletedAnswers = 0;
-    if (attemptIds.length > 0) {
-      // Delete all answers for these attempts
-      const answerResult = await db.delete(answers)
-        .where(sql`${answers.attemptId} IN (${sql.join(attemptIds.map(a => sql`${a.id}`), sql`, `)})`)
-        .returning({ id: answers.id });
-      deletedAnswers = answerResult.length;
-    }
+      let deletedAnswers = 0;
+      if (attemptIds.length > 0) {
+        // Delete all answers for these attempts
+        const answerResult = await tx.delete(answers)
+          .where(sql`${answers.attemptId} IN (${sql.join(attemptIds.map(a => sql`${a.id}`), sql`, `)})`)
+          .returning({ id: answers.id });
+        deletedAnswers = answerResult.length;
+      }
 
-    // Delete all test attempts for this round
-    const attemptResult = await db.delete(testAttempts)
-      .where(eq(testAttempts.roundId, roundId))
-      .returning({ id: testAttempts.id });
+      // Delete all test attempts for this round
+      const attemptResult = await tx.delete(testAttempts)
+        .where(eq(testAttempts.roundId, roundId))
+        .returning({ id: testAttempts.id });
 
-    return {
-      deletedAttempts: attemptResult.length,
-      deletedAnswers
-    };
+      return {
+        deletedAttempts: attemptResult.length,
+        deletedAnswers
+      };
+    });
   }
 
   async getRoundRules(roundId: string): Promise<RoundRules | undefined> {
@@ -683,8 +689,16 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createTestAttempt(insertAttempt: InsertTestAttempt): Promise<TestAttempt> {
-    const [attempt] = await db.insert(testAttempts).values(insertAttempt).returning();
-    return attempt;
+    // H-15: the (user_id, round_id) unique constraint makes a double start
+    // (double-click / retried request) a no-op returning the existing row
+    // instead of a 500 or a duplicate attempt.
+    const [attempt] = await db.insert(testAttempts).values(insertAttempt)
+      .onConflictDoNothing({ target: [testAttempts.userId, testAttempts.roundId] })
+      .returning();
+    if (attempt) return attempt;
+    const existing = await this.getTestAttemptByUserAndRound(insertAttempt.userId, insertAttempt.roundId);
+    if (!existing) throw new Error('Failed to create test attempt');
+    return existing;
   }
 
   async updateTestAttempt(id: string, updateData: Partial<TestAttempt>): Promise<TestAttempt | undefined> {
@@ -718,6 +732,25 @@ export class DatabaseStorage implements IStorage {
 
   async updateAnswer(id: string, updateData: Partial<Answer>): Promise<Answer | undefined> {
     const [answer] = await db.update(answers).set(updateData).where(eq(answers.id, id)).returning();
+    return answer;
+  }
+
+  // H-15: atomic upsert on (attempt_id, question_id). The save-answer endpoint
+  // used find-then-insert/update, so two concurrent saves for the same
+  // question could both insert and create duplicate rows.
+  async upsertAnswer(data: { attemptId: string; questionId: string; answer: string }): Promise<Answer> {
+    const [answer] = await db.insert(answers).values({
+      attemptId: data.attemptId,
+      questionId: data.questionId,
+      answer: data.answer,
+      isCorrect: false,
+      pointsAwarded: 0,
+    })
+      .onConflictDoUpdate({
+        target: [answers.attemptId, answers.questionId],
+        set: { answer: data.answer, answeredAt: new Date() },
+      })
+      .returning();
     return answer;
   }
 
@@ -1403,115 +1436,128 @@ export class DatabaseStorage implements IStorage {
       });
     }
 
+    const normalizedCollege = data.organizerCollege ? data.organizerCollege.trim().toUpperCase() : '';
+
     try {
-      // Step 1: Validate department limits per college (no transaction - Neon HTTP doesn't support)
-      const normalizedCollege = data.organizerCollege ? data.organizerCollege.trim().toUpperCase() : '';
+      // H-02: the whole flow now runs in a single transaction (the Pool driver
+      // supports db.transaction()). Any failure rolls back every write, which
+      // replaces the old manual "delete the registration" compensation.
+      return await db.transaction(async (tx) => {
+        // Step 1: Validate department limits per college.
+        for (const dept of allDepartments) {
+          // H-03: transaction-scoped advisory lock per college+dept serializes
+          // the count-then-insert window, so two concurrent registrations for
+          // the same department can't both slip under the cap.
+          await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${'dept-cap:' + normalizedCollege + ':' + dept}))`);
 
-      for (const dept of allDepartments) {
-        // Count confirmed + pending registrations (prevents over-registration) for THIS COLLEGE
-        const organizerCount = await db
-          .select({ rollNo: registrations.organizerRollNo })
-          .from(registrations)
-          .where(
-            and(
-              inArray(registrations.status, ['confirmed', 'pending']),
-              sql`UPPER(TRIM(${registrations.organizerDept})) = ${dept}`,
-              sql`UPPER(TRIM(${registrations.organizerCollege})) = ${normalizedCollege}`
-            )
-          );
+          // Count confirmed + pending registrations (prevents over-registration) for THIS COLLEGE
+          const organizerCount = await tx
+            .select({ rollNo: registrations.organizerRollNo })
+            .from(registrations)
+            .where(
+              and(
+                inArray(registrations.status, ['confirmed', 'pending']),
+                sql`UPPER(TRIM(${registrations.organizerDept})) = ${dept}`,
+                sql`UPPER(TRIM(${registrations.organizerCollege})) = ${normalizedCollege}`
+              )
+            );
 
-        const memberCount = await db
-          .select({ rollNo: teamMembers.memberRollNo })
-          .from(teamMembers)
-          .innerJoin(registrations, eq(teamMembers.registrationId, registrations.id))
-          .where(
-            and(
-              inArray(registrations.status, ['confirmed', 'pending']),
-              sql`UPPER(TRIM(${teamMembers.memberDept})) = ${dept}`,
-              sql`UPPER(TRIM(${registrations.organizerCollege})) = ${normalizedCollege}`
-            )
-          );
+          const memberCount = await tx
+            .select({ rollNo: teamMembers.memberRollNo })
+            .from(teamMembers)
+            .innerJoin(registrations, eq(teamMembers.registrationId, registrations.id))
+            .where(
+              and(
+                inArray(registrations.status, ['confirmed', 'pending']),
+                sql`UPPER(TRIM(${teamMembers.memberDept})) = ${dept}`,
+                sql`UPPER(TRIM(${registrations.organizerCollege})) = ${normalizedCollege}`
+              )
+            );
 
-        // Get unique roll numbers (participants can be in multiple registrations)
-        const existingRollNos = new Set<string>();
-        organizerCount.forEach(r => existingRollNos.add(r.rollNo));
-        memberCount.forEach(r => existingRollNos.add(r.rollNo));
+          // Get unique roll numbers (participants can be in multiple registrations)
+          const existingRollNos = new Set<string>();
+          organizerCount.forEach(r => existingRollNos.add(r.rollNo));
+          memberCount.forEach(r => existingRollNos.add(r.rollNo));
 
-        const currentCount = existingRollNos.size;
+          const currentCount = existingRollNos.size;
 
-        // Calculate how many NEW unique participants this registration will add
-        const newParticipants = new Set<string>();
+          // Calculate how many NEW unique participants this registration will add
+          const newParticipants = new Set<string>();
 
-        // Check organizer (only if from this dept)
-        const normalizedOrgDept = normalizeDepartment(data.organizerDept);
-        if (normalizedOrgDept === dept && !existingRollNos.has(data.organizerRollNo)) {
-          newParticipants.add(data.organizerRollNo);
-        }
-
-        // Check team members (only from this dept)
-        if (data.teamMembers && data.teamMembers.length > 0) {
-          data.teamMembers.forEach(member => {
-            const memberDept = normalizeDepartment(member.memberDept);
-            if (memberDept === dept && !existingRollNos.has(member.memberRollNo)) {
-              newParticipants.add(member.memberRollNo);
-            }
-          });
-        }
-
-        const newCount = newParticipants.size;
-        const projectedTotal = currentCount + newCount;
-
-        // Reject if adding these new participants would exceed the limit for THIS COLLEGE
-        if (projectedTotal > DEPARTMENT_LIMIT) {
-          return {
-            success: false,
-            error: `Department "${dept}" at ${data.organizerCollege} would exceed the maximum limit of ${DEPARTMENT_LIMIT} unique participants. Current: ${currentCount}, New: ${newCount}, Total would be: ${projectedTotal}`,
-            department: dept,
-            currentCount: currentCount,
-          };
-        }
-      }
-
-      // Step 2: Create registration with generated team ID (retry on rare collisions)
-      let registration: Registration | undefined;
-      for (let attempt = 0; attempt < 5; attempt++) {
-        const teamId = await this.generateTeamId(data.eventId, data.eventName);
-
-        try {
-          const [created] = await db.insert(registrations).values({
-            eventId: data.eventId,
-            organizerRollNo: data.organizerRollNo,
-            organizerName: data.organizerName,
-            organizerEmail: data.organizerEmail,
-            organizerDept: normalizedOrganizerDept, // Store normalized department
-            organizerCollege: data.organizerCollege || null,
-            organizerPhone: data.organizerPhone || null,
-            organizerFoodType: data.organizerFoodType,
-            registrationType: data.registrationType,
-            paperTopic: data.paperTopic || null,
-            status: 'pending',
-            confirmedBy: null,
-            teamId,
-          }).returning();
-
-          registration = created as Registration;
-          break;
-        } catch (error: any) {
-          if (this.isTeamIdConflict(error)) {
-            continue;
+          // Check organizer (only if from this dept)
+          const normalizedOrgDept = normalizeDepartment(data.organizerDept);
+          if (normalizedOrgDept === dept && !existingRollNos.has(data.organizerRollNo)) {
+            newParticipants.add(data.organizerRollNo);
           }
-          throw error;
+
+          // Check team members (only from this dept)
+          if (data.teamMembers && data.teamMembers.length > 0) {
+            data.teamMembers.forEach(member => {
+              const memberDept = normalizeDepartment(member.memberDept);
+              if (memberDept === dept && !existingRollNos.has(member.memberRollNo)) {
+                newParticipants.add(member.memberRollNo);
+              }
+            });
+          }
+
+          const newCount = newParticipants.size;
+          const projectedTotal = currentCount + newCount;
+
+          // Reject if adding these new participants would exceed the limit for THIS COLLEGE
+          if (projectedTotal > DEPARTMENT_LIMIT) {
+            return {
+              success: false,
+              error: `Department "${dept}" at ${data.organizerCollege} would exceed the maximum limit of ${DEPARTMENT_LIMIT} unique participants. Current: ${currentCount}, New: ${newCount}, Total would be: ${projectedTotal}`,
+              department: dept,
+              currentCount: currentCount,
+            };
+          }
         }
-      }
 
-      if (!registration) {
-        throw new Error('Failed to generate unique team ID for registration');
-      }
+        // Serialize team-ID sequence generation per event so two concurrent
+        // registrations can't compute the same MAX()+1 value.
+        await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${'team-id:' + data.eventId}))`);
 
-      // Step 3: Add team members
-      if (data.teamMembers && data.teamMembers.length > 0) {
-        try {
-          await db.insert(teamMembers).values(
+        // Step 2: Create registration with generated team ID (retry on rare collisions)
+        let registration: Registration | undefined;
+        for (let attempt = 0; attempt < 5; attempt++) {
+          const teamId = await this.generateTeamId(data.eventId, data.eventName);
+
+          try {
+            const [created] = await tx.insert(registrations).values({
+              eventId: data.eventId,
+              organizerRollNo: data.organizerRollNo,
+              organizerName: data.organizerName,
+              organizerEmail: data.organizerEmail,
+              organizerDept: normalizedOrganizerDept, // Store normalized department
+              organizerCollege: data.organizerCollege || null,
+              organizerPhone: data.organizerPhone || null,
+              organizerFoodType: data.organizerFoodType,
+              registrationType: data.registrationType,
+              paperTopic: data.paperTopic || null,
+              status: 'pending',
+              confirmedBy: null,
+              teamId,
+            }).returning();
+
+            registration = created as Registration;
+            break;
+          } catch (error: any) {
+            if (this.isTeamIdConflict(error)) {
+              continue;
+            }
+            throw error;
+          }
+        }
+
+        if (!registration) {
+          throw new Error('Failed to generate unique team ID for registration');
+        }
+
+        // Step 3: Add team members (transaction rolls back on failure — no
+        // manual compensation delete needed)
+        if (data.teamMembers && data.teamMembers.length > 0) {
+          await tx.insert(teamMembers).values(
             data.teamMembers.map(member => ({
               registrationId: registration!.id,
               memberRollNo: member.memberRollNo,
@@ -1522,14 +1568,10 @@ export class DatabaseStorage implements IStorage {
               memberFoodType: member.memberFoodType,
             }))
           );
-        } catch (memberError) {
-          // Rollback: Delete registration if team members fail
-          await db.delete(registrations).where(eq(registrations.id, registration.id));
-          throw memberError;
         }
-      }
 
-      return { success: true, registration };
+        return { success: true, registration };
+      });
     } catch (error: any) {
       // Log and re-throw unexpected errors
       console.error('Registration creation error:', error);
@@ -1709,10 +1751,14 @@ export class DatabaseStorage implements IStorage {
   }
 
   async deleteRegistration(id: string): Promise<void> {
-    // First delete team members
-    await db.delete(teamMembers).where(eq(teamMembers.registrationId, id));
-    // Then delete the registration
-    await db.delete(registrations).where(eq(registrations.id, id));
+    // H-02: delete members + registration atomically — a crash between the
+    // two used to leave orphaned team members.
+    await db.transaction(async (tx) => {
+      // First delete team members
+      await tx.delete(teamMembers).where(eq(teamMembers.registrationId, id));
+      // Then delete the registration
+      await tx.delete(registrations).where(eq(registrations.id, id));
+    });
   }
 
   /**
@@ -2638,40 +2684,33 @@ export class DatabaseStorage implements IStorage {
   }): Promise<ParticipantRegistry> {
     const normalizedRollNo = data.rollNo.trim().toUpperCase();
 
-    // Check if participant already exists
-    const existing = await this.getParticipantRegistryByRollNo(normalizedRollNo);
-
-    if (existing) {
-      // Update existing participant (but NOT the foodType - it's locked once set)
-      const [updated] = await db
-        .update(participantRegistry)
-        .set({
+    // H-02/H-15: single atomic upsert on the unique roll_no. The old
+    // check-then-insert/update raced under concurrent registrations.
+    // foodType stays locked once set (only written on insert).
+    const [row] = await db
+      .insert(participantRegistry)
+      .values({
+        rollNo: normalizedRollNo,
+        name: data.name,
+        email: data.email,
+        dept: data.dept,
+        phone: data.phone,
+        college: data.college,
+        foodType: data.foodType
+      })
+      .onConflictDoUpdate({
+        target: participantRegistry.rollNo,
+        set: {
           name: data.name,
-          email: data.email || existing.email,
-          dept: data.dept || existing.dept,
-          phone: data.phone || existing.phone,
-          college: data.college || existing.college,
+          email: data.email || sql`${participantRegistry.email}`,
+          dept: data.dept || sql`${participantRegistry.dept}`,
+          phone: data.phone || sql`${participantRegistry.phone}`,
+          college: data.college || sql`${participantRegistry.college}`,
           updatedAt: new Date()
-        })
-        .where(eq(participantRegistry.rollNo, normalizedRollNo))
-        .returning();
-      return updated;
-    } else {
-      // Insert new participant
-      const [created] = await db
-        .insert(participantRegistry)
-        .values({
-          rollNo: normalizedRollNo,
-          name: data.name,
-          email: data.email,
-          dept: data.dept,
-          phone: data.phone,
-          college: data.college,
-          foodType: data.foodType
-        })
-        .returning();
-      return created;
-    }
+        },
+      })
+      .returning();
+    return row;
   }
 
   // Manual Round Entries implementations
@@ -2788,6 +2827,18 @@ export class DatabaseStorage implements IStorage {
 
   async deleteEventWinnersByEvent(eventId: string): Promise<void> {
     await db.delete(eventWinners).where(eq(eventWinners.eventId, eventId));
+  }
+
+  // H-02: delete-then-bulk-create in one transaction. The route used to
+  // delete all winners and then insert them one by one outside any
+  // transaction — a failure mid-way left the event with no winners at all.
+  async replaceEventWinners(eventId: string, winners: InsertEventWinner[]): Promise<EventWinner[]> {
+    return await db.transaction(async (tx) => {
+      await tx.delete(eventWinners).where(eq(eventWinners.eventId, eventId));
+      if (winners.length === 0) return [];
+      const created = await tx.insert(eventWinners).values(winners as any).returning();
+      return created;
+    });
   }
 
   async exportEventData(eventId: string): Promise<any> {

@@ -2630,22 +2630,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return res.status(403).json({ message: "Test is currently paused by admin" });
         }
 
-        // Check if answer already exists
-        const existingAnswers = await storage.getAnswersByAttempt(attemptId)
-        const existingAnswer = existingAnswers.find((a) => a.questionId === questionId)
-
-        let savedAnswer
-        if (existingAnswer) {
-          savedAnswer = await storage.updateAnswer(existingAnswer.id, { answer })
-        } else {
-          savedAnswer = await storage.createAnswer({
-            attemptId,
-            questionId,
-            answer,
-            isCorrect: false,
-            pointsAwarded: 0,
-          })
-        }
+        // H-15: atomic upsert on (attempt_id, question_id) — the old
+        // find-then-insert/update raced under concurrent saves.
+        const savedAnswer = await storage.upsertAnswer({ attemptId, questionId, answer })
 
         res.json(savedAnswer)
       } catch (error) {
@@ -7511,24 +7498,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return res.status(404).json({ message: "Event not found" });
         }
 
-        // Delete existing winners for this event
-        await storage.deleteEventWinnersByEvent(eventId);
-
-        const createdWinners = await Promise.all(
-          winners.map(async (winner: any) => {
-            return await storage.createEventWinner({
-              eventId,
-              position: parseInt(winner.position),
-              participantName: winner.name || winner.participantName,
-              participantRollNo: winner.rollNo || winner.participantRollNo,
-              participantCollege: winner.college || winner.participantCollege,
-              participantDept: winner.dept || winner.participantDept,
-              finalScore: winner.score ? parseInt(winner.score) : null,
-              winningRound: winner.winningRound || winner.round,
-              teamMembers: winner.teamMembers || null,
-              declaredBy: req.user!.id,
-            });
-          })
+        // H-02: delete-then-bulk-create runs in one transaction — a failure
+        // mid-way no longer leaves the event with zero winners.
+        const createdWinners = await storage.replaceEventWinners(
+          eventId,
+          winners.map((winner: any) => ({
+            eventId,
+            position: parseInt(winner.position),
+            participantName: winner.name || winner.participantName,
+            participantRollNo: winner.rollNo || winner.participantRollNo,
+            participantCollege: winner.college || winner.participantCollege,
+            participantDept: winner.dept || winner.participantDept,
+            finalScore: winner.score ? parseInt(winner.score) : null,
+            winningRound: winner.winningRound || winner.round,
+            teamMembers: winner.teamMembers || null,
+            declaredBy: req.user!.id,
+          }))
         );
 
         // Auto-publish results on the final round and notify clients
