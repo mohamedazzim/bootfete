@@ -25,7 +25,7 @@ import {
   requireEventAdminOrSuperAdmin,
   type AuthRequest,
 } from "./middleware/auth"
-import { loginLimiter, publicApiLimiter } from "./middleware/rateLimit"
+import { loginLimiter, publicApiLimiter, examApiLimiter } from "./middleware/rateLimit"
 import { emailService } from "./services/emailService"
 import { WebSocketService } from "./services/websocketService"
 import fs from "fs";
@@ -2519,7 +2519,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     },
   )
 
-  app.get("/api/attempts/:attemptId", requireAuth, async (req: AuthRequest, res: Response) => {
+  app.get("/api/attempts/:attemptId", requireAuth, examApiLimiter, async (req: AuthRequest, res: Response) => {
     try {
       const attempt = await storage.getTestAttempt(req.params.attemptId)
       if (!attempt) {
@@ -2608,6 +2608,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     "/api/attempts/:attemptId/answers",
     requireAuth,
     requireParticipant,
+    examApiLimiter,
     async (req: AuthRequest, res: Response) => {
       try {
         const { attemptId } = req.params
@@ -2651,6 +2652,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     "/api/attempts/:attemptId/violations",
     requireAuth,
     requireParticipant,
+    examApiLimiter,
     async (req: AuthRequest, res: Response) => {
       try {
         const { attemptId } = req.params
@@ -2709,6 +2711,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     "/api/attempts/:attemptId/submit",
     requireAuth,
     requireParticipant,
+    examApiLimiter,
     async (req: AuthRequest, res: Response) => {
       try {
         const { attemptId } = req.params

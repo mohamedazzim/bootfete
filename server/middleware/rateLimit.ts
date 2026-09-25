@@ -57,3 +57,29 @@ export const publicApiLimiter: RateLimitRequestHandler = rateLimit({
   store: buildStore("rl:public:"),
   message: { message: "Too many requests, please try again later" },
 });
+
+/**
+ * PROD-SCALE: per-student bucket for exam hot paths (answer saves,
+ * violations, submit, attempt reads). Keyed by USER, not IP — 500 students
+ * behind a campus NAT share a handful of public IPs, so an IP-keyed bucket
+ * would throttle legitimate exam traffic into 429s mid-exam.
+ *
+ * The limit is generous: worst-case legit traffic is ~40 answer saves/min
+ * (1.5s client debounce) = 200 per 5 minutes; 600 leaves 3x headroom while
+ * still stopping a runaway/buggy client from melting the database.
+ *
+ * MUST be mounted AFTER requireAuth so req.user is populated; falls back
+ * to IP if somehow unauthenticated.
+ */
+export const examApiLimiter: RateLimitRequestHandler = rateLimit({
+  windowMs: 5 * 60 * 1000, // 5 minutes
+  limit: 600, // 600 requests per window per student
+  standardHeaders: "draft-7",
+  legacyHeaders: false,
+  store: buildStore("rl:exam:"),
+  keyGenerator: (req) => {
+    const userId = (req as unknown as { user?: { id?: string } }).user?.id;
+    return userId ? `exam:user:${userId}` : `exam:ip:${req.ip}`;
+  },
+  message: { message: "Too many requests, please slow down and retry" },
+});

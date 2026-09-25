@@ -9,6 +9,11 @@
 #
 # Copy to /etc/nginx/sites-available/bootfete (adjust server_name, ports,
 # and TLS), then: nginx -t && systemctl reload nginx
+#
+# SECURITY: the app sets `trust proxy = 1`, so it believes X-Forwarded-For
+# from one hop. Port 3000 MUST NOT be reachable except via nginx
+# (firewall it / bind the app host to 127.0.0.1), otherwise clients can
+# connect directly and spoof their IP to dodge rate limits.
 
 upstream bootfete_backend {
     ip_hash;  # C-05: REQUIRED — Socket.IO polling handshake affinity

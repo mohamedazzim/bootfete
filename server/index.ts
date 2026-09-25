@@ -16,6 +16,12 @@ import { monitoringService } from "./services/monitoringService";
 
 const app = express();
 
+// PROD-SCALE: the app always sits behind nginx (see deploy/nginx.conf.example).
+// Without trust proxy, req.ip is the proxy's IP for EVERY request, so all
+// students behind the proxy share a single rate-limit bucket and all logs
+// show one IP. Trust exactly one hop (nginx -> app).
+app.set('trust proxy', 1);
+
 declare module 'http' {
   interface IncomingMessage {
     rawBody: unknown
@@ -179,4 +185,57 @@ monitoringService.start();
       queueService.initializeQueue();
     });
   });
+
+  // PROD-SCALE: graceful shutdown. PM2 rolling reloads (`pm2 reload`) and
+  // orchestrators send SIGINT/SIGTERM — without this, in-flight exam
+  // requests (answer saves, submits) are killed mid-write. Drain order:
+  // stop accepting -> close websockets -> drain DB pool -> redis -> exit.
+  let shuttingDown = false;
+  const gracefulShutdown = async (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    log(`${signal} received — draining connections...`);
+
+    // Give in-flight requests 15s, then force-exit so a hung drain
+    // can't block the replacement worker from starting.
+    const forceExit = setTimeout(() => {
+      console.error("[shutdown] drain timed out, forcing exit");
+      process.exit(1);
+    }, 15000);
+    forceExit.unref();
+
+    try {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      log("[shutdown] HTTP server closed");
+    } catch (e) {
+      console.error("[shutdown] error closing HTTP server:", e);
+    }
+    try {
+      // close() waits for socket.io clients to disconnect
+      await ioServer.close();
+      log("[shutdown] websocket server closed");
+    } catch (e) {
+      console.error("[shutdown] error closing websocket server:", e);
+    }
+    try {
+      const { pool } = await import("./db");
+      await pool.end();
+      log("[shutdown] db pool drained");
+    } catch (e) {
+      console.error("[shutdown] error draining db pool:", e);
+    }
+    try {
+      const client = redisClient.getClient() as unknown as
+        { disconnect?: () => void } | null;
+      client?.disconnect?.();
+      log("[shutdown] redis disconnected");
+    } catch (e) {
+      console.error("[shutdown] error disconnecting redis:", e);
+    }
+    clearTimeout(forceExit);
+    log("[shutdown] complete");
+    process.exit(0);
+  };
+  process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
+  process.on("SIGINT", () => gracefulShutdown("SIGINT"));
 })();
