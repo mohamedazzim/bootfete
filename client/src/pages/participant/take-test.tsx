@@ -1060,8 +1060,9 @@ export default function TakeTestPage() {
                       })}
                     </div>
                   </div>
-                );
-              })()
+                 );
+               })()
+             )}
             {/* Fallback for any other custom or unhandled question type */}
             {!['multiple_choice', 'mcq', 'true_false', 'short_answer', 'coding', 'image_text', 'image_mcq', 'fill_blank', 'fill_in_the_blank', 'fill_in_blank', 'fill_up', 'fill'].includes(currentQuestion.questionType) && (
               <div className="space-y-3">
