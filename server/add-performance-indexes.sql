@@ -40,3 +40,10 @@ CREATE INDEX IF NOT EXISTS idx_rounds_event_id ON rounds(event_id);
 
 -- Questions table index
 CREATE INDEX IF NOT EXISTS idx_questions_round_id ON questions(round_id);
+
+-- DB-06: hot query paths that had no index even in the .sql files
+-- (per-row lookups inside N+1 loops in storage.ts)
+CREATE INDEX IF NOT EXISTS idx_participant_registry_email ON participant_registry(email);
+CREATE INDEX IF NOT EXISTS idx_event_winners_event_id ON event_winners(event_id);
+CREATE INDEX IF NOT EXISTS idx_manual_round_entries_event_round ON manual_round_entries(event_id, round_number);
+CREATE INDEX IF NOT EXISTS idx_registrations_organizer_email ON registrations(organizer_email);

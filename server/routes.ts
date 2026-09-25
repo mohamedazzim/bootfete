@@ -4765,9 +4765,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
           memberFoodType: 'veg' as const,
         })) : undefined;
 
+        // BUG-C-01: per-event results. A department-limit failure mid-loop
+        // used to return 409 while earlier events stayed confirmed, and the
+        // deleteUser "rollback" couldn't remove registration/team_members
+        // rows. Now partial success is reported honestly instead.
+        const eventResults: Array<{ eventId: string; eventName: string; status: 'confirmed' | 'failed'; error?: string }> = []
+
         for (const eventId of selectedEvents) {
           const event = eventsList.find(e => e.id === eventId)
-          if (!event) continue
+          if (!event) {
+            eventResults.push({ eventId, eventName: eventId, status: 'failed', error: 'Event not found' })
+            continue
+          }
 
           // 1. Create Registration Record with ATOMIC department validation
           // This prevents race conditions in on-spot registration flow
@@ -4787,16 +4796,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
           // Check if registration failed due to department limit
           if (!result.success) {
-            // Rollback user creation (delete the user we just created)
-            await storage.deleteUser(newUser.id);
-
-            return res.status(409).json({
-              message: result.error || 'Department participant limit exceeded',
-              department: result.department,
-              currentCount: result.currentCount,
-              limit: 10,
-              code: 'DEPARTMENT_LIMIT_EXCEEDED'
-            });
+            // BUG-C-01: don't fake a rollback — earlier events in this loop
+            // may already be confirmed with credentials. Record the failure
+            // and report partial success at the end.
+            eventResults.push({
+              eventId,
+              eventName: event.name,
+              status: 'failed',
+              error: result.error || 'Department participant limit exceeded'
+            })
+            continue
           }
 
           const registration = result.registration!;
@@ -4850,6 +4859,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
             eventPassword,
             teamId: registration.teamId,
           })
+          eventResults.push({ eventId, eventName: event.name, status: 'confirmed' })
+        }
+
+        // BUG-C-01: if NO event succeeded, nothing was created for this user
+        // yet, so the old cleanup + 409 behavior is safe to keep. If some
+        // succeeded, report partial success honestly instead of an error.
+        const confirmedCount = eventResults.filter(r => r.status === 'confirmed').length
+        if (confirmedCount === 0) {
+          const firstFailure = eventResults.find(r => r.status === 'failed')
+          await storage.deleteUser(newUser.id);
+          return res.status(409).json({
+            message: firstFailure?.error || 'Registration failed for all selected events',
+            code: 'DEPARTMENT_LIMIT_EXCEEDED',
+            eventResults
+          });
         }
 
         // Send consolidated credentials email (credits optimization)
@@ -4900,6 +4924,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
             phone: newUser.phone,
           },
           eventCredentials: eventCredentialsList,
+          // BUG-C-01: per-event outcome so the UI can show which events were
+          // confirmed and which failed (e.g. department limit).
+          partialSuccess: confirmedCount < eventResults.length,
+          eventResults,
         })
       } catch (error) {
         console.error("Create on-spot participant error:", error)
