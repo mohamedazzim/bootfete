@@ -2678,9 +2678,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
 
         const violationLogs = (attempt.violationLogs as any[]) || []
+        const now = new Date()
+
+        // H-11: coalesce duplicate detector firings. One tab switch fires both
+        // 'blur' and 'visibilitychange' client-side; without this a single
+        // switch incremented the counters twice and wrongfully eliminated
+        // mobile users (threshold 2) on their first switch.
+        const lastLog = violationLogs[violationLogs.length - 1]
+        const lastTime = lastLog ? new Date(lastLog.timestamp).getTime() : 0
+        if (lastLog && lastLog.type === type && now.getTime() - lastTime < 5000) {
+          return res.json(attempt)
+        }
+
         violationLogs.push({
           type,
-          timestamp: new Date().toISOString(),
+          timestamp: now.toISOString(),
         })
 
         const updates: any = { violationLogs }

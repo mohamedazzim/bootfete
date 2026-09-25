@@ -69,6 +69,9 @@ export default function TakeTestPage() {
   const hasShown5MinWarning = useRef(false);
   const hasShown1MinWarning = useRef(false);
   const hasTriggeredSubmit = useRef(false);
+  // H-11: dedupe window so one user action (which can fire blur +
+  // visibilitychange + keydown together) counts as a single violation.
+  const lastViolationRef = useRef<{ type: string; at: number } | null>(null);
 
   const { data: attempt, isLoading } = useQuery<TestAttemptWithDetails>({
     queryKey: ['/api/attempts', attemptId],
@@ -134,6 +137,9 @@ export default function TakeTestPage() {
 
   const submitTestMutation = useMutation({
     mutationFn: async () => {
+      // H-12: flush pending debounced answer saves first — otherwise answers
+      // typed in the final seconds are silently dropped from grading.
+      await flushPendingAnswerSaves();
       return apiRequest('POST', `/api/attempts/${attemptId}/submit`, {});
     },
     onSuccess: () => {
@@ -304,6 +310,17 @@ export default function TakeTestPage() {
   const logViolation = useCallback((type: string) => {
     if (!attemptId) return;
 
+    // H-11: coalesce duplicate detector firings. A single tab switch fires
+    // both 'blur' and 'visibilitychange' (and Alt+Tab adds a keydown on top);
+    // without this, one switch counted as 2-3 violations and wrongfully
+    // eliminated mobile users on their first switch.
+    const now = Date.now();
+    const last = lastViolationRef.current;
+    if (last && last.type === type && now - last.at < 3000) {
+      return;
+    }
+    lastViolationRef.current = { type, at: now };
+
     apiRequest('POST', `/api/attempts/${attemptId}/violations`, { type }).catch(console.error);
 
     setViolationCount(prev => {
@@ -424,19 +441,10 @@ export default function TakeTestPage() {
     return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
   }, [attempt?.status, hasStarted, logViolation]);
 
-  // Backup tab switch detection with blur/focus - ALWAYS monitor
-  useEffect(() => {
-    if (!hasStarted) return;
-
-    const handleBlur = () => {
-      if (attempt?.status === 'in_progress') {
-        logViolation('tab_switch');
-      }
-    };
-
-    window.addEventListener('blur', handleBlur);
-    return () => window.removeEventListener('blur', handleBlur);
-  }, [attempt?.status, hasStarted, logViolation]);
+  // H-11: the blur-based tab-switch detector was removed. A single tab switch
+  // fires both 'blur' and 'visibilitychange', which double/triple-counted
+  // violations. 'visibilitychange' below is the single canonical detector
+  // for tab/app switches (switching to another app hides the document too).
 
   // Enhanced keyboard shortcuts blocking
   useEffect(() => {
@@ -555,16 +563,49 @@ export default function TakeTestPage() {
     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
   }, [hasStarted, logViolation]);
 
-  const saveAnswerMutation = useMutation({
-    mutationFn: async ({ questionId, answer }: { questionId: string; answer: string }) => {
-      return apiRequest('POST', `/api/attempts/${attemptId}/answers`, { questionId, answer });
-    },
-  });
+  // H-12: debounced, serialized answer saving. Typing used to fire one POST per
+  // keystroke with no ordering, so an earlier keystroke could overwrite a
+  // later one server-side, and final-seconds answers never landed before
+  // grading. Now the latest value per question is saved 1.5s after the user
+  // stops typing, and every pending save is flushed before submit.
+  const pendingAnswerSavesRef = useRef<Record<string, string>>({});
+  const answerSaveTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  const persistAnswer = useCallback(async (questionId: string, answer: string) => {
+    if (!attemptId) return;
+    try {
+      await apiRequest('POST', `/api/attempts/${attemptId}/answers`, { questionId, answer });
+      setSaveError(null);
+    } catch (err: any) {
+      // H-12: surface save failures instead of silently dropping answers.
+      setSaveError('Answer auto-save failed — check your connection. Pending answers will be retried on submit.');
+    }
+  }, [attemptId]);
 
   const handleAnswerChange = (questionId: string, answer: string) => {
     setAnswers(prev => ({ ...prev, [questionId]: answer }));
-    saveAnswerMutation.mutate({ questionId, answer });
+    pendingAnswerSavesRef.current[questionId] = answer;
+    const existing = answerSaveTimersRef.current[questionId];
+    if (existing) clearTimeout(existing);
+    answerSaveTimersRef.current[questionId] = setTimeout(() => {
+      delete answerSaveTimersRef.current[questionId];
+      const latest = pendingAnswerSavesRef.current[questionId];
+      delete pendingAnswerSavesRef.current[questionId];
+      if (latest !== undefined) void persistAnswer(questionId, latest);
+    }, 1500);
   };
+
+  // Flush every pending debounced save and wait for them before submitting,
+  // so answers typed in the final seconds are persisted before grading.
+  const flushPendingAnswerSaves = useCallback(async () => {
+    const timers = Object.values(answerSaveTimersRef.current);
+    answerSaveTimersRef.current = {};
+    timers.forEach(clearTimeout);
+    const pending = { ...pendingAnswerSavesRef.current };
+    pendingAnswerSavesRef.current = {};
+    await Promise.all(Object.entries(pending).map(([qid, ans]) => persistAnswer(qid, ans)));
+  }, [persistAnswer]);
 
   const handleSubmit = () => {
     if (!attempt?.questions) return;
@@ -853,6 +894,14 @@ export default function TakeTestPage() {
             <AlertDescription>
               <strong>Time Alert:</strong> {timeWarningMessage}
             </AlertDescription>
+          </Alert>
+        )}
+
+        {/* H-12: answer auto-save failure notice */}
+        {saveError && (
+          <Alert className="mb-6 bg-red-50 border-red-200">
+            <AlertTriangle className="h-4 w-4 text-red-600" />
+            <AlertDescription className="text-red-800">{saveError}</AlertDescription>
           </Alert>
         )}
 

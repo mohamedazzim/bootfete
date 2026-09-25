@@ -104,6 +104,11 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
       // CRITICAL: Force immediate refetch of participant credential for dashboard update
       queryClient.refetchQueries({ queryKey: ['/api/participants/my-credential'] });
 
+      // H-13: refetch in-progress attempts too. On pause/resume the server
+      // shifts attempt.startedAt forward; without this the participant's
+      // countdown keeps counting paused time and auto-submits early.
+      queryClient.refetchQueries({ queryKey: ['/api/attempts'] });
+
       // Super Admin Test Manager - immediate refresh
       queryClient.refetchQueries({ queryKey: ['/api/super-admin/all-rounds'] });
     });
