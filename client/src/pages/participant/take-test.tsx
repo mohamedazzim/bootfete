@@ -13,6 +13,7 @@ import { Progress } from '@/components/ui/progress';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { useToast } from '@/hooks/use-toast';
 import { apiRequest, queryClient } from '@/lib/queryClient';
+import { createSaveQueue } from '@/lib/saveQueue';
 import { Clock, AlertTriangle, Send, ChevronLeft, ChevronRight, Pause } from 'lucide-react';
 import type { TestAttempt, Question, Answer, Round, RoundRules, Participant } from '@shared/schema';
 
@@ -567,21 +568,28 @@ export default function TakeTestPage() {
   // keystroke with no ordering, so an earlier keystroke could overwrite a
   // later one server-side, and final-seconds answers never landed before
   // grading. Now the latest value per question is saved 1.5s after the user
-  // stops typing, and every pending save is flushed before submit.
+  // stops typing; per-question ordering/in-flight tracking lives in the
+  // unit-tested saveQueue (client/src/lib/saveQueue.ts), and flush throws on
+  // failure so submit does NOT proceed with unsaved answers.
   const pendingAnswerSavesRef = useRef<Record<string, string>>({});
   const answerSaveTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  const saveQueueRef = useRef(createSaveQueue());
   const [saveError, setSaveError] = useState<string | null>(null);
 
-  const persistAnswer = useCallback(async (questionId: string, answer: string) => {
+  const doSaveAnswer = useCallback(async (questionId: string, answer: string) => {
     if (!attemptId) return;
-    try {
-      await apiRequest('POST', `/api/attempts/${attemptId}/answers`, { questionId, answer });
-      setSaveError(null);
-    } catch (err: any) {
-      // H-12: surface save failures instead of silently dropping answers.
-      setSaveError('Answer auto-save failed — check your connection. Pending answers will be retried on submit.');
-    }
+    await apiRequest('POST', `/api/attempts/${attemptId}/answers`, { questionId, answer });
+    setSaveError(null);
   }, [attemptId]);
+
+  // Re-queue a failed save for retry on the next flush (unless the user typed
+  // a newer value meanwhile, which supersedes it).
+  const requeueFailedSave = (questionId: string, answer: string) => {
+    if (pendingAnswerSavesRef.current[questionId] === undefined) {
+      pendingAnswerSavesRef.current[questionId] = answer;
+    }
+    setSaveError('Answer auto-save failed — check your connection. It will be retried on submit.');
+  };
 
   const handleAnswerChange = (questionId: string, answer: string) => {
     setAnswers(prev => ({ ...prev, [questionId]: answer }));
@@ -592,20 +600,31 @@ export default function TakeTestPage() {
       delete answerSaveTimersRef.current[questionId];
       const latest = pendingAnswerSavesRef.current[questionId];
       delete pendingAnswerSavesRef.current[questionId];
-      if (latest !== undefined) void persistAnswer(questionId, latest);
+      if (latest !== undefined) {
+        saveQueueRef.current.enqueue(questionId, () => doSaveAnswer(questionId, latest))
+          .catch(() => requeueFailedSave(questionId, latest));
+      }
     }, 1500);
   };
 
-  // Flush every pending debounced save and wait for them before submitting,
-  // so answers typed in the final seconds are persisted before grading.
+  // Flush every pending debounced save AND every in-flight save, then throw
+  // if any failed — submit must not proceed with unsaved answers.
   const flushPendingAnswerSaves = useCallback(async () => {
     const timers = Object.values(answerSaveTimersRef.current);
     answerSaveTimersRef.current = {};
     timers.forEach(clearTimeout);
     const pending = { ...pendingAnswerSavesRef.current };
     pendingAnswerSavesRef.current = {};
-    await Promise.all(Object.entries(pending).map(([qid, ans]) => persistAnswer(qid, ans)));
-  }, [persistAnswer]);
+    for (const [qid, ans] of Object.entries(pending)) {
+      saveQueueRef.current.enqueue(qid, () => doSaveAnswer(qid, ans))
+        .catch(() => requeueFailedSave(qid, ans));
+    }
+    const { failed } = await saveQueueRef.current.flush();
+    if (failed.length > 0) {
+      setSaveError('Some answers failed to save — check your connection and try submitting again.');
+      throw new Error(`${failed.length} answer save(s) failed; submission blocked until they persist`);
+    }
+  }, [doSaveAnswer]);
 
   const handleSubmit = () => {
     if (!attempt?.questions) return;
