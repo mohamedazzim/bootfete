@@ -788,6 +788,28 @@ export class DatabaseStorage implements IStorage {
     return answer;
   }
 
+  // Round-2 H16: bulk answer save for the tab-close keepalive flush. One
+  // transaction so a partial write can't strand half the flush; same
+  // conflict target as the single upsert so it stays idempotent.
+  async upsertAnswersBulk(items: Array<{ attemptId: string; questionId: string; answer: string }>): Promise<void> {
+    if (items.length === 0) return;
+    await db.transaction(async (tx) => {
+      for (const data of items) {
+        await tx.insert(answers).values({
+          attemptId: data.attemptId,
+          questionId: data.questionId,
+          answer: data.answer,
+          isCorrect: false,
+          pointsAwarded: 0,
+        })
+          .onConflictDoUpdate({
+            target: [answers.attemptId, answers.questionId],
+            set: { answer: data.answer, answeredAt: new Date() },
+          });
+      }
+    });
+  }
+
   async getReports(): Promise<Report[]> {
     return await db.select().from(reports);
   }
@@ -1687,14 +1709,22 @@ export class DatabaseStorage implements IStorage {
     return registration;
   }
 
-  async getRegistrations(): Promise<any[]> {
+  // Round-2 M4: optional event filter + pagination. The old getRegistrations()
+  // loaded every registration in the database for admin dashboards (50k
+  // rows x team members x 500 students) and /api/event-admin/participants
+  // then filtered in JS. Callers that need everything (exports) keep calling
+  // with no options; the dashboard routes pass limit/offset.
+  async getRegistrations(options?: { eventIds?: string[]; limit?: number; offset?: number }): Promise<any[]> {
     const result = await db.select({
       registration: registrations,
       event: events
     })
       .from(registrations)
       .leftJoin(events, eq(registrations.eventId, events.id))
-      .orderBy(desc(registrations.createdAt));
+      .where(options?.eventIds?.length ? inArray(registrations.eventId, options.eventIds) : undefined)
+      .orderBy(desc(registrations.createdAt))
+      .limit(options?.limit ?? 1000000)
+      .offset(options?.offset ?? 0);
 
     // Fetch team members for each registration
     const registrationIds = result.map(r => r.registration.id);
@@ -1709,6 +1739,14 @@ export class DatabaseStorage implements IStorage {
       event: r.event,
       teamMembers: allTeamMembers.filter(m => m.registrationId === r.registration.id)
     }));
+  }
+
+  // Round-2 M4: total count for paginated admin dashboards (X-Total-Count).
+  async getRegistrationsCount(eventIds?: string[]): Promise<number> {
+    const [row] = await db.select({ count: sql<number>`count(*)::int` })
+      .from(registrations)
+      .where(eventIds?.length ? inArray(registrations.eventId, eventIds) : undefined);
+    return row?.count ?? 0;
   }
 
   async getRegistrationsByEvent(eventId: string): Promise<any[]> {

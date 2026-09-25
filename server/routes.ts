@@ -52,7 +52,18 @@ const questionImageStorage = multer.diskStorage({
   },
   filename: (req, file, cb) => {
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    const ext = path.extname(file.originalname);
+    // Round-2 H19: derive the extension from the validated MIME type, never
+    // from the client-supplied filename. The fileFilter above only lets
+    // image/* mimetypes through, so this map is closed. `photo.svg.exe`
+    // (mimetype image/png, originalname "...svg.exe") used to land on disk
+    // as question-....svg.exe — extension spoofing.
+    const mimeToExt: Record<string, string> = {
+      'image/jpeg': '.jpg',
+      'image/png': '.png',
+      'image/gif': '.gif',
+      'image/webp': '.webp',
+    };
+    const ext = mimeToExt[file.mimetype] || '';
     cb(null, `question-${uniqueSuffix}${ext}`);
   }
 });
@@ -224,6 +235,32 @@ const getClientIp = (req: Request) => {
 }
 
 export async function registerRoutes(app: Express): Promise<Server> {
+  // Round-2 H18: shared answer-body validation for the single and bulk save
+  // endpoints. Untyped/unbounded bodies used to hit the DB directly (10MB
+  // strings per save x 500 students; objects/arrays -> 500s), and questionId
+  // was never verified against the round (junk rows for foreign questions).
+  const MAX_ANSWER_LENGTH = 100_000;
+  async function validateAnswerBody(
+    roundId: string,
+    questionId: unknown,
+    answer: unknown,
+  ): Promise<{ ok: true } | { ok: false; message: string }> {
+    if (typeof questionId !== "string" || questionId.length === 0 || questionId.length > 64) {
+      return { ok: false, message: "questionId must be a non-empty string" };
+    }
+    if (typeof answer !== "string") {
+      return { ok: false, message: "answer must be a string" };
+    }
+    if (answer.length > MAX_ANSWER_LENGTH) {
+      return { ok: false, message: `answer exceeds maximum length of ${MAX_ANSWER_LENGTH} characters` };
+    }
+    const question = await storage.getQuestion(questionId);
+    if (!question || question.roundId !== roundId) {
+      return { ok: false, message: "questionId does not belong to this round" };
+    }
+    return { ok: true };
+  }
+
   app.get("/api/health", (_req, res) => {
     res.json({ status: "ok", message: "BootFete 2K26 API is running" });
   });
@@ -2256,6 +2293,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (!questions || !Array.isArray(questions) || questions.length === 0) {
           return res.status(400).json({ message: "Questions array is required and must not be empty" })
         }
+        // Round-2 M5: unbounded — one admin request could insert 10k rows.
+        // The 200-question batches already in the UI fit comfortably inside
+        // this cap (a real exam round rarely exceeds 100).
+        if (questions.length > 200) {
+          return res.status(400).json({ message: "A maximum of 200 questions per bulk import is allowed" })
+        }
 
         const errors: string[] = []
         const createdQuestions = []
@@ -2310,6 +2353,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     "/api/events/:eventId/participants",
     requireAuth,
     requireParticipant,
+    examApiLimiter,
     async (req: AuthRequest, res: Response) => {
       try {
         const participant = await storage.registerParticipant({
@@ -2531,6 +2575,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Access denied" })
       }
 
+      // Round-2 H17: event admins are event-scoped — without this check an
+      // event_admin could read any attempt from any event by guessing its
+      // UUID. (Participants self-check above; super_admin is global.)
+      if (req.user!.role === "event_admin") {
+        const roundForScope = await storage.getRound(attempt.roundId)
+        const myEvents = await storage.getEventsByAdmin(req.user!.id)
+        if (!roundForScope || !myEvents.some((e: any) => e.id === roundForScope.eventId)) {
+          return res.status(403).json({ message: "Access denied" })
+        }
+      }
+
       // Get round and questions
       const round = await storage.getRound(attempt.roundId)
       const questions = await storage.getQuestionsByRound(attempt.roundId)
@@ -2636,6 +2691,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return res.status(403).json({ message: "Test is currently paused by admin" });
         }
 
+        // Round-2 H18: validate body shape + round membership before touching the DB.
+        const validation = await validateAnswerBody(attempt.roundId, questionId, answer);
+        if (!validation.ok) {
+          return res.status(400).json({ message: validation.message });
+        }
+
         // H-15: atomic upsert on (attempt_id, question_id) — the old
         // find-then-insert/update raced under concurrent saves.
         const savedAnswer = await storage.upsertAnswer({ attemptId, questionId, answer })
@@ -2643,6 +2704,65 @@ export async function registerRoutes(app: Express): Promise<Server> {
         res.json(savedAnswer)
       } catch (error) {
         console.error("Save answer error:", error)
+        res.status(500).json({ message: "Internal server error" })
+      }
+    },
+  )
+
+  // Round-2 H16: bulk answer save for the tab-close keepalive flush
+  // (navigator.sendBeacon can't carry the Bearer header, so the client uses a
+  // keepalive fetch — one request, idempotent upserts, same guards as the
+  // single-answer endpoint).
+  app.post(
+    "/api/attempts/:attemptId/answers/bulk",
+    requireAuth,
+    requireParticipant,
+    examApiLimiter,
+    async (req: AuthRequest, res: Response) => {
+      try {
+        const { attemptId } = req.params
+        const { answers } = req.body
+
+        if (!Array.isArray(answers) || answers.length === 0 || answers.length > 200) {
+          return res.status(400).json({ message: "answers must be a non-empty array of at most 200 items" })
+        }
+
+        const attempt = await storage.getTestAttempt(attemptId)
+        if (!attempt) {
+          return res.status(404).json({ message: "Test attempt not found" })
+        }
+
+        if (attempt.userId !== req.user!.id) {
+          return res.status(403).json({ message: "Access denied" })
+        }
+
+        if (attempt.status !== "in_progress") {
+          return res.status(400).json({ message: "Test is not in progress" })
+        }
+
+        const round = await storage.getRound(attempt.roundId);
+        if (round && round.status === 'paused') {
+          return res.status(403).json({ message: "Test is currently paused by admin" });
+        }
+
+        for (const item of answers) {
+          const validation = await validateAnswerBody(attempt.roundId, item?.questionId, item?.answer);
+          if (!validation.ok) {
+            return res.status(400).json({ message: `Invalid answer entry: ${validation.message}` });
+          }
+        }
+
+        await storage.upsertAnswersBulk(
+          answers.map((item: { questionId: string; answer: string }) => ({
+            attemptId,
+            questionId: item.questionId,
+            answer: item.answer,
+          })),
+        )
+
+        res.json({ saved: answers.length })
+      } catch (error) {
+        console.error("Bulk save answers error:", error)
         res.status(500).json({ message: "Internal server error" })
       }
     },
@@ -3405,7 +3525,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ============ NEW TEAM-BASED REGISTRATION ENDPOINTS ============
 
   // Validate a roll number for registration
-  app.post("/api/validate-rollno", async (req: Request, res: Response) => {
+  // Round-2 H20: unauthenticated enumeration oracle — rate limit it. The
+  // batch-registration cap (H2) is the structural fix; this stops raw
+  // high-speed probing.
+  app.post("/api/validate-rollno", publicApiLimiter, async (req: Request, res: Response) => {
     try {
       const { rollNo, eventId } = req.body
 
@@ -3444,7 +3567,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
   })
 
   // Check registration status for a student  
-  app.post("/api/check-registration-status", async (req: Request, res: Response) => {
+  // Round-2 H20: unauthenticated status oracle — rate limit it. Note the
+  // response still leaks the event name/department of a roll number's
+  // registration (accepted design risk; limiter is the mitigation).
+  app.post("/api/check-registration-status", publicApiLimiter, async (req: Request, res: Response) => {
     try {
       const { rollNo, eventId } = req.body
 
@@ -3508,11 +3634,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Forbidden" })
       }
 
+      // Round-2 M4: paginate. The old handler returned every registration in
+      // the DB (plus team members) in one response. Page cache keys are
+      // namespaced per page; total rides on X-Total-Count so the array shape
+      // the dashboard consumes is unchanged.
+      const page = Math.max(1, parseInt(req.query.page as string, 10) || 1)
+      const pageSize = Math.min(200, Math.max(1, parseInt(req.query.pageSize as string, 10) || 50))
       const registrations = await cacheService.get(
-        'registrations:all',
-        () => storage.getRegistrations(),
+        `registrations:page:${page}:${pageSize}`,
+        () => storage.getRegistrations({ limit: pageSize, offset: (page - 1) * pageSize }),
         300 // 5 minutes TTL - registrations change frequently
       )
+      const total = await storage.getRegistrationsCount()
+      res.setHeader("X-Total-Count", String(total))
       res.json(registrations)
     } catch (error) {
       console.error("Get registrations error:", error)
@@ -3529,10 +3663,37 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const { id } = req.params;
-      const updates = req.body;
+
+      // Round-2 H3: mass assignment. The old code passed req.body straight to
+      // updateRegistration — an admin with a tampered client could rewrite
+      // status, eventId, teamId, confirmedAt/confirmedBy, etc. Only the
+      // editable contact/paper fields are accepted here; status changes go
+      // through the confirm/cancel endpoints (which enforce CAS + emails).
+      const ALLOWED_UPDATE_FIELDS = [
+        "organizerName",
+        "organizerEmail",
+        "organizerDept",
+        "organizerCollege",
+        "organizerPhone",
+        "organizerFoodType",
+        "paperTopic",
+      ] as const;
+      const body = req.body || {};
+      const unknownFields = Object.keys(body).filter(
+        (k) => !(ALLOWED_UPDATE_FIELDS as readonly string[]).includes(k)
+      );
+      if (unknownFields.length > 0) {
+        return res.status(400).json({
+          message: `Fields not editable via this endpoint: ${unknownFields.join(", ")}`,
+        });
+      }
+      const updates: Record<string, unknown> = {};
+      for (const key of ALLOWED_UPDATE_FIELDS) {
+        if (body[key] !== undefined) updates[key] = body[key];
+      }
 
       // Basic validation
-      if (!updates || Object.keys(updates).length === 0) {
+      if (Object.keys(updates).length === 0) {
         return res.status(400).json({ message: "No updates provided" });
       }
 
@@ -3962,11 +4123,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
   })
 
   // Batch registration for consolidated emails
-  app.post("/api/register/batch", async (req: Request, res: Response) => {
+  // Round-2 H2: unauthenticated endpoint — previously unbounded. The rate
+  // limiter is the only abuse control here, and the 10-registration cap
+  // keeps one request from registering a whole class (or flooding emails).
+  app.post("/api/register/batch", publicApiLimiter, async (req: Request, res: Response) => {
     try {
       const { registrations } = req.body
       if (!registrations || !Array.isArray(registrations) || registrations.length === 0) {
         return res.status(400).json({ message: "Registrations array is required" })
+      }
+      if (registrations.length > 10) {
+        return res.status(400).json({ message: "A maximum of 10 registrations per request is allowed" })
       }
 
       const results = []
@@ -4553,6 +4720,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!registrationIds || !Array.isArray(registrationIds) || registrationIds.length === 0) {
         return res.status(400).json({ message: "registrationIds array is required" })
       }
+      // Round-2 H4: unbounded — one request could kick off thousands of
+      // credential creations and email jobs.
+      if (registrationIds.length > 50) {
+        return res.status(400).json({ message: "A maximum of 50 registrations per bulk-confirm request is allowed" })
+      }
 
       const results = []
       const errors = []
@@ -4566,9 +4738,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
             continue
           }
 
-          if (registration.status !== 'pending') {
-            // Already confirmed, skip
-            continue
+          // Round-2 H4: flip the status FIRST via the CAS'd confirm. The old
+          // code created users, generated credentials, and QUEUED THE EMAILS
+          // before the status flip — a concurrent confirm between the
+          // read-check and confirmRegistration() double-sent credentials.
+          // The CAS is authoritative: losing it means someone else already
+          // confirmed this row, so we skip all side effects.
+          let updated
+          try {
+            updated = await storage.confirmRegistration(id, user.id)
+          } catch (casErr: any) {
+            if (casErr && /not in pending state/i.test(casErr.message)) {
+              continue // already confirmed by a concurrent admin — skip
+            }
+            throw casErr
           }
 
           // Get event
@@ -4675,8 +4858,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
             }
           }
 
-          // Confirm the registration
-          const updated = await storage.confirmRegistration(id, user.id)
+          // Round-2 H4: `updated` is the CAS'd row from the top of the loop —
+          // the flip already happened before any side effect.
           results.push(updated)
 
           // Notify WebSocket
@@ -4957,14 +5140,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Get participant details
   app.get("/api/participants/:id", requireAuth, async (req: AuthRequest, res: Response) => {
     try {
-      // Check access
-      if (req.user!.role === 'participant' && req.user!.id !== req.params.id) {
-        // Participants can only view their own details, unless they are viewing via an event context
-        // But this endpoint is generic by participant ID (which is a UUID)
-        // Actually, the ID here is likely the participant record ID, not user ID
-        // Let's check the implementation of getParticipant
-      }
-
       const participantId = req.params.id;
       const participant = await cacheService.get(
         `participant:${participantId}`,
@@ -4976,7 +5151,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "Participant not found" });
       }
 
-      // Additional access check if needed based on participant.userId
+      // Round-2 H1: real authorization. The old `if` block was empty — every
+      // logged-in user could enumerate participant UUIDs and dump PII. A
+      // participant may read only their own record; admins keep access.
+      const isSelf = participant.userId === req.user!.id;
+      const isAdmin = req.user!.role === "super_admin" || req.user!.role === "event_admin" || req.user!.role === "registration_committee";
+      if (!isSelf && !isAdmin) {
+        return res.status(403).json({ message: "Access denied" });
+      }
 
       res.json(participant);
     } catch (error) {
@@ -7059,9 +7241,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.json([])
       }
 
-      // Get all registrations for these events
-      const allRegistrations = await storage.getRegistrations()
-      const relevantRegistrations = allRegistrations.filter(r => eventIds.includes(r.eventId))
+      // Round-2 M4: filter by event in SQL + paginate. The old code loaded
+      // every registration in the database and filtered in JS.
+      const page = Math.max(1, parseInt(req.query.page as string, 10) || 1)
+      const pageSize = Math.min(200, Math.max(1, parseInt(req.query.pageSize as string, 10) || 50))
+      const relevantRegistrations = await storage.getRegistrations({
+        eventIds,
+        limit: pageSize,
+        offset: (page - 1) * pageSize,
+      })
+      const total = await storage.getRegistrationsCount(eventIds)
+      res.setHeader("X-Total-Count", String(total))
 
       // Fetch all credentials for these events to map them
       let allCredentials: any[] = [];
