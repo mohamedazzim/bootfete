@@ -391,6 +391,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const from = emailService.getFromAddress();
       const activeProvider = emailService.getActiveProvider();
+      // QA-1102 (certified): notification preferences are DB-persisted in
+      // system_settings, surviving backend restarts.
+      const DEFAULT_NOTIFICATIONS = {
+        emailNotifications: true,
+        registrationNotifications: true,
+        eventUpdates: true,
+        systemAlerts: true,
+      };
+      const stored = await storage.getSystemSetting('notifications');
+      const notifications = { ...DEFAULT_NOTIFICATIONS, ...(stored || {}) };
       res.json({
         email: {
           provider: activeProvider,
@@ -398,10 +408,57 @@ export async function registerRoutes(app: Express): Promise<Server> {
           host: activeProvider === 'brevo' ? 'api.brevo.com' : 'api.resend.com',
           user: activeProvider,
           from: `${from.name} <${from.email}>`,
-        }
+        },
+        notifications,
       })
     } catch (error) {
       console.error("Get system settings error:", error)
+      res.status(500).json({ message: "Internal server error" })
+    }
+  })
+
+  // QA-1102: Real settings save endpoint — DB-persisted (certified).
+  app.patch("/api/admin/system-settings", requireAuth, requireSuperAdmin, async (req: AuthRequest, res: Response) => {
+    try {
+      const { notifications } = req.body;
+
+      if (!notifications || typeof notifications !== 'object') {
+        return res.status(400).json({ message: "notifications object is required" });
+      }
+
+      const allowedKeys = ['emailNotifications', 'registrationNotifications', 'eventUpdates', 'systemAlerts'];
+      const sanitized: Record<string, boolean> = {};
+      for (const key of allowedKeys) {
+        if (key in notifications) {
+          if (typeof notifications[key] !== 'boolean') {
+            return res.status(400).json({ message: `${key} must be a boolean` });
+          }
+          sanitized[key] = notifications[key];
+        }
+      }
+
+      if (Object.keys(sanitized).length === 0) {
+        return res.status(400).json({ message: "No valid notification settings provided" });
+      }
+
+      // Persist to PostgreSQL — survives restarts (certification requirement).
+      const stored = await storage.getSystemSetting('notifications');
+      const merged = {
+        emailNotifications: true,
+        registrationNotifications: true,
+        eventUpdates: true,
+        systemAlerts: true,
+        ...(stored || {}),
+        ...sanitized,
+      };
+      await storage.setSystemSetting('notifications', merged, req.user!.id);
+
+      res.json({
+        message: "Settings saved successfully",
+        notifications: merged,
+      });
+    } catch (error) {
+      console.error("Save system settings error:", error)
       res.status(500).json({ message: "Internal server error" })
     }
   })
@@ -670,6 +727,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
             const { credential, event, rounds, eventRules, activeRoundRules } = data;
 
+            // QA-607: Include participant status so UI can show disqualification banner
+            const participantRecord = await storage.getParticipantByUserAndEvent(user.id, eventId);
+
             return {
               credential: {
                 id: credential.id,
@@ -677,6 +737,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
                 testEnabled: credential.testEnabled,
                 enabledAt: credential.enabledAt,
               },
+              // QA-607: participant status for disqualification UX
+              participantStatus: participantRecord?.status || 'registered',
               event: {
                 id: event.id,
                 name: event.name,
@@ -2500,6 +2562,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return res.status(403).json({ message: "You are not registered for this event" })
         }
 
+        // QA-607: Disqualified participants cannot start new attempts
+        if (participantRecord.status === 'disqualified') {
+          return res.status(403).json({
+            message: 'You have been disqualified and cannot start new tests',
+            code: 'PARTICIPANT_DISQUALIFIED',
+          })
+        }
+
         // Check if user already has an attempt for this round
         const existingAttempt = await storage.getTestAttemptByUserAndRound(userId, roundId)
         if (existingAttempt) {
@@ -2602,6 +2672,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const attempt = await storage.getTestAttempt(req.params.attemptId)
       if (!attempt) {
         return res.status(404).json({ message: "Test attempt not found" })
+      }
+
+      // QA-204: Registration committee has NO access to attempt details.
+      // Default-deny: committee users have no legitimate need for attempt data.
+      if (req.user!.role === "registration_committee") {
+        return res.status(403).json({ message: "Access denied" })
       }
 
       // Only allow user to view their own attempt or admins
@@ -2720,6 +2796,73 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return res.status(400).json({ message: "Test is not in progress" })
         }
 
+        // CERTIFICATION FIX (QA-607): Disqualified participants cannot submit
+        // answers even if an attempt is still marked in_progress (e.g. mid-session
+        // disqualification where the attempt row was not yet updated, or a
+        // non-atomic disqualification left the attempt stale). The participant
+        // record is the authority.
+        // QA-607 FAIL-CLOSED: If the disqualification check cannot be completed
+        // (DB error, missing round/participant), reject the request. Never
+        // continue on a failed security check.
+        try {
+          const ansRound = await storage.getRound(attempt.roundId);
+          if (!ansRound) {
+            return res.status(503).json({
+              message: "Unable to verify eligibility. Please try again.",
+              code: "ELIGIBILITY_CHECK_FAILED",
+            });
+          }
+          const ansParticipant = await storage.getParticipantByUserAndEvent(req.user!.id, ansRound.eventId);
+          if (!ansParticipant) {
+            return res.status(503).json({
+              message: "Unable to verify eligibility. Please try again.",
+              code: "ELIGIBILITY_CHECK_FAILED",
+            });
+          }
+          if (ansParticipant.status === "disqualified") {
+            return res.status(403).json({
+              message: "You have been disqualified and cannot submit answers",
+              code: "PARTICIPANT_DISQUALIFIED",
+            });
+          }
+        } catch (dqErr) {
+          console.error("Disqualification check error:", dqErr);
+          return res.status(503).json({
+            message: "Unable to verify eligibility. Please try again.",
+            code: "ELIGIBILITY_CHECK_FAILED",
+          });
+        }
+
+        // QA-601: Server-side timer enforcement for bulk saves.
+        try {
+          const { assertAttemptNotExpired } = await import("./services/examTimerService.js");
+          await assertAttemptNotExpired(attemptId);
+        } catch (timerErr: any) {
+          if (timerErr.name === "AttemptExpiredError") {
+            return res.status(403).json({
+              message: timerErr.message,
+              code: "ATTEMPT_EXPIRED",
+            });
+          }
+          throw timerErr;
+        }
+
+        // Bulk answer save continues below
+
+        // QA-601: Server-side timer enforcement. Reject answers after deadline.
+        try {
+          const { assertAttemptNotExpired } = await import("./services/examTimerService.js");
+          await assertAttemptNotExpired(attemptId);
+        } catch (timerErr: any) {
+          if (timerErr.name === "AttemptExpiredError") {
+            return res.status(403).json({
+              message: timerErr.message,
+              code: "ATTEMPT_EXPIRED",
+            });
+          }
+          throw timerErr;
+        }
+
         const round = await storage.getRound(attempt.roundId);
         if (round && round.status === 'paused') {
           return res.status(403).json({ message: "Test is currently paused by admin" });
@@ -2779,6 +2922,36 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return res.status(403).json({ message: "Test is currently paused by admin" });
         }
 
+        // QA-607 FAIL-CLOSED: Disqualified participants cannot submit answers
+        // via bulk endpoint. If the check cannot be completed, reject.
+        try {
+          if (!round) {
+            return res.status(503).json({
+              message: "Unable to verify eligibility. Please try again.",
+              code: "ELIGIBILITY_CHECK_FAILED",
+            });
+          }
+          const bulkParticipant = await storage.getParticipantByUserAndEvent(req.user!.id, round.eventId);
+          if (!bulkParticipant) {
+            return res.status(503).json({
+              message: "Unable to verify eligibility. Please try again.",
+              code: "ELIGIBILITY_CHECK_FAILED",
+            });
+          }
+          if (bulkParticipant.status === "disqualified") {
+            return res.status(403).json({
+              message: "You have been disqualified and cannot submit answers",
+              code: "PARTICIPANT_DISQUALIFIED",
+            });
+          }
+        } catch (dqErr) {
+          console.error("Disqualification check error:", dqErr);
+          return res.status(503).json({
+            message: "Unable to verify eligibility. Please try again.",
+            code: "ELIGIBILITY_CHECK_FAILED",
+          });
+        }
+
         for (const item of answers) {
           const validation = await validateAnswerBody(attempt.roundId, item?.questionId, item?.answer);
           if (!validation.ok) {
@@ -2825,6 +2998,37 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return res.status(400).json({ message: "Test is not in progress" })
         }
 
+        // QA-607 FAIL-CLOSED: Disqualified participants cannot post violations.
+        // If the check cannot be completed, reject.
+        try {
+          const vRound = await storage.getRound(attempt.roundId);
+          if (!vRound) {
+            return res.status(503).json({
+              message: "Unable to verify eligibility. Please try again.",
+              code: "ELIGIBILITY_CHECK_FAILED",
+            });
+          }
+          const vParticipant = await storage.getParticipantByUserAndEvent(req.user!.id, vRound.eventId);
+          if (!vParticipant) {
+            return res.status(503).json({
+              message: "Unable to verify eligibility. Please try again.",
+              code: "ELIGIBILITY_CHECK_FAILED",
+            });
+          }
+          if (vParticipant.status === "disqualified") {
+            return res.status(403).json({
+              message: "You have been disqualified",
+              code: "PARTICIPANT_DISQUALIFIED",
+            });
+          }
+        } catch (dqErr) {
+          console.error("Disqualification check error:", dqErr);
+          return res.status(503).json({
+            message: "Unable to verify eligibility. Please try again.",
+            code: "ELIGIBILITY_CHECK_FAILED",
+          });
+        }
+
         const violationLogs = (attempt.violationLogs as any[]) || []
         const now = new Date()
 
@@ -2842,6 +3046,40 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Round-2 H8: atomic single-statement append + counter bump. The old
         // read-push-write lost strikes under concurrent violations.
         const updatedAttempt = await storage.logViolation(attemptId, type)
+
+        // QA-609: Server-side proctoring threshold enforcement.
+        // The server owns elimination — never trust the client to call disqualify.
+        const violationCount = (updatedAttempt?.violationLogs as any[])?.length || 0
+        const roundForThreshold = await storage.getRound(attempt.roundId)
+        // Default threshold: 3 violations (configurable per round if roundRules exists)
+        const threshold = (roundForThreshold as any)?.violationThreshold || 3
+
+        if (updatedAttempt && violationCount >= threshold && updatedAttempt.status === 'in_progress') {
+          // Atomically disqualify: mark attempt, prevent further mutations
+          await storage.updateTestAttempt(attemptId, {
+            status: 'disqualified',
+            submittedAt: new Date(),
+            completedAt: new Date(),
+          } as any)
+
+          // Also mark participant as disqualified for this event
+          const participant = await storage.getParticipantByUserAndEvent(
+            attempt.userId,
+            roundForThreshold!.eventId
+          )
+          if (participant) {
+            await storage.updateParticipantStatus(participant.id, 'disqualified')
+          }
+
+          const disqualifiedAttempt = await storage.getTestAttempt(attemptId)
+          return res.status(403).json({
+            message: 'Disqualified: violation threshold exceeded',
+            code: 'VIOLATION_THRESHOLD_EXCEEDED',
+            violations: violationCount,
+            threshold,
+            attempt: disqualifiedAttempt,
+          })
+        }
 
         res.json(updatedAttempt)
       } catch (error) {
@@ -2873,24 +3111,69 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return res.status(400).json({ message: "Test is already submitted" })
         }
 
-        // Check if participant is disqualified
-        const round = await storage.getRound(attempt.roundId);
-        if (round) {
-          const participant = await storage.getParticipantByUserAndEvent(req.user!.id, round.eventId);
-          if (participant?.status === "disqualified") {
-            const updatedAttempt = await storage.updateTestAttempt(attemptId, {
-              status: "disqualified",
-              submittedAt: new Date(),
-              completedAt: new Date(),
-              totalScore: 0,
-            });
-            await cacheService.deletePattern('leaderboard:*');
-            return res.json({
-              message: "Test submitted (disqualified)",
-              attempt: updatedAttempt,
-              totalScore: null,
+        // QA-601: Server-side timer enforcement on submit.
+        // If expired, auto-submit with existing answers (graceful) rather than rejecting.
+        try {
+          const { assertAttemptNotExpired } = await import("./services/examTimerService.js");
+          await assertAttemptNotExpired(attemptId);
+        } catch (timerErr: any) {
+          if (timerErr.name === "AttemptExpiredError") {
+            // Auto-submit expired attempt with already-saved answers
+            const { storage: s } = await import("./storage.js");
+            const expiredAttempt = await s.getTestAttempt(attemptId);
+            if (expiredAttempt && expiredAttempt.status === "expired") {
+              return res.status(200).json({
+                message: "Test auto-submitted on expiry",
+                code: "ATTEMPT_EXPIRED_AUTOSUBMIT",
+                attempt: expiredAttempt,
+              });
+            }
+            return res.status(403).json({
+              message: timerErr.message,
+              code: "ATTEMPT_EXPIRED",
             });
           }
+          throw timerErr;
+        }
+
+        // QA-607: Disqualified participants cannot submit. Perform the terminal
+        // state transition (in_progress -> disqualified, score 0) for state-machine
+        // completeness, but return 403 — the submit operation itself is rejected.
+        // This keeps answer/violation/submit consistent: all 403 for disqualified.
+        let dqCheckFailed = false;
+        try {
+          const round = await storage.getRound(attempt.roundId);
+          if (!round) {
+            dqCheckFailed = true;
+          } else {
+            const participant = await storage.getParticipantByUserAndEvent(req.user!.id, round.eventId);
+            if (!participant) {
+              dqCheckFailed = true;
+            } else if (participant.status === "disqualified") {
+              const updatedAttempt = await storage.updateTestAttempt(attemptId, {
+                status: "disqualified",
+                submittedAt: new Date(),
+                completedAt: new Date(),
+                totalScore: 0,
+              });
+              await cacheService.deletePattern('leaderboard:*');
+              return res.status(403).json({
+                message: "You have been disqualified and cannot submit this test",
+                code: "PARTICIPANT_DISQUALIFIED",
+                attempt: updatedAttempt,
+              });
+            }
+          }
+        } catch (dqErr) {
+          console.error("Disqualification check error on submit:", dqErr);
+          dqCheckFailed = true;
+        }
+        // FAIL-CLOSED: if we could not verify disqualification status, reject.
+        if (dqCheckFailed) {
+          return res.status(503).json({
+            message: "Unable to verify eligibility. Please try again.",
+            code: "ELIGIBILITY_CHECK_FAILED",
+          });
         }
 
         // Get questions and answers to calculate score
@@ -3066,13 +3349,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get("/api/events/:eventId/leaderboard", requireAuth, async (req: AuthRequest, res: Response) => {
+  app.get("/api/events/:eventId/leaderboard", requireAuth, requireEventAdminOrSuperAdmin, async (req: AuthRequest, res: Response) => {
     try {
       const { eventId } = req.params;
       const event = await storage.getEvent(eventId);
 
       if (!event) {
         return res.status(404).json({ message: "Event not found" });
+      }
+
+      // QA-LEADERBOARD-XEVENT: Event admins are event-scoped.
+      // Even for empty events, cross-event access must be denied.
+      if (req.user!.role === "event_admin") {
+        const myEvents = await storage.getEventsByAdmin(req.user!.id);
+        if (!myEvents.some((e: any) => e.id === eventId)) {
+          return res.status(403).json({ message: "Access denied" });
+        }
       }
 
       const rounds = await storage.getRoundsByEvent(eventId);
@@ -5097,14 +5389,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
           })
         }
 
-        res.status(201).json({
+        // QA-202: One-time credential reveal. Never cache this response.
+        res.status(201)
+          .set('Cache-Control', 'no-store, no-cache, must-revalidate, private')
+          .set('Pragma', 'no-cache')
+          .json({
           participant: {
             id: newUser.id,
             fullName: newUser.fullName,
             email: newUser.email,
             phone: newUser.phone,
           },
+          // QA-202: _oneTimeReveal signals UI to display once and clear.
+          // Plaintext exists ONLY here — never in lists/exports/DB reads.
           mainCredentials: {
+            _oneTimeReveal: true,
             username: newUser.username,
             password: password,
             email: newUser.email,
@@ -5130,9 +5429,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
     async (req: AuthRequest, res: Response) => {
       try {
         const user = req.user!
-        const filterMy = req.query.my === 'true';
-        const participants = await storage.getOnSpotParticipantsByCreator(filterMy ? user.id : undefined)
-        res.json(participants)
+        // QA-XCOMMITTEE: Backend enforces creator-scope by default.
+        // Committee users see ONLY their own on-spot participants.
+        // The ?my= query param cannot escalate scope — it is ignored for auth.
+        // Superadmin uses a separate admin endpoint for global access.
+        // CERTIFICATION FIX: strip password hashes at the serialization layer —
+        // credential hashes must never leave the backend in list responses.
+        const participants = await storage.getOnSpotParticipantsByCreator(user.id)
+        res.json(participants.map((p: any) => {
+          const { password, ...safe } = p;
+          return safe;
+        }))
       } catch (error) {
         console.error("Get on-spot participants error:", error)
         res.status(500).json({ message: "Internal server error" })
@@ -5251,11 +5558,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
     async (req: AuthRequest, res: Response) => {
       try {
         const user = req.user!
-        const filterMy = req.query.my === 'true';
-        const participants = await storage.getOnSpotParticipantsByCreator(filterMy ? user.id : undefined)
+        // CERTIFICATION FIX: committee export is ALWAYS creator-scoped.
+        // The ?my= query param is ignored for auth (same policy as the list endpoint).
+        // CERTIFICATION FIX: password/hash column REMOVED from export.
+        const participants = await storage.getOnSpotParticipantsByCreator(user.id)
 
         const csvRows: string[] = []
-        csvRows.push("Participant Name,Email,Phone,Event Name,Username,Password")
+        csvRows.push("Participant Name,Email,Phone,Event Name,Username")
 
         for (const participant of participants) {
           const { fullName, email, phone, eventCredentials } = participant
@@ -5265,17 +5574,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
               const phoneValue = phone || ""
               const eventName = credential.event.name
               const username = credential.eventUsername
-              const password = credential.eventPassword
 
               const escapedFullName = `"${fullName.replace(/"/g, '""')}"`
               const escapedEmail = `"${email.replace(/"/g, '""')}"`
               const escapedPhone = `"${phoneValue.replace(/"/g, '""')}"`
               const escapedEventName = `"${eventName.replace(/"/g, '""')}"`
               const escapedUsername = `"${username.replace(/"/g, '""')}"`
-              const escapedPassword = `"${password.replace(/"/g, '""')}"`
 
               csvRows.push(
-                `${escapedFullName},${escapedEmail},${escapedPhone},${escapedEventName},${escapedUsername},${escapedPassword}`,
+                `${escapedFullName},${escapedEmail},${escapedPhone},${escapedEventName},${escapedUsername}`,
               )
             }
           }
@@ -5300,17 +5607,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
     async (req: AuthRequest, res: Response) => {
       try {
         const user = req.user!
-        const filterMy = req.query.my === 'true';
-        const participants = await storage.getOnSpotParticipantsByCreator(filterMy ? user.id : undefined)
+        // CERTIFICATION FIX: committee PDF export is ALWAYS creator-scoped
+        // (the ?my= query param is ignored for auth) and the password/hash
+        // column is REMOVED — credential hashes must never appear in exports.
+        const participants = await storage.getOnSpotParticipantsByCreator(user.id)
 
         const doc = new PDFDocument({ margin: 50, size: "A4", layout: "landscape" })
 
         res.setHeader("Content-Type", "application/pdf")
-        res.setHeader("Content-Disposition", 'attachment; filename="participants-credentials.pdf"')
+        res.setHeader("Content-Disposition", 'attachment; filename="participants.pdf"')
 
         doc.pipe(res)
 
-        doc.fontSize(20).font("Helvetica-Bold").text("Participant Credentials - BootFete 2K26", { align: "center" })
+        doc.fontSize(20).font("Helvetica-Bold").text("Participants - BootFete 2K26", { align: "center" })
         doc.moveDown(0.5)
 
         const generatedDate = new Date().toLocaleString("en-US", {
@@ -5321,7 +5630,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         doc.moveDown(1.5)
 
         const tableTop = doc.y
-        const colWidths = [120, 150, 80, 120, 120, 100]
+        const colWidths = [150, 170, 100, 150, 170]
         const rowHeight = 25
         let currentY = tableTop
 
@@ -5346,10 +5655,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
           xPos += colWidths[3]
           doc.rect(xPos, y, colWidths[4], rowHeight).fillAndStroke("#4A5568", "#000")
           doc.fillColor("#FFF").text("Username", xPos + 5, y + 8, { width: colWidths[4] - 10 })
-
-          xPos += colWidths[4]
-          doc.rect(xPos, y, colWidths[5], rowHeight).fillAndStroke("#4A5568", "#000")
-          doc.fillColor("#FFF").text("Password", xPos + 5, y + 8, { width: colWidths[5] - 10 })
 
           return y + rowHeight
         }
@@ -5397,12 +5702,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
               doc
                 .fillColor("#000")
                 .text(credential.eventUsername, xPos + 5, currentY + 8, { width: colWidths[4] - 10, ellipsis: true })
-
-              xPos += colWidths[4]
-              doc.rect(xPos, currentY, colWidths[5], rowHeight).fillAndStroke(bgColor, "#000")
-              doc
-                .fillColor("#000")
-                .text(credential.eventPassword, xPos + 5, currentY + 8, { width: colWidths[5] - 10, ellipsis: true })
 
               currentY += rowHeight
               rowIndex++
@@ -5516,11 +5815,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       doc.fontSize(11).font("Helvetica")
       doc.fillColor("#4A5568").text("Username:", 40, yPos, { continued: true })
       doc.fillColor("#000").font("Helvetica-Bold").text(` ${credential.eventUsername}`, { continued: false })
-      yPos += 25
-
-      doc.fillColor("#4A5568").font("Helvetica").text("Password:", 40, yPos, { continued: true })
-      doc.fillColor("#000").font("Helvetica-Bold").text(` ${credential.eventPassword}`, { continued: false })
       yPos += 30
+      // CERTIFICATION FIX: password hash REMOVED from ID pass — credential
+      // hashes must never appear in generated documents.
 
       doc.strokeColor("#E2E8F0").moveTo(40, yPos).lineTo(360, yPos).stroke()
       yPos += 20
@@ -7201,9 +7498,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         allData.push(...creds);
       }
 
-      // Generate CSV
+      // Generate CSV — CERTIFICATION FIX: password/hash column REMOVED.
+      // Event password hashes must never appear in exports (offline brute-force risk).
+      // Credential distribution uses the one-time reveal at creation, not exports.
       const csvRows = [
-        ['Event Name', 'Participant Name', 'Roll No', 'Email', 'Username', 'Password', 'Test Enabled', 'Paper Topic']
+        ['Event Name', 'Participant Name', 'Roll No', 'Email', 'Username', 'Test Enabled', 'Paper Topic']
       ];
 
       for (const item of allData) {
@@ -7213,7 +7512,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
           `"${item.realRollNo}"`,
           `"${item.participant.email}"`,
           `"${item.eventUsername}"`,
-          `"${item.eventPassword}"`,
           item.testEnabled ? 'Yes' : 'No',
           `"${item.paperTopic || ''}"`
         ]);
@@ -7298,10 +7596,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
           },
           event: registration.event,
           teamMembers: registration.teamMembers,
-          // Attach credentials
+          // Attach credentials (CERTIFICATION FIX: password hash REMOVED)
           credentials: credential ? {
             username: credential.eventUsername,
-            password: credential.eventPassword,
             rollNo: credential.realRollNo
           } : null
         };

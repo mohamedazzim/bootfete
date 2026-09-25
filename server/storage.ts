@@ -1,6 +1,6 @@
 import { eq, ne, and, desc, asc, sql, gte, lte, or, inArray, isNull } from 'drizzle-orm';
 import { db } from './db';
-import { users, events, eventAdmins, eventRules, rounds, roundRules, questions, participants, testAttempts, answers, reports, registrationForms, registrations, teamMembers, eventCredentials, auditLogs, emailLogs, participantRegistry, manualRoundEntries, eventWinners } from '@shared/schema';
+import { users, events, eventAdmins, eventRules, rounds, roundRules, questions, participants, testAttempts, answers, reports, registrationForms, registrations, teamMembers, eventCredentials, auditLogs, emailLogs, participantRegistry, manualRoundEntries, eventWinners, systemSettings } from '@shared/schema';
 import type { User, InsertUser, Event, InsertEvent, EventRules, InsertEventRules, Round, InsertRound, RoundRules, InsertRoundRules, Question, InsertQuestion, Participant, InsertParticipant, TestAttempt, InsertTestAttempt, Answer, InsertAnswer, Report, InsertReport, RegistrationForm, InsertRegistrationForm, Registration, InsertRegistration, TeamMember, InsertTeamMember, EventCredential, InsertEventCredential, AuditLog, InsertAuditLog, EmailLog, InsertEmailLog, ParticipantRegistry, InsertParticipantRegistry, FoodType, ManualRoundEntry, InsertManualRoundEntry, EventWinner, InsertEventWinner } from '@shared/schema';
 import { normalizeDepartment } from './lib/departmentUtils';
 
@@ -178,6 +178,9 @@ export interface IStorage {
   createAuditLog(log: InsertAuditLog): Promise<AuditLog>;
   getAuditLogs(filters?: { adminId?: string; targetType?: string; startDate?: Date; endDate?: Date }): Promise<AuditLog[]>;
   getAuditLogsByTarget(targetType: string, targetId: string): Promise<AuditLog[]>;
+
+  getSystemSetting(key: string): Promise<any | null>;
+  setSystemSetting(key: string, value: any, updatedBy?: string): Promise<void>;
 
   createEmailLog(log: InsertEmailLog): Promise<EmailLog>;
   getEmailLogs(filters?: { status?: string; templateType?: string; startDate?: Date; endDate?: Date; limit?: number; offset?: number }): Promise<Omit<EmailLog, 'metadata'>[]>;
@@ -2522,6 +2525,21 @@ export class DatabaseStorage implements IStorage {
       .where(eq(emailLogs.recipientEmail, email))
       .orderBy(desc(emailLogs.sentAt))
       .limit(limit);
+  }
+
+  // QA-1102 certification: DB-persisted system settings (key/value).
+  async getSystemSetting(key: string): Promise<any | null> {
+    const rows = await db.select().from(systemSettings).where(eq(systemSettings.key, key)).limit(1);
+    return rows.length ? rows[0].value : null;
+  }
+
+  async setSystemSetting(key: string, value: any, updatedBy?: string): Promise<void> {
+    await db.insert(systemSettings)
+      .values({ key, value, updatedAt: new Date(), updatedBy: updatedBy || null })
+      .onConflictDoUpdate({
+        target: systemSettings.key,
+        set: { value, updatedAt: new Date(), updatedBy: updatedBy || null },
+      });
   }
 
   async getEmailLogsCount(filters?: { status?: string; templateType?: string; startDate?: Date; endDate?: Date }): Promise<number> {

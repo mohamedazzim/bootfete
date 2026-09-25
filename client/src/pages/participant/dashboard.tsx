@@ -103,9 +103,22 @@ export default function ParticipantDashboard() {
     }
   };
 
+  // QA-607: Disqualified participant banner
+  const isDisqualified = credentialData?.participantStatus === 'disqualified';
+
   return (
     <ParticipantLayout>
       <div className="max-w-4xl mx-auto p-4 md:p-8">
+        {isDisqualified && (
+          <Alert variant="destructive" className="mb-6" data-testid="disqualified-banner">
+            <AlertCircle className="h-4 w-4" />
+            <AlertDescription>
+              <strong>Account Disqualified.</strong> Your participation in {event?.name || 'this event'} has been
+              disqualified. You cannot start new tests or submit answers. Contact the event organizers if you
+              believe this is an error.
+            </AlertDescription>
+          </Alert>
+        )}
         <div className="text-center mb-8">
           <h1 className="text-3xl font-bold text-gray-900 mb-2" data-testid="heading-dashboard">
             BootFete 2K26 | {event?.name || 'Event'} | {team && team.length > 0 ? team.map((m: any) => m.name).join(', ') : (user?.fullName || 'Participant')}

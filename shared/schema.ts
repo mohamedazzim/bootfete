@@ -355,6 +355,16 @@ export const emailLogs = pgTable("email_logs", {
   metadata: jsonb("metadata"),
 });
 
+// System Settings - DB-persisted key/value settings (QA-1102 certification fix).
+// Replaces the previous process-memory `(global).__notificationSettings` store
+// so settings survive backend restarts.
+export const systemSettings = pgTable("system_settings", {
+  key: text("key").primaryKey(),
+  value: jsonb("value").notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedBy: varchar("updated_by").references(() => users.id, { onDelete: 'set null' }),
+});
+
 // Manual Round Entries - for physical/offline round results entered manually
 // Used when Round 2+ happens outside the app (on paper, physically, etc.)
 export const manualRoundEntries = pgTable("manual_round_entries", {
@@ -566,6 +576,8 @@ export type InsertAuditLog = z.infer<typeof insertAuditLogSchema>;
 
 export type EmailLog = typeof emailLogs.$inferSelect;
 export type InsertEmailLog = z.infer<typeof insertEmailLogSchema>;
+
+export type SystemSetting = typeof systemSettings.$inferSelect;
 
 export type ManualRoundEntry = typeof manualRoundEntries.$inferSelect;
 export type InsertManualRoundEntry = z.infer<typeof insertManualRoundEntrySchema>;

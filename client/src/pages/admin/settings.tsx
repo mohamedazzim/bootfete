@@ -10,7 +10,8 @@ import { Separator } from '@/components/ui/separator';
 import { useToast } from '@/hooks/use-toast';
 import { Save, Mail, Bell, Shield, Database } from 'lucide-react';
 import AdminLayout from '@/components/layouts/AdminLayout';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { apiRequest } from '@/lib/queryClient';
 
 interface SystemSettings {
   email: {
@@ -19,6 +20,12 @@ interface SystemSettings {
     host: string | null;
     user: string | null;
     from: string | null;
+  };
+  notifications?: {
+    emailNotifications: boolean;
+    registrationNotifications: boolean;
+    eventUpdates: boolean;
+    systemAlerts: boolean;
   };
 }
 
@@ -43,10 +50,52 @@ export default function AdminSettings() {
     }
   }, [user, isLoading, setLocation]);
 
+  const queryClient = useQueryClient();
+
+  // QA-1102: Real save mutation. Toast only appears AFTER backend success.
+  const saveMutation = useMutation({
+    mutationFn: async (notifications: any) => {
+      const res = await apiRequest('PATCH', '/api/admin/system-settings', { notifications });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.message || 'Failed to save settings');
+      }
+      return res.json();
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['/api/admin/system-settings'] });
+      toast({
+        title: "Settings saved",
+        description: "Your system settings have been updated successfully.",
+      });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Failed to save settings",
+        description: error.message || "An error occurred while saving settings.",
+        variant: "destructive",
+      });
+    },
+  });
+
+  // Initialize state from loaded settings
+  useEffect(() => {
+    if (systemSettings?.notifications) {
+      const n = systemSettings.notifications;
+      setEmailNotifications(n.emailNotifications ?? true);
+      setRegistrationNotifications(n.registrationNotifications ?? true);
+      setEventUpdates(n.eventUpdates ?? true);
+      setSystemAlerts(n.systemAlerts ?? true);
+    }
+  }, [systemSettings]);
+
   const handleSaveSettings = () => {
-    toast({
-      title: "Settings saved",
-      description: "Your system settings have been updated successfully.",
+    // QA-1102: Actually call the API. Success toast only on backend 200.
+    saveMutation.mutate({
+      emailNotifications,
+      registrationNotifications,
+      eventUpdates,
+      systemAlerts,
     });
   };
 
@@ -284,9 +333,13 @@ export default function AdminSettings() {
             <Button variant="outline" onClick={() => setLocation('/admin/dashboard')} data-testid="button-cancel">
               Cancel
             </Button>
-            <Button onClick={handleSaveSettings} data-testid="button-save-settings">
+            <Button
+              onClick={handleSaveSettings}
+              disabled={saveMutation.isPending}
+              data-testid="button-save-settings"
+            >
               <Save className="w-4 h-4 mr-2" />
-              Save Settings
+              {saveMutation.isPending ? 'Saving...' : 'Save Settings'}
             </Button>
           </div>
         </div>
