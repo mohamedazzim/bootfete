@@ -25,6 +25,7 @@ import {
   requireEventAdminOrSuperAdmin,
   type AuthRequest,
 } from "./middleware/auth"
+import { loginLimiter, publicApiLimiter } from "./middleware/rateLimit"
 import { emailService } from "./services/emailService"
 import { WebSocketService } from "./services/websocketService"
 import fs from "fs";
@@ -356,7 +357,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // --------------------------------------
 
-  app.post("/api/auth/register", async (req: Request, res: Response) => {
+  app.post("/api/auth/register", publicApiLimiter, async (req: Request, res: Response) => {
     try {
       const { username, password, email, fullName, role } = req.body
 
@@ -453,7 +454,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   })
 
-  app.post("/api/auth/login", async (req: Request, res: Response) => {
+  app.post("/api/auth/login", loginLimiter, async (req: Request, res: Response) => {
     try {
       const { username, password } = req.body
 
@@ -1116,7 +1117,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   })
 
-  app.patch("/api/events/:eventId/rules", requireAuth, requireEventAccess, async (req: AuthRequest, res: Response) => {
+  app.patch("/api/events/:eventId/rules", requireAuth, requireEventAdmin, requireEventAccess, async (req: AuthRequest, res: Response) => {
     try {
       const {
         noRefresh,
@@ -1192,26 +1193,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Duration is required for online rounds" })
       }
 
-      let roundData = { ...req.body };
-
-      // Convert date strings to objects
-      if (startTime) roundData.startTime = new Date(startTime);
-      if (endTime) roundData.endTime = new Date(endTime);
-
-      // Default duration to 0 for manual rounds if not provided
-      if (isManual && !duration) roundData.duration = 0;
+      // H-10: explicit allowlist — never spread req.body into the insert, or a
+      // client could set id / status / resultsPublished / showAnswers and
+      // bypass start-gate validations.
+      // Duration is validated above (required for online rounds); default to 0 for manual rounds.
+      const resolvedDuration = isManual ? (duration ?? 0) : duration;
 
       const round = await storage.createRound({
-        ...roundData,
-        eventId: req.params.eventId,
+        name,
         description: description || null,
-        isManual: isManual,
+        roundNumber,
+        duration: resolvedDuration,
+        ...(startTime ? { startTime: new Date(startTime) } : {}),
+        ...(endTime ? { endTime: new Date(endTime) } : {}),
         conductMedium: medium,
-        roundType: resolvedRoundType, // Include roundType
-        // Ensure we don't accidentally override the logic above with destructured variables
-        startTime: roundData.startTime,
-        endTime: roundData.endTime,
-        status: roundData.status || "not_started"
+        isManual,
+        roundType: resolvedRoundType,
+        eventId: req.params.eventId,
+        status: "not_started", // Server-derived: rounds always start as not_started
       });
 
       await storage.createRoundRules({
@@ -1656,6 +1655,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Question does not belong to this round" });
       }
 
+      // Never leak the answer key to participants mid-exam (H-09): apply the
+      // same sanitization rule as the round questions list endpoint.
+      const isPrivileged = req.user!.role === "super_admin" || req.user!.role === "event_admin";
+      if (!isPrivileged && req.user!.role === "participant") {
+        const round = await storage.getRound(roundId);
+        const canViewAnswers = round?.showAnswers || (round?.resultsPublished && round?.status === "completed");
+        if (!canViewAnswers) {
+          return res.json({
+            ...question,
+            correctAnswer: null, // Hide correct answer
+            expectedOutput: null, // Hide expected output for coding/fill-up questions
+            testCases: null, // Hide test cases
+          });
+        }
+      }
+
       res.json(question);
     } catch (error) {
       console.error("Get question error:", error);
@@ -2062,6 +2077,45 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return res.status(404).json({ message: "Round not found" })
         }
 
+        const { userIds } = req.body || {}
+
+        // Targeted share: notify only the selected participants by email.
+        // This does NOT flip the global resultsPublished flag — a targeted
+        // share must never silently become a global publish (H-14).
+        if (userIds !== undefined) {
+          if (!Array.isArray(userIds) || userIds.length === 0) {
+            return res.status(400).json({ message: "userIds must be a non-empty array" })
+          }
+
+          const event = await storage.getEvent(round.eventId)
+          let sentCount = 0
+
+          for (const userId of userIds) {
+            const attempt = await storage.getTestAttemptByUserAndRound(userId, req.params.roundId)
+            const user = await storage.getUser(userId)
+
+            if (user && attempt) {
+              queueService.addEmailJob(
+                user.email,
+                `Test Results: ${round.name} - ${event?.name}`,
+                'test_result_qualified',
+                {
+                  name: user.fullName,
+                  eventName: event?.name || 'Event',
+                  roundName: round.name,
+                  score: attempt.totalScore || 0,
+                  maxScore: attempt.maxScore || 100, // Fallback
+                },
+                user.fullName
+              ).catch(err => console.error(`Failed to queue result email for ${user.email}`, err));
+              sentCount++
+            }
+          }
+
+          return res.json({ message: `Results shared with ${sentCount} participants`, sentCount })
+        }
+
+        // Global publish: flip the flag, invalidate caches, notify via WebSocket.
         const updatedRound = await storage.updateRoundResultsPublished(req.params.roundId, true)
 
         // Invalidate cache
@@ -2072,8 +2126,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
         WebSocketService.notifyRoundStatus(round.eventId, req.params.roundId, round.status, updatedRound)
 
         // NOTE: Global result published emails removed to save email credits (300/day limit)
-        // Use targeted result notification via POST /api/rounds/:id/publish-results with userIds
-        // to notify only selected winners
 
         res.json({
           message: "Results published successfully",
@@ -2861,70 +2913,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json(updated);
     } catch (error) {
       console.error("Toggle answers error:", error);
-      res.status(500).json({ message: "Internal server error" });
-    }
-  });
-
-  app.post("/api/rounds/:roundId/publish-results", requireAuth, requireEventAdminOrSuperAdmin, async (req: AuthRequest, res: Response) => {
-    try {
-      const { roundId } = req.params;
-      const { userIds } = req.body; // Array of user IDs to notify
-
-      const round = await storage.getRound(roundId);
-      if (!round) return res.status(404).json({ message: "Round not found" });
-
-      const updated = await storage.updateRoundResultsPublished(roundId, true);
-
-      // Invalidate cache
-      await cacheService.delete(`rounds:${round.eventId}`);
-
-      // Notify users (logic remains same)
-      // ...
-
-      if (!userIds || !Array.isArray(userIds) || userIds.length === 0) {
-        return res.status(400).json({ message: "No participants selected" });
-      }
-
-
-
-      const event = await storage.getEvent(round.eventId);
-
-      let sentCount = 0;
-
-      for (const userId of userIds) {
-        const attempt = await storage.getTestAttemptByUserAndRound(userId, roundId);
-        const user = await storage.getUser(userId);
-
-        if (user && attempt) {
-          queueService.addEmailJob(
-            user.email,
-            `Test Results: ${round.name} - ${event?.name}`,
-            'test_result_qualified', // New template type we will need
-            {
-              name: user.fullName,
-              eventName: event?.name || 'Event',
-              roundName: round.name,
-              score: attempt.totalScore || 0,
-              maxScore: attempt.maxScore || 100, // Fallback
-            },
-            user.fullName
-          ).catch(err => console.error(`Failed to queue result email for ${user.email}`, err));
-          sentCount++;
-        }
-      }
-
-      // We might also want to mark resultsPublished=true if not already, 
-      // OR purely rely on this manual email trigger. The user said "Publish Result" 
-      // usually implies the boolean, but here they said "Share to selected participants".
-      // I will NOT toggle the global boolean to avoid exposing it to everyone if the logic was mixed.
-      // But arguably, "Publish Result" button might toggle the global flag too? 
-      // User said: "Event admin only should see the leadserboard, after cross verifing it only admin should click publish result, the result should be share to selected paticipants choosen by admin to their mail"
-      // This suggests it's a targetted share, not a global publish.
-
-      res.json({ message: `Results published to ${sentCount} participants` });
-
-    } catch (error) {
-      console.error("Publish results error:", error);
       res.status(500).json({ message: "Internal server error" });
     }
   });
@@ -3722,7 +3710,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   })
 
   // Create a new team-based registration
-  app.post("/api/register", async (req: Request, res: Response) => {
+  app.post("/api/register", publicApiLimiter, async (req: Request, res: Response) => {
     try {
       const {
         eventId,
@@ -4247,7 +4235,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   })
 
   // Get registrations by roll number
-  app.get("/api/student-registrations/:rollNo", async (req: Request, res: Response) => {
+  app.get("/api/student-registrations/:rollNo", publicApiLimiter, async (req: Request, res: Response) => {
     try {
       const { rollNo } = req.params
 
@@ -5599,7 +5587,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Lookup participant by roll number (for pre-filling food preference)
-  app.get("/api/participants/by-roll/:rollNo", async (req, res) => {
+  app.get("/api/participants/by-roll/:rollNo", publicApiLimiter, async (req, res) => {
     try {
       const { rollNo } = req.params;
 
