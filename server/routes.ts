@@ -5193,6 +5193,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (email !== undefined) updates.email = email
         if (phone !== undefined) updates.phone = phone
 
+        if (Object.keys(updates).length === 0) {
+          return res.status(400).json({ message: "No valid fields to update. Allowed fields: fullName, email, phone" })
+        }
+
         const updatedUser = await storage.updateUserDetails(req.params.id, updates)
         if (!updatedUser) {
           return res.status(404).json({ message: "Participant not found" })
@@ -7092,7 +7096,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   )
 
   // POST /api/test-email - Send a test email (admin only)
-  app.post("/api/test-email", requireSuperAdmin, async (req: AuthRequest, res: Response) => {
+  app.post("/api/test-email", requireAuth, requireSuperAdmin, async (req: AuthRequest, res: Response) => {
     try {
       const { to, name } = req.body
 
@@ -7138,7 +7142,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Admin cache flush
-  app.post("/api/admin/cache-flush", requireSuperAdmin, async (req: AuthRequest, res: Response) => {
+  app.post("/api/admin/cache-flush", requireAuth, requireSuperAdmin, async (req: AuthRequest, res: Response) => {
     await cacheService.flushAll();
     res.json({ message: "Cache flushed successfully" });
   });

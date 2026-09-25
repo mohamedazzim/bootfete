@@ -252,11 +252,15 @@ export class DatabaseStorage implements IStorage {
     return cleaned.slice(0, 2).padEnd(2, 'X');
   }
 
-  private async getNextTeamSequence(eventId: string): Promise<number> {
+  // Team IDs are globally unique (unique constraint on registrations.team_id),
+  // so the sequence must be global too: two events sharing the same two-letter
+  // name prefix (e.g. "Hackathon" and "Hardware") would otherwise generate the
+  // same ID. Trailing digits are parsed (not just the last two chars) so the
+  // sequence keeps working past 99.
+  private async getNextTeamSequence(): Promise<number> {
     const [row] = await db
-      .select({ maxSeq: sql<number>`COALESCE(MAX(CAST(RIGHT(${registrations.teamId}, 2) AS INTEGER)), 0)` })
-      .from(registrations)
-      .where(eq(registrations.eventId, eventId));
+      .select({ maxSeq: sql<number>`COALESCE(MAX(CAST(SUBSTRING(${registrations.teamId} FROM '[0-9]+$') AS INTEGER)), 0)` })
+      .from(registrations);
 
     return ((row?.maxSeq as number | undefined) || 0) + 1;
   }
@@ -270,12 +274,8 @@ export class DatabaseStorage implements IStorage {
   private async generateTeamId(eventId: string, eventName?: string): Promise<string> {
     const resolvedName = await this.resolveEventName(eventId, eventName);
     const prefix = this.getTeamIdPrefix(resolvedName);
-    const sequence = await this.getNextTeamSequence(eventId);
+    const sequence = await this.getNextTeamSequence();
     return `BHC${prefix}${String(sequence).padStart(2, '0')}`;
-  }
-
-  private isTeamIdConflict(error: any): boolean {
-    return error?.code === '23505' && (error?.constraint?.includes('team_id') || (error?.message || '').includes('team_id'));
   }
 
   async getUsers(): Promise<User[]> {
@@ -1576,45 +1576,33 @@ export class DatabaseStorage implements IStorage {
           }
         }
 
-        // Serialize team-ID sequence generation per event so two concurrent
-        // registrations can't compute the same MAX()+1 value.
-        await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${'team-id:' + data.eventId}))`);
+        // Serialize team-ID generation GLOBALLY: team_id carries a global unique
+        // constraint, and the two-letter event prefix is not unique per event
+        // (e.g. "Hackathon" vs "Hardware"), so a per-event lock/sequence could
+        // hand two events the same ID. The lock is held to transaction end, so
+        // no two concurrent registrations can compute the same MAX()+1 value —
+        // a unique conflict is impossible by construction here.
+        await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${'team-id:global'}))`);
 
-        // Step 2: Create registration with generated team ID (retry on rare collisions)
-        let registration: Registration | undefined;
-        for (let attempt = 0; attempt < 5; attempt++) {
-          const teamId = await this.generateTeamId(data.eventId, data.eventName);
+        // Step 2: Create registration with generated team ID
+        const teamId = await this.generateTeamId(data.eventId, data.eventName);
+        const [created] = await tx.insert(registrations).values({
+          eventId: data.eventId,
+          organizerRollNo: data.organizerRollNo,
+          organizerEmail: data.organizerEmail,
+          organizerName: data.organizerName,
+          organizerDept: normalizedOrganizerDept, // Store normalized department
+          organizerCollege: data.organizerCollege || null,
+          organizerPhone: data.organizerPhone || null,
+          organizerFoodType: data.organizerFoodType,
+          registrationType: data.registrationType,
+          paperTopic: data.paperTopic || null,
+          status: 'pending',
+          confirmedBy: null,
+          teamId,
+        }).returning();
 
-          try {
-            const [created] = await tx.insert(registrations).values({
-              eventId: data.eventId,
-              organizerRollNo: data.organizerRollNo,
-              organizerName: data.organizerName,
-              organizerEmail: data.organizerEmail,
-              organizerDept: normalizedOrganizerDept, // Store normalized department
-              organizerCollege: data.organizerCollege || null,
-              organizerPhone: data.organizerPhone || null,
-              organizerFoodType: data.organizerFoodType,
-              registrationType: data.registrationType,
-              paperTopic: data.paperTopic || null,
-              status: 'pending',
-              confirmedBy: null,
-              teamId,
-            }).returning();
-
-            registration = created as Registration;
-            break;
-          } catch (error: any) {
-            if (this.isTeamIdConflict(error)) {
-              continue;
-            }
-            throw error;
-          }
-        }
-
-        if (!registration) {
-          throw new Error('Failed to generate unique team ID for registration');
-        }
+        const registration = created as Registration;
 
         // Step 3: Add team members (transaction rolls back on failure — no
         // manual compensation delete needed)
