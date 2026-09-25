@@ -40,7 +40,10 @@ export const eventAdmins = pgTable("event_admins", {
   eventId: varchar("event_id").references(() => events.id, { onDelete: 'cascade' }).notNull(),
   adminId: varchar("admin_id").references(() => users.id, { onDelete: 'cascade' }).notNull(),
   assignedAt: timestamp("assigned_at", { withTimezone: true }).defaultNow().notNull(),
-});
+},
+  // Round-2 M2: one admin row per (event, admin).
+  (t) => [unique("event_admins_event_admin_unique").on(t.eventId, t.adminId)],
+);
 
 // Event Rules - proctoring and test rules per event
 export const eventRules = pgTable("event_rules", {
@@ -81,7 +84,11 @@ export const rounds = pgTable("rounds", {
   conductMedium: varchar("conduct_medium", { enum: ['online', 'physical'] }).notNull().default('online'),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
-});
+},
+  // Round-2 M2: round numbers are unique within an event (two "Round 1"s would
+  // make scheduling and result routing ambiguous).
+  (t) => [unique("rounds_event_number_unique").on(t.eventId, t.roundNumber)],
+);
 
 // Round Rules - proctoring and test rules per round
 export const roundRules = pgTable("round_rules", {
@@ -117,7 +124,11 @@ export const questions = pgTable("questions", {
 
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
-});
+},
+  // Round-2 M2: question numbers are unique within a round (two "Q3"s would
+  // make the client render/save against the wrong question).
+  (t) => [unique("questions_round_number_unique").on(t.roundId, t.questionNumber)],
+);
 
 // Participants - users registered for events
 export const participants = pgTable("participants", {
@@ -257,9 +268,12 @@ export const registrations = pgTable("registrations", {
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 },
-  // H-15: one registration per organizer per event — a double-submitted
-  // registration form must not create two rows.
-  (t) => [unique("registrations_event_organizer_unique").on(t.eventId, t.organizerRollNo)],
+  // Round-2 H7: the one-registration-per-organizer rule lives in migration
+  // 001 as a PARTIAL unique index (event_id, organizer_roll_no) WHERE status
+  // <> 'cancelled', so cancelled registrations don't block re-registration.
+  // Drizzle can't express partial uniques, so no unique() here — do not add
+  // one back or db:push will reintroduce the all-status constraint.
+  (t) => [],
 );
 
 // Team Members - members of team registrations (excluding organizer)
@@ -273,7 +287,11 @@ export const teamMembers = pgTable("team_members", {
   memberPhone: text("member_phone"),
   memberFoodType: varchar("member_food_type", { enum: ['veg', 'nonveg'] }).notNull().default('veg'),
   addedAt: timestamp("added_at", { withTimezone: true }).defaultNow().notNull(),
-});
+},
+  // Round-2 M2: one row per roll number per registration (double-submitted
+  // member rows would inflate dept-cap counts).
+  (t) => [unique("team_members_registration_roll_unique").on(t.registrationId, t.memberRollNo)],
+);
 
 // Participant Registry - global participant info by roll_no (food preferences persist across registrations)
 // This table stores participant information that should be consistent across all their registrations
@@ -301,7 +319,11 @@ export const eventCredentials = pgTable("event_credentials", {
   enabledAt: timestamp("enabled_at", { withTimezone: true }),
   enabledBy: varchar("enabled_by").references(() => users.id, { onDelete: 'set null' }),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-});
+},
+  // Round-2 H6: one credential row per (user, event) — makes credential
+  // creation an idempotent upsert instead of a check-then-insert race.
+  (t) => [unique("event_credentials_user_event_unique").on(t.participantUserId, t.eventId)],
+);
 
 // Audit Logs - track super admin override actions
 export const auditLogs = pgTable("audit_logs", {
@@ -368,7 +390,14 @@ export const eventWinners = pgTable("event_winners", {
   teamMembers: jsonb("team_members").$type<Array<{ name: string, rollNo: string }>>(),
   declaredBy: varchar("declared_by").references(() => users.id, { onDelete: 'set null' }),
   declaredAt: timestamp("declared_at", { withTimezone: true }).defaultNow().notNull(),
-});
+},
+  // Round-2 M2: one row per (event, position) and per (event, winner) — a
+  // double-submitted "declare winners" form must not create two "1st place" rows.
+  (t) => [
+    unique("event_winners_event_position_unique").on(t.eventId, t.position),
+    unique("event_winners_event_participant_unique").on(t.eventId, t.participantUserId),
+  ],
+);
 
 // Relations
 export const auditLogsRelations = relations(auditLogs, ({ one }) => ({

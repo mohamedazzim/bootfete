@@ -735,6 +735,40 @@ export class DatabaseStorage implements IStorage {
     return answer;
   }
 
+  // Round-2 C3: submit grading + attempt flip in ONE transaction with a
+  // compare-and-set on the status. The old code ran N updateAnswer calls and
+  // then the attempt flip as separate statements — a crash in between left
+  // half-graded answers on an `in_progress` attempt with no error surfaced,
+  // and a double-submit could double-fire notifications.
+  // Returns the completed attempt, or the current row when the CAS loses
+  // (concurrent/duplicate submit — the caller should treat it as idempotent).
+  async submitTestAttempt(
+    attemptId: string,
+    grading: Array<{ answerId: string; isCorrect: boolean; pointsAwarded: number }>,
+    totalScore: number,
+  ): Promise<TestAttempt | undefined> {
+    return await db.transaction(async (tx) => {
+      const now = new Date();
+      // CAS: only in_progress -> completed transitions.
+      const [updated] = await tx
+        .update(testAttempts)
+        .set({ status: "completed", submittedAt: now, completedAt: now, totalScore })
+        .where(and(eq(testAttempts.id, attemptId), eq(testAttempts.status, "in_progress")))
+        .returning();
+      if (!updated) {
+        const [current] = await tx.select().from(testAttempts).where(eq(testAttempts.id, attemptId)).limit(1);
+        return current;
+      }
+      for (const g of grading) {
+        await tx
+          .update(answers)
+          .set({ isCorrect: g.isCorrect, pointsAwarded: g.pointsAwarded })
+          .where(eq(answers.id, g.answerId));
+      }
+      return updated;
+    });
+  }
+
   // H-15: atomic upsert on (attempt_id, question_id). The save-answer endpoint
   // used find-then-insert/update, so two concurrent saves for the same
   // question could both insert and create duplicate rows.

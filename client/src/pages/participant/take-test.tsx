@@ -70,13 +70,33 @@ export default function TakeTestPage() {
   const hasShown5MinWarning = useRef(false);
   const hasShown1MinWarning = useRef(false);
   const hasTriggeredSubmit = useRef(false);
-  // H-11: dedupe window so one user action (which can fire blur +
-  // visibilitychange + keydown together) counts as a single violation.
-  const lastViolationRef = useRef<{ type: string; at: number } | null>(null);
+  // Round-2 H10: dedupe window keyed on TIME ALONE. One physical action can
+  // fire detectors of different types (Alt+Tab -> 'alt_tab' keydown +
+  // 'tab_switch' visibilitychange; F11 -> 'f11_fullscreen' + 'fullscreen_exit'),
+  // and keying on type+time counted a single action as 2 of 3 strikes.
+  const lastViolationRef = useRef<{ at: number } | null>(null);
+  // Round-2 M9: mirror of violationCount for use outside setState updaters
+  // (side effects must not run inside the updater — React may invoke it twice).
+  const violationCountRef = useRef(0);
+  // Round-2 M15/H16: per-question save status drives the navigator colors and
+  // the Saving.../Saved indicator.
+  const [saveStatus, setSaveStatus] = useState<Record<string, 'pending' | 'saved' | 'failed'>>({});
+  // Round-2 H15: submit failed and is retryable (guards were reset).
+  const [submitFailed, setSubmitFailed] = useState(false);
+  // Round-2 H16: mirror of the answers map for the pagehide keepalive flush
+  // (state captured in beforeunload/pagehide handlers would go stale).
+  const answersRef = useRef<Record<string, string>>({});
+  // Round-2 H16: question ids whose latest answer the server hasn't confirmed.
+  const unsavedRef = useRef<Set<string>>(new Set());
 
-  const { data: attempt, isLoading } = useQuery<TestAttemptWithDetails>({
+  // Round-2 H13: capture the query error so a 401 (session expired) renders a
+  // re-login path instead of the generic "not available" dead end.
+  const { data: attempt, isLoading, isError: attemptIsError, error: attemptError } = useQuery<TestAttemptWithDetails>({
     queryKey: ['/api/attempts', attemptId],
     enabled: !!attemptId,
+    // Don't waste retries on a 401 (session is gone); do retry transient errors.
+    retry: (failureCount, error: any) =>
+      String(error?.message || '').startsWith('401') ? false : failureCount < 2,
   });
 
   // Update ref when attempt status changes
@@ -103,7 +123,12 @@ export default function TakeTestPage() {
       return response.json();
     },
     enabled: !!attempt?.roundId && hasStarted,
-    refetchInterval: 5000,
+    // Round-2 C4: no polling. The socket pushes `roundStatus` to
+    // participant:{userId} rooms and WebSocketContext refetches this query on
+    // every roundStatus event; the 5s poll was ~100 req/s of pure waste at 500
+    // students. Socket-down fallback is covered by the reconnect resync
+    // (refetch on `connect`).
+    refetchInterval: false,
   });
 
   const { data: participant } = useQuery<Participant | null>({
@@ -134,6 +159,18 @@ export default function TakeTestPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['/api/participants'] });
     },
+    // Round-2 M25: a failed disqualify PATCH used to be silent — the student
+    // saw "ELIMINATED" while the attempt graded normally. Retry once, then
+    // surface loudly so an invigilator can act.
+    onError: (error: any) => {
+      setTimeout(() => disqualifyMutation.mutate(), 3000);
+      toast({
+        title: 'Elimination not recorded',
+        description: 'Network error while recording the elimination — retrying. Please contact an invigilator.',
+        variant: 'destructive',
+      });
+      console.error('Disqualify failed:', error);
+    },
   });
 
   const submitTestMutation = useMutation({
@@ -146,6 +183,9 @@ export default function TakeTestPage() {
     onSuccess: () => {
       // Update test status to prevent fullscreen cleanup
       testStatusRef.current = 'completed';
+      // Round-2 H15: the submitted flag is set ONLY here, on actual success.
+      sessionStorage.setItem(`submitted_${attemptId}`, 'true');
+      setSubmitFailed(false);
 
       toast({
         title: 'Test submitted',
@@ -155,13 +195,41 @@ export default function TakeTestPage() {
       setLocation(`/participant/results/${attemptId}`);
     },
     onError: (error: any) => {
+      const msg = String(error?.message || 'Unknown error');
+      // The server submit is idempotent now (CAS): if a concurrent submit
+      // already flipped the attempt, treat it as success and move on.
+      if (msg.includes('already submitted')) {
+        sessionStorage.setItem(`submitted_${attemptId}`, 'true');
+        testStatusRef.current = 'completed';
+        setLocation(`/participant/results/${attemptId}`);
+        return;
+      }
+      // Round-2 H15: reset the guard so the student CAN retry. The failure
+      // banner (with a Retry button) stays visible until a submit succeeds.
+      hasTriggeredSubmit.current = false;
+      setSubmitFailed(true);
       toast({
         title: 'Submission failed',
-        description: error.message,
+        description: msg,
         variant: 'destructive',
       });
     },
   });
+
+  // Round-2 C3/H15/M10: every submit path (manual button, timer expiry,
+  // round-end, elimination) goes through this one guarded trigger. The guard
+  // prevents double-fire; onError resets it so a failed submit is retryable.
+  const triggerSubmit = useCallback(() => {
+    if (!attemptId) return;
+    if (hasTriggeredSubmit.current) return;
+    if (sessionStorage.getItem(`submitted_${attemptId}`)) {
+      hasTriggeredSubmit.current = true;
+      return;
+    }
+    hasTriggeredSubmit.current = true;
+    setSubmitFailed(false);
+    submitTestMutation.mutate();
+  }, [attemptId, submitTestMutation]);
 
   // Initialize answers from existing data
   useEffect(() => {
@@ -170,9 +238,19 @@ export default function TakeTestPage() {
       attempt.answers.forEach((ans) => {
         answerMap[ans.questionId] = ans.answer;
       });
+      // Round-2 H13: restore answers stashed when the session expired.
+      // Server-confirmed answers win; stashed values fill the gaps.
+      try {
+        const stashed = JSON.parse(localStorage.getItem(`unsent_answers_${attemptId}`) || '{}');
+        for (const [qid, val] of Object.entries(stashed)) {
+          if (typeof val === 'string' && !(qid in answerMap)) answerMap[qid] = val;
+        }
+        localStorage.removeItem(`unsent_answers_${attemptId}`);
+      } catch { /* corrupted stash — ignore */ }
       setAnswers(answerMap);
+      answersRef.current = answerMap; // Round-2 H16: seed the pagehide mirror
     }
-  }, [attempt]);
+  }, [attempt, attemptId]);
 
   // Initialize timer
   useEffect(() => {
@@ -189,18 +267,17 @@ export default function TakeTestPage() {
 
   // Auto-submit  // Check if round ended or paused
   useEffect(() => {
-    const isSubmitted = sessionStorage.getItem(`submitted_${attemptId}`);
-    if (currentRound?.status === 'completed' && attempt?.status === 'in_progress' && !hasTriggeredSubmit.current && !isSubmitted) {
-      hasTriggeredSubmit.current = true;
-      sessionStorage.setItem(`submitted_${attemptId}`, 'true');
+    if (currentRound?.status === 'completed' && attempt?.status === 'in_progress') {
+      // Round-2 C3: single guarded trigger (was: flags set before mutate with
+      // no retry on failure).
+      triggerSubmit();
       toast({
         title: 'Round Ended',
         description: 'The admin has ended this round. Your test will be auto-submitted.',
         variant: 'destructive',
       });
-      setTimeout(() => submitTestMutation.mutate(), 2000);
     }
-  }, [currentRound?.status, attempt?.status, attemptId, submitTestMutation, toast]);
+  }, [currentRound?.status, attempt?.status, triggerSubmit, toast]);
 
   // Countdown interval - created once per active test, NOT on every tick.
   // (Previously this effect depended on `timeRemaining`, tearing down and
@@ -221,16 +298,17 @@ export default function TakeTestPage() {
   useEffect(() => {
     if (!attempt || !hasStarted) return;
 
-    const isSubmitted = sessionStorage.getItem(`submitted_${attemptId}`);
-    if (timeRemaining <= 0 && attempt.status === 'in_progress' && !hasTriggeredSubmit.current && !isSubmitted) {
-      hasTriggeredSubmit.current = true;
-      sessionStorage.setItem(`submitted_${attemptId}`, 'true');
-      submitTestMutation.mutate();
+    if (timeRemaining <= 0 && attempt.status === 'in_progress') {
+      // Round-2 C3: single guarded trigger — the submitted flags are set in
+      // onSuccess only, and onError resets the guard so a failed auto-submit
+      // (e.g. flush threw on a network blip) is retried, not stranded.
+      triggerSubmit();
       return;
     }
 
-    // Show 5 minute warning
-    if (timeRemaining === 300 && !hasShown5MinWarning.current) {
+    // Show 5 minute warning (Round-2 M28: <= with the shown-flags — exact
+    // equality never fires when a throttled interval jumps 301 -> 299)
+    if (timeRemaining <= 300 && !hasShown5MinWarning.current) {
       hasShown5MinWarning.current = true;
       setTimeWarningMessage('5 minutes remaining!');
       setShowTimeWarning(true);
@@ -243,7 +321,7 @@ export default function TakeTestPage() {
     }
 
     // Show 1 minute warning
-    if (timeRemaining === 60 && !hasShown1MinWarning.current) {
+    if (timeRemaining <= 60 && !hasShown1MinWarning.current) {
       hasShown1MinWarning.current = true;
       setTimeWarningMessage('1 minute remaining!');
       setShowTimeWarning(true);
@@ -254,7 +332,7 @@ export default function TakeTestPage() {
       });
       setTimeout(() => setShowTimeWarning(false), 5000);
     }
-  }, [timeRemaining, attempt, hasStarted, attemptId, submitTestMutation, toast]);
+  }, [timeRemaining, attempt, hasStarted, attemptId, triggerSubmit, toast]);
 
   // Handle fullscreen start - Skip on mobile devices that don't support it
   const handleBeginTest = async () => {
@@ -308,70 +386,92 @@ export default function TakeTestPage() {
     }
   };
 
+  // Round-2 M9: violation side effects (warnings, elimination) live OUTSIDE
+  // setState. The old code ran toasts, timeouts, disqualify + auto-submit
+  // inside the setViolationCount updater, which React may invoke more than
+  // once in concurrent rendering — double-firing elimination.
+  const applyViolationEffects = useCallback((type: string) => {
+    const newCount = violationCountRef.current + 1;
+    violationCountRef.current = newCount;
+    setViolationCount(newCount);
+
+    // Mobile: Stricter - 1st warning, 2nd eliminate (since no fullscreen)
+    // Desktop: 1st warning, 2nd warning, 3rd eliminate
+    const eliminationThreshold = isMobileDevice ? 2 : 3;
+
+    if (newCount === 1) {
+      // First violation - Show warning
+      setViolationMessage('⚠️ You are not allowed to switch apps or leave the test screen. ' +
+        (isMobileDevice ? 'One more switch will eliminate you!' : 'Further attempts will eliminate you.'));
+      setShowViolationWarning(true);
+      toast({
+        title: '⚠️ Warning #1',
+        description: isMobileDevice
+          ? 'One more app/tab switch will eliminate you!'
+          : 'Do not leave the test screen. Further attempts will eliminate you.',
+        variant: 'destructive',
+      });
+      setTimeout(() => setShowViolationWarning(false), 5000);
+    } else if (newCount === 2 && !isMobileDevice) {
+      // Second violation (desktop only) - Final warning
+      setViolationMessage('⚠️ Final warning! Another attempt will eliminate you.');
+      setShowViolationWarning(true);
+      toast({
+        title: '⚠️ Warning #2 - FINAL WARNING',
+        description: 'Another attempt will eliminate you from this event.',
+        variant: 'destructive',
+      });
+      setTimeout(() => setShowViolationWarning(false), 5000);
+    } else if (newCount >= eliminationThreshold) {
+      // Eliminate (2nd for mobile, 3rd for desktop)
+      setViolationMessage('❌ You have been eliminated for violating event rules.');
+      setShowViolationWarning(true);
+      toast({
+        title: '❌ ELIMINATED',
+        description: 'You have been eliminated for violating event rules. Your test will be auto-submitted.',
+        variant: 'destructive',
+      });
+
+      disqualifyMutation.mutate();
+      // Round-2 C3/M10: elimination submit goes through the single guarded
+      // trigger — if the timer already fired inside this window, the second
+      // call is a no-op instead of a racing duplicate POST.
+      setTimeout(() => triggerSubmit(), 2000);
+    }
+  }, [disqualifyMutation, triggerSubmit, toast, isMobileDevice]);
+
   const logViolation = useCallback((type: string) => {
     if (!attemptId) return;
 
-    // H-11: coalesce duplicate detector firings. A single tab switch fires
-    // both 'blur' and 'visibilitychange' (and Alt+Tab adds a keydown on top);
-    // without this, one switch counted as 2-3 violations and wrongfully
-    // eliminated mobile users on their first switch.
+    // Round-2 H10: dedupe keyed on time alone (see lastViolationRef) — one
+    // physical action must never burn two strikes.
     const now = Date.now();
-    const last = lastViolationRef.current;
-    if (last && last.type === type && now - last.at < 3000) {
+    if (lastViolationRef.current && now - lastViolationRef.current.at < 3000) {
       return;
     }
-    lastViolationRef.current = { type, at: now };
+    lastViolationRef.current = { at: now };
 
-    apiRequest('POST', `/api/attempts/${attemptId}/violations`, { type }).catch(console.error);
-
-    setViolationCount(prev => {
-      const newCount = prev + 1;
-
-      // Mobile: Stricter - 1st warning, 2nd eliminate (since no fullscreen)
-      // Desktop: 1st warning, 2nd warning, 3rd eliminate
-      const maxWarnings = isMobileDevice ? 1 : 2;
-      const eliminationThreshold = isMobileDevice ? 2 : 3;
-
-      if (newCount === 1) {
-        // First violation - Show warning
-        setViolationMessage('⚠️ You are not allowed to switch apps or leave the test screen. ' +
-          (isMobileDevice ? 'One more switch will eliminate you!' : 'Further attempts will eliminate you.'));
-        setShowViolationWarning(true);
-        toast({
-          title: '⚠️ Warning #1',
-          description: isMobileDevice
-            ? 'One more app/tab switch will eliminate you!'
-            : 'Do not leave the test screen. Further attempts will eliminate you.',
-          variant: 'destructive',
-        });
-        setTimeout(() => setShowViolationWarning(false), 5000);
-      } else if (newCount === 2 && !isMobileDevice) {
-        // Second violation (desktop only) - Final warning
-        setViolationMessage('⚠️ Final warning! Another attempt will eliminate you.');
-        setShowViolationWarning(true);
-        toast({
-          title: '⚠️ Warning #2 - FINAL WARNING',
-          description: 'Another attempt will eliminate you from this event.',
-          variant: 'destructive',
-        });
-        setTimeout(() => setShowViolationWarning(false), 5000);
-      } else if (newCount >= eliminationThreshold) {
-        // Eliminate (2nd for mobile, 3rd for desktop)
-        setViolationMessage('❌ You have been eliminated for violating event rules.');
-        setShowViolationWarning(true);
-        toast({
-          title: '❌ ELIMINATED',
-          description: 'You have been eliminated for violating event rules. Your test will be auto-submitted.',
-          variant: 'destructive',
-        });
-
-        disqualifyMutation.mutate();
-        setTimeout(() => submitTestMutation.mutate(), 2000);
-      }
-
-      return newCount;
-    });
-  }, [attemptId, disqualifyMutation, submitTestMutation, toast, isMobileDevice]);
+    // Round-2 M20: the strike counts only once the server has recorded it.
+    // On failure we retry once; if the network is down the strike is
+    // deferred and surfaced, not silently counted locally.
+    const post = (t: string): Promise<void> =>
+      apiRequest('POST', `/api/attempts/${attemptId}/violations`, { type: t }).then(() => undefined);
+    post(type)
+      .then(() => applyViolationEffects(type))
+      .catch(() => {
+        setTimeout(() => {
+          post(type)
+            .then(() => applyViolationEffects(type))
+            .catch(() => {
+              toast({
+                title: 'Violation not recorded',
+                description: 'Network error — stay on this tab and contact an invigilator.',
+                variant: 'destructive',
+              });
+            });
+        }, 2000);
+      });
+  }, [attemptId, applyViolationEffects, toast]);
 
   // Fullscreen enforcement after test started - Skip on mobile devices
   useEffect(() => {
@@ -519,13 +619,21 @@ export default function TakeTestPage() {
         return;
       }
 
-      // Block developer tools and other shortcuts - ALWAYS enforce
-      if (
-        (e.ctrlKey && (e.key === 'c' || e.key === 'v' || e.key === 'x' || e.key === 'p')) ||
-        e.key === 'F12' ||
+      // Block developer tools and other shortcuts - ALWAYS enforce.
+      // Round-2 M13/H5: never block (or count as a violation) clipboard
+      // shortcuts while the student is typing IN an answer field — they must
+      // be able to paste into coding/short-answer inputs, and copying their
+      // own text must not burn a strike. Devtools shortcuts stay blocked.
+      if (e.key === 'F12' ||
         (e.ctrlKey && e.shiftKey && e.key === 'I') ||
         (e.ctrlKey && e.shiftKey && e.key === 'J') ||
         (e.ctrlKey && e.key === 'u')
+      ) {
+        e.preventDefault();
+        logViolation('restricted_shortcut');
+      } else if (
+        !isInputField &&
+        (e.ctrlKey && (e.key === 'c' || e.key === 'v' || e.key === 'x' || e.key === 'p'))
       ) {
         e.preventDefault();
         logViolation('restricted_shortcut');
@@ -549,20 +657,69 @@ export default function TakeTestPage() {
     return () => document.removeEventListener('contextmenu', handleContextMenu);
   }, [hasStarted, logViolation]);
 
-  // Prevent refresh - ALWAYS enforce
+  // Round-2 H16/M26: on tab close, best-effort flush of unsaved answers with a
+  // keepalive fetch (navigator.sendBeacon can't carry the Bearer auth
+  // header). Only answers the server hasn't confirmed are sent; the bulk
+  // endpoint upserts idempotently. No 'refresh' violation is logged once the
+  // test is no longer in_progress — the effect stays mounted during the
+  // submit round-trip, which used to produce phantom strikes.
   useEffect(() => {
     if (!hasStarted) return;
 
+    const flushUnsaved = () => {
+      const pending = Array.from(unsavedRef.current);
+      if (pending.length === 0 || !attemptId) return;
+      const payload = pending.map((qid) => ({
+        questionId: qid,
+        answer: answersRef.current[qid] ?? '',
+      }));
+      const token = localStorage.getItem('token');
+      fetch(`/api/attempts/${attemptId}/answers/bulk`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ answers: payload }),
+        keepalive: true,
+      }).catch(() => {});
+    };
+
     const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      flushUnsaved();
+      if (testStatusRef.current !== 'in_progress') return;
       e.preventDefault();
       e.returnValue = '';
       logViolation('refresh');
       return '';
     };
+    const handlePageHide = () => flushUnsaved();
 
     window.addEventListener('beforeunload', handleBeforeUnload);
-    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
-  }, [hasStarted, logViolation]);
+    window.addEventListener('pagehide', handlePageHide);
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+      window.removeEventListener('pagehide', handlePageHide);
+    };
+  }, [hasStarted, attemptId, logViolation]);
+
+  // Round-2 M19: setInterval is throttled to ~1/min in backgrounded tabs, so
+  // the displayed countdown can drift minutes off. On return, recompute from
+  // the cached attempt.startedAt — no network needed. (While paused the
+  // pause overlay owns the timer, so we skip then.)
+  useEffect(() => {
+    if (!hasStarted) return;
+    const resync = () => {
+      if (document.visibilityState !== 'visible') return;
+      if (!attempt?.startedAt || !attempt?.round) return;
+      if (currentRound?.status === 'paused') return;
+      const duration = attempt.round.duration * 60;
+      const elapsed = Math.floor((Date.now() - new Date(attempt.startedAt).getTime()) / 1000);
+      setTimeRemaining(Math.max(0, duration - elapsed));
+    };
+    document.addEventListener('visibilitychange', resync);
+    return () => document.removeEventListener('visibilitychange', resync);
+  }, [hasStarted, attempt, currentRound?.status]);
 
   // H-12: debounced, serialized answer saving. Typing used to fire one POST per
   // keystroke with no ordering, so an earlier keystroke could overwrite a
@@ -580,6 +737,9 @@ export default function TakeTestPage() {
     if (!attemptId) return;
     await apiRequest('POST', `/api/attempts/${attemptId}/answers`, { questionId, answer });
     setSaveError(null);
+    // Round-2 M15/H16: server confirmed this answer.
+    unsavedRef.current.delete(questionId);
+    setSaveStatus(prev => ({ ...prev, [questionId]: 'saved' }));
   }, [attemptId]);
 
   // Re-queue a failed save for retry on the next flush (unless the user typed
@@ -588,11 +748,15 @@ export default function TakeTestPage() {
     if (pendingAnswerSavesRef.current[questionId] === undefined) {
       pendingAnswerSavesRef.current[questionId] = answer;
     }
+    setSaveStatus(prev => ({ ...prev, [questionId]: 'failed' }));
     setSaveError('Answer auto-save failed — check your connection. It will be retried on submit.');
   };
 
   const handleAnswerChange = (questionId: string, answer: string) => {
     setAnswers(prev => ({ ...prev, [questionId]: answer }));
+    answersRef.current[questionId] = answer; // Round-2 H16: pagehide mirror
+    unsavedRef.current.add(questionId);      // Round-2 H16: not yet confirmed
+    setSaveStatus(prev => ({ ...prev, [questionId]: 'pending' })); // M15
     pendingAnswerSavesRef.current[questionId] = answer;
     const existing = answerSaveTimersRef.current[questionId];
     if (existing) clearTimeout(existing);
@@ -606,6 +770,17 @@ export default function TakeTestPage() {
       }
     }, 1500);
   };
+
+  // Round-2 M12: debounce timers must not survive unmount (e.g. navigating to
+  // results after submit) — a late timer would POST to a submitted attempt
+  // and setState on an unmounted tree.
+  useEffect(() => {
+    const timersRef = answerSaveTimersRef;
+    return () => {
+      Object.values(timersRef.current).forEach(clearTimeout);
+      timersRef.current = {};
+    };
+  }, []);
 
   // Flush every pending debounced save AND every in-flight save, then throw
   // if any failed — submit must not proceed with unsaved answers.
@@ -629,7 +804,9 @@ export default function TakeTestPage() {
   const handleSubmit = () => {
     if (!attempt?.questions) return;
 
-    const answeredCount = Object.keys(answers).length;
+    // Round-2 M28: an answer the student typed then deleted is NOT answered —
+    // count only non-blank values so the "unanswered" confirm isn't skipped.
+    const answeredCount = attempt.questions.filter(q => (answers[q.id] || '').trim() !== '').length;
     const totalQuestions = attempt.questions.length;
 
     if (answeredCount < totalQuestions) {
@@ -637,12 +814,13 @@ export default function TakeTestPage() {
       return;
     }
 
-    submitTestMutation.mutate();
+    // Round-2 C3: single guarded trigger.
+    triggerSubmit();
   };
 
   const confirmSubmit = () => {
     setShowSubmitConfirm(false);
-    submitTestMutation.mutate();
+    triggerSubmit();
   };
 
   const formatTime = (seconds: number) => {
@@ -656,6 +834,34 @@ export default function TakeTestPage() {
       <ParticipantLayout>
         <div className="p-8">
           <div className="text-center py-12" data-testid="loading-test">Loading test...</div>
+        </div>
+      </ParticipantLayout>
+    );
+  }
+
+  // Round-2 H13: session expired mid-exam. The in-memory answers are stashed
+  // to localStorage (keyed by attempt) before offering re-login, so nothing
+  // the student typed is stranded on the dead-end screen.
+  if (attemptIsError && String((attemptError as any)?.message || '').startsWith('401')) {
+    try {
+      localStorage.setItem(`unsent_answers_${attemptId}`, JSON.stringify(answersRef.current));
+    } catch { /* storage full/blocked — answers remain in memory for this tab */ }
+    return (
+      <ParticipantLayout>
+        <div className="p-8">
+          <Card className="max-w-xl mx-auto">
+            <CardHeader className="text-center">
+              <CardTitle className="text-2xl">Session expired</CardTitle>
+              <CardDescription className="text-base mt-2">
+                Your login session expired during the test. Answers you typed are preserved on this device — log in again to resume.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="text-center">
+              <Button onClick={() => setLocation('/login')} data-testid="button-relogin">
+                Log in again to resume
+              </Button>
+            </CardContent>
+          </Card>
         </div>
       </ParticipantLayout>
     );
@@ -710,6 +916,16 @@ export default function TakeTestPage() {
 
   const currentQuestion = attempt.questions[currentQuestionIndex];
   const progress = ((currentQuestionIndex + 1) / attempt.questions.length) * 100;
+
+  // Round-2 H16/M15: derived save-indicator state.
+  const savePendingCount = Object.values(saveStatus).filter(s => s === 'pending').length;
+  const saveFailedCount = Object.values(saveStatus).filter(s => s === 'failed').length;
+  // Round-2 M11: all answer inputs go inert while a submit is in flight — a
+  // keystroke in that window would start a debounce AFTER flush() snapshotted
+  // the queue, landing post-grading (or 400ing) with no error shown.
+  const inputsDisabled = submitTestMutation.isPending;
+  // Round-2 M14: the elimination threshold differs on mobile (2) vs desktop (3).
+  const violationLimit = isMobileDevice ? 2 : 3;
 
   // Show begin test screen
   if (!hasStarted) {
@@ -867,9 +1083,10 @@ export default function TakeTestPage() {
                 <Button
                   onClick={confirmSubmit}
                   className="flex-1"
+                  disabled={submitTestMutation.isPending}
                   data-testid="button-confirm-submit"
                 >
-                  Submit Test
+                  {submitTestMutation.isPending ? 'Submitting…' : 'Submit Test'}
                 </Button>
               </div>
             </CardContent>
@@ -889,17 +1106,28 @@ export default function TakeTestPage() {
             </p>
           </div>
           <div className="flex items-center gap-4">
-            {rules?.autoSubmitOnViolation && (
-              <Badge variant="outline" className="flex items-center gap-2">
-                <AlertTriangle className="h-4 w-4 text-yellow-600" />
-                Violations: {violationCount}/3
-              </Badge>
-            )}
+            {/* Round-2 M14: always visible, denominator follows the real
+                elimination threshold (mobile eliminates at 2, desktop at 3).
+                Previously the badge was hidden unless autoSubmitOnViolation
+                was set while elimination fired unconditionally. */}
+            <Badge variant="outline" className="flex items-center gap-2" aria-label={`Violations: ${violationCount} of ${violationLimit}`}>
+              <AlertTriangle className="h-4 w-4 text-yellow-600" />
+              Violations: {violationCount}/{violationLimit}
+            </Badge>
+            {/* Round-2 H16: students must see Saved vs Saving vs failed. */}
+            <span
+              className={`text-xs font-medium ${saveFailedCount > 0 ? 'text-red-600' : savePendingCount > 0 ? 'text-amber-600' : 'text-green-600'}`}
+              aria-live="polite"
+              data-testid="text-save-status"
+            >
+              {saveFailedCount > 0 ? 'Save failed — will retry' : savePendingCount > 0 ? `Saving… (${savePendingCount})` : 'Saved ✓'}
+            </span>
             <div className={`flex items-center gap-2 px-4 py-2 rounded-lg ${timeRemaining < 300 ? 'bg-red-100' : 'bg-blue-100'
               }`}>
               <Clock className={`h-5 w-5 ${timeRemaining < 300 ? 'text-red-600' : 'text-blue-600'}`} />
+              {/* Round-2 M28: screen-reader users need to hear time warnings. */}
               <span className={`font-mono text-lg font-bold ${timeRemaining < 300 ? 'text-red-900' : 'text-blue-900'
-                }`} data-testid="text-timer">
+                }`} data-testid="text-timer" aria-live="polite" aria-label={`Time remaining: ${formatTime(timeRemaining)}`}>
                 {formatTime(timeRemaining)}
               </span>
             </div>
@@ -921,6 +1149,25 @@ export default function TakeTestPage() {
           <Alert className="mb-6 bg-red-50 border-red-200">
             <AlertTriangle className="h-4 w-4 text-red-600" />
             <AlertDescription className="text-red-800">{saveError}</AlertDescription>
+          </Alert>
+        )}
+
+        {/* Round-2 H15: a failed submit is retryable — the guard was reset in
+            onError, so this CTA is the student's way back in. */}
+        {submitFailed && (
+          <Alert className="mb-6 bg-red-50 border-red-300" data-testid="alert-submit-failed">
+            <AlertTriangle className="h-4 w-4 text-red-600" />
+            <AlertDescription className="text-red-800 flex flex-wrap items-center justify-between gap-3">
+              <span><strong>Submission failed.</strong> Your answers are safe — nothing was lost.</span>
+              <Button
+                onClick={triggerSubmit}
+                disabled={submitTestMutation.isPending}
+                className="bg-red-600 hover:bg-red-700 text-white"
+                data-testid="button-retry-submit"
+              >
+                {submitTestMutation.isPending ? 'Retrying…' : 'Retry submit'}
+              </Button>
+            </AlertDescription>
           </Alert>
         )}
 
@@ -993,6 +1240,8 @@ export default function TakeTestPage() {
                 <RadioGroup
                   value={answers[currentQuestion.id] || ''}
                   onValueChange={(value) => handleAnswerChange(currentQuestion.id, value)}
+                  disabled={inputsDisabled}
+                  aria-label={`Answer options for question ${currentQuestion.questionNumber}`}
                 >
                   {(currentQuestion.options as string[]).map((option: string, index: number) => (
                     <div key={index} className="flex items-center space-x-2 p-3 rounded border hover:bg-gray-50">
@@ -1013,9 +1262,11 @@ export default function TakeTestPage() {
                   </div>
                   <Textarea
                     placeholder="Type your answer here..."
+                    aria-label={`Answer for question ${currentQuestion.questionNumber}`}
                     value={answers[currentQuestion.id] || ''}
                     onChange={(e) => handleAnswerChange(currentQuestion.id, e.target.value)}
                     className="min-h-[150px]"
+                    disabled={inputsDisabled}
                     data-testid="input-answer-mcq-fallback"
                   />
                 </div>
@@ -1027,6 +1278,8 @@ export default function TakeTestPage() {
               <RadioGroup
                 value={answers[currentQuestion.id] || ''}
                 onValueChange={(value) => handleAnswerChange(currentQuestion.id, value)}
+                disabled={inputsDisabled}
+                aria-label={`True or false answer for question ${currentQuestion.questionNumber}`}
               >
                 <div className="flex items-center space-x-2 p-3 rounded border hover:bg-gray-50">
                   <RadioGroupItem value="true" id="true" data-testid="radio-true" />
@@ -1047,9 +1300,11 @@ export default function TakeTestPage() {
                     ? 'Write your code here...'
                     : 'Type your answer here...'
                 }
+                aria-label={`Answer for question ${currentQuestion.questionNumber}`}
                 value={answers[currentQuestion.id] || ''}
                 onChange={(e) => handleAnswerChange(currentQuestion.id, e.target.value)}
                 className="min-h-[200px] font-mono"
+                disabled={inputsDisabled}
                 data-testid="input-answer"
               />
             )}
@@ -1064,11 +1319,12 @@ export default function TakeTestPage() {
                 <p className="text-sm font-medium text-muted-foreground">Type your answer in the box below:</p>
                 <Input
                   placeholder="Enter your answer..."
+                  aria-label={`Answer for question ${currentQuestion.questionNumber}`}
                   value={answers[currentQuestion.id] || ''}
                   onChange={(e) => handleAnswerChange(currentQuestion.id, e.target.value)}
                   className="max-w-lg text-base h-11"
+                  disabled={inputsDisabled}
                   data-testid="input-answer-fillup"
-                  autoFocus
                 />
               </div>
             )}
@@ -1077,9 +1333,11 @@ export default function TakeTestPage() {
             {currentQuestion.questionType === 'image_text' && (
               <Textarea
                 placeholder="Type your answer here..."
+                aria-label={`Answer for question ${currentQuestion.questionNumber}`}
                 value={answers[currentQuestion.id] || ''}
                 onChange={(e) => handleAnswerChange(currentQuestion.id, e.target.value)}
                 className="min-h-[150px]"
+                disabled={inputsDisabled}
                 data-testid="input-answer-image"
               />
             )}
@@ -1098,7 +1356,9 @@ export default function TakeTestPage() {
                           <button
                             key={index}
                             type="button"
+                            disabled={inputsDisabled}
                             onClick={() => handleAnswerChange(currentQuestion.id, imageUrl)}
+                            aria-label={`Option ${index + 1} for question ${currentQuestion.questionNumber}${isSelected ? ', selected' : ''}`}
                             className={`relative p-2 border-2 rounded-lg transition-all ${isSelected
                               ? 'border-blue-500 bg-blue-50 ring-2 ring-blue-200'
                               : 'border-gray-200 hover:border-gray-400'
@@ -1137,9 +1397,11 @@ export default function TakeTestPage() {
                 <p className="text-sm font-medium text-muted-foreground">Type your answer below:</p>
                 <Textarea
                   placeholder="Type your answer here..."
+                  aria-label={`Answer for question ${currentQuestion.questionNumber}`}
                   value={answers[currentQuestion.id] || ''}
                   onChange={(e) => handleAnswerChange(currentQuestion.id, e.target.value)}
                   className="min-h-[150px]"
+                  disabled={inputsDisabled}
                   data-testid="input-answer-fallback"
                 />
               </div>
@@ -1189,26 +1451,51 @@ export default function TakeTestPage() {
           </CardHeader>
           <CardContent>
             <div className="grid grid-cols-10 gap-2">
-              {attempt.questions.map((q, index) => (
-                <button
-                  key={q.id}
-                  onClick={() => setCurrentQuestionIndex(index)}
-                  className={`p-2 rounded text-sm font-medium transition-colors ${index === currentQuestionIndex
-                    ? 'bg-blue-600 text-white'
-                    : answers[q.id]
-                      ? 'bg-green-100 text-green-900 hover:bg-green-200'
-                      : 'bg-gray-100 text-gray-900 hover:bg-gray-200'
-                    }`}
-                  data-testid={`button-question-${index + 1}`}
-                >
-                  {index + 1}
-                </button>
-              ))}
+              {/* Round-2 M15/M28: navigator color reflects SERVER-confirmed save
+                  status, not just local typing — a failed save no longer glows
+                  green. Every button carries an aria-label (color is never the
+                  only signal). */}
+              {attempt.questions.map((q, index) => {
+                const st = saveStatus[q.id];
+                const answered = (answers[q.id] || '').trim() !== '';
+                const tone = index === currentQuestionIndex
+                  ? 'bg-blue-600 text-white'
+                  : st === 'failed'
+                    ? 'bg-red-100 text-red-900 hover:bg-red-200 ring-1 ring-red-400'
+                    : st === 'pending'
+                      ? 'bg-amber-100 text-amber-900 hover:bg-amber-200'
+                      : answered
+                        ? 'bg-green-100 text-green-900 hover:bg-green-200'
+                        : 'bg-gray-100 text-gray-900 hover:bg-gray-200';
+                const stateLabel = index === currentQuestionIndex ? 'current'
+                  : st === 'failed' ? 'answered, save failed'
+                  : st === 'pending' ? 'answered, saving'
+                  : answered ? 'answered, saved' : 'not answered';
+                return (
+                  <button
+                    key={q.id}
+                    onClick={() => setCurrentQuestionIndex(index)}
+                    className={`p-2 rounded text-sm font-medium transition-colors ${tone}`}
+                    aria-label={`Question ${index + 1}, ${stateLabel}`}
+                    data-testid={`button-question-${index + 1}`}
+                  >
+                    {index + 1}
+                  </button>
+                );
+              })}
             </div>
-            <div className="mt-4 flex gap-4 text-sm text-gray-600">
+            <div className="mt-4 flex flex-wrap gap-4 text-sm text-gray-600">
               <div className="flex items-center gap-2">
                 <div className="w-4 h-4 bg-green-100 rounded"></div>
-                <span>Answered</span>
+                <span>Answered &amp; saved</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-4 h-4 bg-amber-100 rounded"></div>
+                <span>Saving…</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-4 h-4 bg-red-100 rounded ring-1 ring-red-400"></div>
+                <span>Save failed</span>
               </div>
               <div className="flex items-center gap-2">
                 <div className="w-4 h-4 bg-gray-100 rounded"></div>

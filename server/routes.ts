@@ -2754,8 +2754,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const answers = await storage.getAnswersByAttempt(attemptId)
 
         let totalScore = 0
+        const grading: Array<{ answerId: string; isCorrect: boolean; pointsAwarded: number }> = []
 
-        // Grade answers
+        // Grade answers (pure computation — no writes yet)
         for (const answer of answers) {
           const question = questions.find((q) => q.id === answer.questionId)
           if (!question) continue
@@ -2785,21 +2786,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
           }
 
           totalScore += pointsAwarded
-
-          // Update answer with grading
-          await storage.updateAnswer(answer.id, {
-            isCorrect,
-            pointsAwarded,
-          })
+          grading.push({ answerId: answer.id, isCorrect, pointsAwarded })
         }
 
-        // Update attempt as completed
-        const updatedAttempt = await storage.updateTestAttempt(attemptId, {
-          status: "completed",
-          submittedAt: new Date(),
-          completedAt: new Date(),
-          totalScore,
-        })
+        // Round-2 C3: grading writes + attempt flip happen in ONE transaction
+        // with a compare-and-set on in_progress. If the CAS loses (a
+        // concurrent/duplicate submit already flipped the attempt), treat it
+        // as idempotent and return the current state.
+        const updatedAttempt = await storage.submitTestAttempt(attemptId, grading, totalScore)
+        if (!updatedAttempt || updatedAttempt.status !== "completed") {
+          const current = await storage.getTestAttempt(attemptId)
+          return res.status(400).json({ message: "Test is already submitted", attempt: current })
+        }
 
         // Invalidate leaderboards
         await cacheService.deletePattern('leaderboard:*');

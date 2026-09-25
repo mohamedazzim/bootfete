@@ -13,3 +13,7 @@ scratchpad_*.txt
 .env
 uploads/
 ecosystem.config.js.save
+# Round-2 C2: hand-written production migrations ARE tracked (the bare
+# `migrations/` rule above would otherwise swallow this directory).
+!server/migrations/
+!server/migrations/001_timestamptz_and_constraints.sql
