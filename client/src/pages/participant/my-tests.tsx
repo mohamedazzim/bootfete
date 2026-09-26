@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useLocation } from 'wouter';
 import ParticipantLayout from '@/components/layouts/ParticipantLayout';
@@ -5,12 +6,76 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { StatusBadge } from '@/components/StatusBadge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { FileText, Trophy, PlayCircle } from 'lucide-react';
+import { FileText, Trophy, PlayCircle, Award } from 'lucide-react';
+import { useToast } from '@/hooks/use-toast';
+import { errorToast, successToast } from '@/lib/toast';
 import type { TestAttempt } from '@shared/schema';
 import ScrollableTable from '@/components/ScrollableTable';
 
 export default function MyTestsPage() {
   const [, setLocation] = useLocation();
+  const { toast } = useToast();
+  const [downloadingId, setDownloadingId] = useState<string | null>(null);
+
+  // The certificate is a binary download, so fetch it directly with the
+  // Bearer token and save it as a file — an anchor link would not carry
+  // the auth header.
+  //
+  // Prefers the event's dynamic template certificate
+  // (/api/rounds/:roundId/certificate/:attemptId); when the event has no
+  // template configured (NO_TEMPLATE), falls back to the standard certificate.
+  const downloadCertificate = async (attemptId: string, roundId: string) => {
+    setDownloadingId(attemptId);
+    const authHeaders = {
+      ...(localStorage.getItem('token')
+        ? { Authorization: `Bearer ${localStorage.getItem('token')}` }
+        : {}),
+    };
+    const saveBlob = async (res: Response, filename: string) => {
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    };
+    const filenameFrom = (res: Response, fallback: string) => {
+      const disp = res.headers.get('Content-Disposition') || '';
+      const m = /filename="([^"]+)"/.exec(disp);
+      return m ? m[1] : fallback;
+    };
+    try {
+      const tplRes = await fetch(`/api/rounds/${roundId}/certificate/${attemptId}`, {
+        headers: authHeaders,
+      });
+      if (tplRes.ok) {
+        await saveBlob(tplRes, filenameFrom(tplRes, `certificate-${attemptId}`));
+        successToast(toast, 'Certificate downloaded', 'Your certificate of achievement is ready.');
+        return;
+      }
+      const tplBody = await tplRes.json().catch(() => ({}));
+      if (tplBody.code !== 'NO_TEMPLATE') {
+        throw new Error(tplBody.message || `Download failed (${tplRes.status})`);
+      }
+      // No template for this event — fall back to the standard certificate.
+      const res = await fetch(`/api/attempts/${attemptId}/certificate`, {
+        headers: authHeaders,
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.message || `Download failed (${res.status})`);
+      }
+      await saveBlob(res, `certificate-${attemptId}.pdf`);
+      successToast(toast, 'Certificate downloaded', 'Your certificate of achievement is ready.');
+    } catch (error) {
+      errorToast(toast, 'Failed to download certificate', (error as Error)?.message || 'Please try again.');
+    } finally {
+      setDownloadingId(null);
+    }
+  };
 
   const { data: attempts, isLoading, isError, refetch } = useQuery<(TestAttempt & {
     round: { name: string; event: { name: string } };
@@ -158,17 +223,37 @@ export default function MyTestsPage() {
                               Resume Test
                             </Button>
                           ) : (
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => setLocation(`/participant/results/${attempt.id}`)}
-                              disabled={attempt.canViewResults === false}
-                              data-testid={`button-results-${attempt.id}`}
-                              title={attempt.canViewResults === false ? "Results will be available after admin publishes them" : "View your test results"}
-                            >
-                              <Trophy className="h-4 w-4 mr-1" />
-                              View Results
-                            </Button>
+                            <div className="flex items-center justify-end gap-2">
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => setLocation(`/participant/results/${attempt.id}`)}
+                                disabled={attempt.canViewResults === false}
+                                data-testid={`button-results-${attempt.id}`}
+                                title={attempt.canViewResults === false ? "Results will be available after admin publishes them" : "View your test results"}
+                              >
+                                <Trophy className="h-4 w-4 mr-1" />
+                                View Results
+                              </Button>
+                              {/* Certificate of achievement: only for
+                                  successfully completed attempts with a
+                                  graded score. Streams the PDF server-side. */}
+                              {attempt.status === 'completed' &&
+                                attempt.totalScore !== null &&
+                                attempt.totalScore !== undefined && (
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => downloadCertificate(attempt.id, attempt.roundId)}
+                                    disabled={downloadingId === attempt.id}
+                                    data-testid={`button-certificate-${attempt.id}`}
+                                    aria-label={`Download certificate of achievement for ${attempt.round?.name || 'this test'}`}
+                                  >
+                                    <Award className="h-4 w-4 mr-1" aria-hidden />
+                                    {downloadingId === attempt.id ? 'Preparing…' : 'Download Certificate'}
+                                  </Button>
+                                )}
+                            </div>
                           )}
                         </TableCell>
                       </TableRow>

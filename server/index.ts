@@ -13,8 +13,13 @@ import { correlationMiddleware } from "./middleware/correlation";
 import logger from "./services/loggerService";
 import { metricsService } from "./services/metricsService";
 import { monitoringService } from "./services/monitoringService";
+import { initSentry, initSentryErrorHandler } from "./sentry";
 
 const app = express();
+
+// Sentry request/tracing instrumentation must initialize before any
+// middleware or routes are registered (no-op when SENTRY_DSN is unset).
+initSentry(app);
 
 // PROD-SCALE: the app always sits behind nginx (see deploy/nginx.conf.example).
 // Without trust proxy, req.ip is the proxy's IP for EVERY request, so all
@@ -144,6 +149,10 @@ monitoringService.start();
   const ioServer = setupWebSocket(server);
   setIO(ioServer);
   log('WebSocket server initialized');
+
+  // Sentry error handler goes immediately before the app's own error
+  // middleware so Sentry captures the raw error first (no-op without DSN).
+  initSentryErrorHandler(app);
 
   app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
     const status = err.status || err.statusCode || 500;

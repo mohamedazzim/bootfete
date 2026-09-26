@@ -1,6 +1,6 @@
-﻿import express, { type Express, Request, Response } from "express"
+﻿import express, { type Express, Request, Response, NextFunction } from "express"
 import { createServer, type Server } from "http"
-import { storage } from "./storage"
+import { storage, sortViolationLogsByTimestamp } from "./storage"
 import bcrypt from "bcrypt"
 import jwt from "jsonwebtoken"
 import crypto from "crypto"
@@ -9,6 +9,9 @@ import PDFDocument from "pdfkit"
 import ExcelJS from "exceljs"
 import QRCode from "qrcode"
 import { cacheService } from "./services/cacheService"
+import { reportingService } from "./services/reportingService"
+import { generateCertificate } from "./services/certificateService"
+import { renderTemplateCertificate, positionLabel } from "./services/templateCertificateService"
 import { redisClient } from "./services/redisClient"
 import { z } from "zod"
 import { insertUserSchema, insertEventSchema, insertEventRulesSchema, insertRoundSchema, insertRoundRulesSchema, insertQuestionSchema, insertParticipantSchema, insertTestAttemptSchema, insertAnswerSchema, insertReportSchema, insertRegistrationFormSchema, insertRegistrationSchema, insertEventCredentialSchema, PAPER_PRESENTATION_TOPICS, FOOD_TYPES, users, registrations, teamMembers, participantRegistry, eventCredentials, testAttempts, participants } from "@shared/schema"
@@ -80,6 +83,54 @@ const uploadQuestionImage = multer({
     }
   }
 });
+
+// Multer configuration for certificate template uploads (PDF/PNG/JPEG).
+// Same hardening as question images: extension derived from the validated
+// MIME type, never from the client-supplied filename.
+const certificateTemplateStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const uploadDir = path.join(process.cwd(), 'uploads', 'certificates');
+    if (!fs.existsSync(uploadDir)) {
+      fs.mkdirSync(uploadDir, { recursive: true });
+    }
+    cb(null, uploadDir);
+  },
+  filename: (req, file, cb) => {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    const mimeToExt: Record<string, string> = {
+      'application/pdf': '.pdf',
+      'image/png': '.png',
+      'image/jpeg': '.jpg',
+    };
+    const ext = mimeToExt[file.mimetype] || '';
+    const safeEvent = String((req.params as any)?.eventId || 'event').replace(/[^a-zA-Z0-9-]/g, '');
+    cb(null, `cert-${safeEvent}-${uniqueSuffix}${ext}`);
+  }
+});
+
+const uploadCertificateTemplate = multer({
+  storage: certificateTemplateStorage,
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB max
+  fileFilter: (req, file, cb) => {
+    const allowedTypes = ['application/pdf', 'image/png', 'image/jpeg'];
+    if (allowedTypes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Invalid file type. Only PDF, PNG, JPEG allowed.'));
+    }
+  }
+});
+
+// Multer errors (bad mimetype, oversize) surface as 500 via the global error
+// handler; translate them to 400 for this route.
+function uploadCertificateTemplateHandler(req: Request, res: Response, next: NextFunction) {
+  uploadCertificateTemplate.single("template")(req, res, (err: any) => {
+    if (err) {
+      return res.status(400).json({ message: err.message || "Invalid upload" });
+    }
+    next();
+  });
+}
 
 function generateFormSlug(eventName: string): string {
   const slug = eventName.toLowerCase().replace(/[^a-z0-9]+/g, "-")
@@ -2782,6 +2833,386 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   })
 
+  // Certificate of achievement: streams a branded PDF for a successfully
+  // completed attempt. Participant (owner) or event-scoped admins only.
+  // Only `completed` attempts with a graded score qualify — in-progress,
+  // disqualified, expired or ungraded attempts are rejected.
+  app.get(
+    "/api/attempts/:attemptId/certificate",
+    requireAuth,
+    async (req: AuthRequest, res: Response) => {
+      try {
+        const attempt = await storage.getTestAttempt(req.params.attemptId);
+        if (!attempt) {
+          return res.status(404).json({ message: "Test attempt not found" });
+        }
+
+        // QA-204 pattern: registration committee has no access to attempt data.
+        if (req.user!.role === "registration_committee") {
+          return res.status(403).json({ message: "Access denied" });
+        }
+
+        // Participant: own attempts only.
+        if (attempt.userId !== req.user!.id && req.user!.role === "participant") {
+          return res.status(403).json({ message: "Access denied" });
+        }
+
+        // Round-2 H17 pattern: event admins are event-scoped.
+        if (req.user!.role === "event_admin") {
+          const roundForScope = await storage.getRound(attempt.roundId);
+          const myEvents = await storage.getEventsByAdmin(req.user!.id);
+          if (!roundForScope || !myEvents.some((e: any) => e.id === roundForScope.eventId)) {
+            return res.status(403).json({ message: "Access denied" });
+          }
+        }
+
+        // Only a successfully completed attempt earns a certificate.
+        if (attempt.status !== "completed") {
+          return res.status(403).json({
+            message: "Certificates are only issued for successfully completed attempts.",
+          });
+        }
+
+        // A certificate needs a verified score — a completed attempt still
+        // awaiting grading has nothing to certify.
+        if (attempt.totalScore === null || attempt.totalScore === undefined) {
+          return res.status(403).json({
+            message: "Results are not yet available for this attempt.",
+          });
+        }
+
+        const round = await storage.getRound(attempt.roundId);
+        if (!round) {
+          return res.status(404).json({ message: "Round not found" });
+        }
+
+        // The my-attempts surface deliberately hides scores until the admin
+        // publishes results (round.showAnswers). The certificate must not
+        // leak an unpublished score through a side channel — participants
+        // wait for publication. Admins already see scores elsewhere.
+        if (req.user!.role === "participant" && !round.showAnswers) {
+          return res.status(403).json({
+            message: "Results have not been published yet.",
+          });
+        }
+
+        const event = await storage.getEvent(round.eventId);
+        const user = await storage.getUser(attempt.userId);
+
+        // Rank among completed attempts: verified score DESC, earliest
+        // submission wins ties — the same ordering the leaderboard uses.
+        const roundAttempts = await storage.getTestAttemptsByRound(attempt.roundId);
+        const completed = roundAttempts
+          .filter((a) => a.status === "completed" && a.totalScore !== null && a.totalScore !== undefined)
+          .sort((a, b) => {
+            if ((b.totalScore as number) !== (a.totalScore as number)) {
+              return (b.totalScore as number) - (a.totalScore as number);
+            }
+            const tA = a.submittedAt ? new Date(a.submittedAt).getTime() : Infinity;
+            const tB = b.submittedAt ? new Date(b.submittedAt).getTime() : Infinity;
+            return tA - tB;
+          });
+        const rank = completed.findIndex((a) => a.id === attempt.id) + 1;
+
+        generateCertificate(
+          {
+            participantName: user?.fullName || user?.username || "Participant",
+            eventName: event?.name || "BootFete Event",
+            roundName: round.name,
+            score: attempt.totalScore,
+            rank: rank > 0 ? rank : completed.length,
+            totalParticipants: completed.length,
+            issuedAt: new Date(),
+            certificateId: attempt.id,
+          },
+          res,
+        );
+      } catch (error) {
+        console.error("Generate certificate error:", error);
+        if (!res.headersSent) {
+          res.status(500).json({ message: "Internal server error" });
+        }
+      }
+    },
+  )
+
+  // ---- Dynamic template certificates ----
+
+  const CERT_PLACEHOLDER_KEYS = ["name", "event", "position", "college", "date", "location"] as const;
+
+  function validatePlaceholders(input: unknown): Record<string, any> {
+    if (typeof input !== "object" || input === null || Array.isArray(input)) {
+      throw new Error("placeholders must be a JSON object");
+    }
+    const out: Record<string, any> = {};
+    for (const [key, ph] of Object.entries(input as Record<string, any>)) {
+      if (!(CERT_PLACEHOLDER_KEYS as readonly string[]).includes(key)) {
+        throw new Error(`Unknown placeholder field: ${key}`);
+      }
+      if (typeof ph !== "object" || ph === null) throw new Error(`Placeholder "${key}" must be an object`);
+      for (const n of ["x", "y", "fontSize"]) {
+        if (typeof ph[n] !== "number" || !Number.isFinite(ph[n]) || ph[n] < 0) {
+          throw new Error(`Placeholder "${key}.${n}" must be a non-negative number`);
+        }
+      }
+      if (typeof ph.fontColor !== "string" || !/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(ph.fontColor)) {
+        throw new Error(`Placeholder "${key}.fontColor" must be a hex color like #1e293b`);
+      }
+      if (ph.alignment !== undefined && !["left", "center", "right"].includes(ph.alignment)) {
+        throw new Error(`Placeholder "${key}.alignment" must be left, center or right`);
+      }
+      out[key] = {
+        x: ph.x,
+        y: ph.y,
+        fontSize: ph.fontSize,
+        fontColor: ph.fontColor,
+        ...(ph.alignment ? { alignment: ph.alignment } : {}),
+      };
+    }
+    return out;
+  }
+
+  function deleteTemplateFile(templateUrl: string) {
+    try {
+      const rel = templateUrl.startsWith("/") ? templateUrl.slice(1) : templateUrl;
+      const abs = path.join(process.cwd(), rel);
+      if (abs.startsWith(path.join(process.cwd(), "uploads", "certificates"))) {
+        fs.unlinkSync(abs);
+      }
+    } catch {
+      // Best effort — a missing file must not fail the request.
+    }
+  }
+
+  // Upload (or re-upload) a certificate template for an event, optionally
+  // with placeholder coordinates. Without a file, updates placeholders on
+  // the existing template.
+  app.post(
+    "/api/event-admin/events/:eventId/certificate-template",
+    requireAuth,
+    requireEventAdminOrSuperAdmin,
+    uploadCertificateTemplateHandler,
+    async (req: AuthRequest, res: Response) => {
+      try {
+        const { eventId } = req.params;
+        const event = await storage.getEvent(eventId);
+        if (!event) {
+          if (req.file) fs.unlinkSync(req.file.path);
+          return res.status(404).json({ message: "Event not found" });
+        }
+
+        // Event admins are scoped to their own events.
+        if (req.user!.role === "event_admin") {
+          const myEvents = await storage.getEventsByAdmin(req.user!.id);
+          if (!myEvents.some((e: any) => e.id === eventId)) {
+            if (req.file) fs.unlinkSync(req.file.path);
+            return res.status(403).json({ message: "Access denied" });
+          }
+        }
+
+        let placeholders: Record<string, any> = {};
+        if (req.body?.placeholders) {
+          try {
+            placeholders = validatePlaceholders(JSON.parse(req.body.placeholders));
+          } catch (e) {
+            if (req.file) fs.unlinkSync(req.file.path);
+            return res.status(400).json({ message: (e as Error).message });
+          }
+        }
+
+        const existing = await storage.getCertificateTemplateByEvent(eventId);
+
+        if (req.file) {
+          const fileType = req.file.mimetype === "application/pdf" ? "pdf" : "image";
+          const templateUrl = `/uploads/certificates/${req.file.filename}`;
+          const row = await storage.upsertCertificateTemplate({
+            eventId,
+            templateUrl,
+            fileType: fileType as "pdf" | "image",
+            placeholders: Object.keys(placeholders).length > 0 ? placeholders as any : (existing?.placeholders as any) || {},
+          });
+          if (existing && existing.templateUrl !== templateUrl) {
+            deleteTemplateFile(existing.templateUrl);
+          }
+          return res.json(row);
+        }
+
+        // No file: placeholders-only update on the existing template.
+        if (!existing) {
+          return res.status(400).json({ message: "No template uploaded yet for this event" });
+        }
+        const row = await storage.upsertCertificateTemplate({
+          eventId,
+          templateUrl: existing.templateUrl,
+          fileType: existing.fileType as "pdf" | "image",
+          placeholders: placeholders as any,
+        });
+        return res.json(row);
+      } catch (error) {
+        console.error("Upload certificate template error:", error);
+        res.status(500).json({ message: "Internal server error" });
+      }
+    },
+  );
+
+  // Current template for an event (admin UI).
+  app.get(
+    "/api/event-admin/events/:eventId/certificate-template",
+    requireAuth,
+    requireEventAdminOrSuperAdmin,
+    async (req: AuthRequest, res: Response) => {
+      try {
+        const { eventId } = req.params;
+        if (req.user!.role === "event_admin") {
+          const myEvents = await storage.getEventsByAdmin(req.user!.id);
+          if (!myEvents.some((e: any) => e.id === eventId)) {
+            return res.status(403).json({ message: "Access denied" });
+          }
+        }
+        const template = await storage.getCertificateTemplateByEvent(eventId);
+        if (!template) return res.status(404).json({ message: "No certificate template for this event" });
+        res.json(template);
+      } catch (error) {
+        console.error("Get certificate template error:", error);
+        res.status(500).json({ message: "Internal server error" });
+      }
+    },
+  );
+
+  // Delete a template (and its file).
+  app.delete(
+    "/api/event-admin/events/:eventId/certificate-template",
+    requireAuth,
+    requireEventAdminOrSuperAdmin,
+    async (req: AuthRequest, res: Response) => {
+      try {
+        const { eventId } = req.params;
+        if (req.user!.role === "event_admin") {
+          const myEvents = await storage.getEventsByAdmin(req.user!.id);
+          if (!myEvents.some((e: any) => e.id === eventId)) {
+            return res.status(403).json({ message: "Access denied" });
+          }
+        }
+        const existing = await storage.getCertificateTemplateByEvent(eventId);
+        if (existing) {
+          await storage.deleteCertificateTemplateByEvent(eventId);
+          deleteTemplateFile(existing.templateUrl);
+        }
+        res.json({ message: "Certificate template deleted" });
+      } catch (error) {
+        console.error("Delete certificate template error:", error);
+        res.status(500).json({ message: "Internal server error" });
+      }
+    },
+  );
+
+  // Dynamic certificate download: renders the event's template with verified
+  // participant data. Same eligibility gates as the generic certificate.
+  app.get(
+    "/api/rounds/:roundId/certificate/:attemptId",
+    requireAuth,
+    async (req: AuthRequest, res: Response) => {
+      try {
+        const { roundId, attemptId } = req.params;
+        const attempt = await storage.getTestAttempt(attemptId);
+        if (!attempt || attempt.roundId !== roundId) {
+          return res.status(404).json({ message: "Test attempt not found" });
+        }
+
+        if (req.user!.role === "registration_committee") {
+          return res.status(403).json({ message: "Access denied" });
+        }
+        if (attempt.userId !== req.user!.id && req.user!.role === "participant") {
+          return res.status(403).json({ message: "Access denied" });
+        }
+
+        const round = await storage.getRound(roundId);
+        if (!round) {
+          return res.status(404).json({ message: "Round not found" });
+        }
+        if (req.user!.role === "event_admin") {
+          const myEvents = await storage.getEventsByAdmin(req.user!.id);
+          if (!myEvents.some((e: any) => e.id === round.eventId)) {
+            return res.status(403).json({ message: "Access denied" });
+          }
+        }
+
+        if (attempt.status !== "completed") {
+          return res.status(403).json({
+            message: "Certificates are only issued for successfully completed attempts.",
+          });
+        }
+        if (attempt.totalScore === null || attempt.totalScore === undefined) {
+          return res.status(403).json({ message: "Results are not yet available for this attempt." });
+        }
+        if (req.user!.role === "participant" && !round.showAnswers) {
+          return res.status(403).json({ message: "Results have not been published yet." });
+        }
+
+        const template = await storage.getCertificateTemplateByEvent(round.eventId);
+        if (!template) {
+          return res.status(404).json({
+            message: "No certificate template configured for this event.",
+            code: "NO_TEMPLATE",
+          });
+        }
+
+        const event = await storage.getEvent(round.eventId);
+        const user = await storage.getUser(attempt.userId);
+
+        const roundAttempts = await storage.getTestAttemptsByRound(roundId);
+        const completed = roundAttempts
+          .filter((a) => a.status === "completed" && a.totalScore !== null && a.totalScore !== undefined)
+          .sort((a, b) => {
+            if ((b.totalScore as number) !== (a.totalScore as number)) {
+              return (b.totalScore as number) - (a.totalScore as number);
+            }
+            const tA = a.submittedAt ? new Date(a.submittedAt).getTime() : Infinity;
+            const tB = b.submittedAt ? new Date(b.submittedAt).getTime() : Infinity;
+            return tA - tB;
+          });
+        const rank = completed.findIndex((a) => a.id === attempt.id) + 1;
+
+        // College from the participant's registration, mirroring the leaderboard.
+        let college = "";
+        if (user?.email) {
+          const regs = await storage.getRegistrationsByEvent(round.eventId);
+          const reg = regs.find((r: any) => r.organizerEmail === user.email);
+          college = reg?.organizerCollege || "";
+        }
+
+        const issuedDate = attempt.submittedAt
+          ? new Date(attempt.submittedAt).toLocaleDateString("en-IN", {
+              dateStyle: "long",
+              timeZone: "Asia/Kolkata",
+            })
+          : new Date().toLocaleDateString("en-IN", { dateStyle: "long", timeZone: "Asia/Kolkata" });
+
+        const { buffer, contentType, extension } = await renderTemplateCertificate(template, {
+          name: user?.fullName || user?.username || "Participant",
+          event: event?.name || "",
+          position: positionLabel(rank > 0 ? rank : completed.length),
+          college,
+          date: issuedDate,
+          location: "",
+        });
+
+        res.setHeader("Content-Type", contentType);
+        res.setHeader(
+          "Content-Disposition",
+          `attachment; filename="certificate-${attemptId}.${extension}"`,
+        );
+        res.setHeader("Cache-Control", "no-store");
+        res.send(buffer);
+      } catch (error) {
+        console.error("Render template certificate error:", error);
+        if (!res.headersSent) {
+          res.status(500).json({ message: "Internal server error" });
+        }
+      }
+    },
+  )
+
   app.post(
     "/api/attempts/:attemptId/answers",
     requireAuth,
@@ -3062,7 +3493,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
         // QA-609: Server-side proctoring threshold enforcement.
         // The server owns elimination — never trust the client to call disqualify.
-        const violationCount = (updatedAttempt?.violationLogs as any[])?.length || 0
+        // Strike-chronology fix: the threshold operates on the chronologically
+        // sorted collection (logViolation keeps the stored array sorted; sort
+        // defensively here so the count never depends on raw array order).
+        const sortedViolationLogs = sortViolationLogsByTimestamp(
+          (updatedAttempt?.violationLogs as any[]) || [],
+        );
+        const violationCount = sortedViolationLogs.length
         const roundForThreshold = await storage.getRound(attempt.roundId)
         // Default threshold: 3 violations (configurable per round if roundRules exists)
         const threshold = (roundForThreshold as any)?.violationThreshold || 3
@@ -3582,6 +4019,40 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json(report.reportData)
     } catch (error) {
       console.error("Download report error:", error)
+      res.status(500).json({ message: "Internal server error" })
+    }
+  })
+
+  // Multi-level reporting engine — live aggregated analytics. Event admins
+  // see only their assigned events on the event-scoped route
+  // (requireEventAdminOrSuperAdmin derives eventId from params).
+  app.get("/api/admin/reports/overall", requireAuth, requireEventAdminOrSuperAdmin, async (req: AuthRequest, res: Response) => {
+    try {
+      res.json(await reportingService.getOverallSymposiumReport())
+    } catch (error) {
+      console.error("Overall report error:", error)
+      res.status(500).json({ message: "Internal server error" })
+    }
+  })
+
+  app.get("/api/admin/reports/events/:eventId", requireAuth, requireEventAdminOrSuperAdmin, async (req: AuthRequest, res: Response) => {
+    try {
+      const report = await reportingService.getEventWiseReport(req.params.eventId)
+      if (!report) {
+        return res.status(404).json({ message: "Event not found" })
+      }
+      res.json(report)
+    } catch (error) {
+      console.error("Event-wise report error:", error)
+      res.status(500).json({ message: "Internal server error" })
+    }
+  })
+
+  app.get("/api/admin/reports/colleges", requireAuth, requireEventAdminOrSuperAdmin, async (req: AuthRequest, res: Response) => {
+    try {
+      res.json(await reportingService.getCollegeWiseReport())
+    } catch (error) {
+      console.error("College-wise report error:", error)
       res.status(500).json({ message: "Internal server error" })
     }
   })
@@ -7791,6 +8262,80 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   );
 
+  // Proctoring timeline: all violation logs for a round, flattened into one
+  // chronological feed and joined with user profile info. Powers the event
+  // admin's violation timeline view in the Round Monitor.
+  app.get(
+    "/api/event-admin/rounds/:roundId/violations",
+    requireAuth,
+    requireEventAdminOrSuperAdmin,
+    async (req: AuthRequest, res: Response) => {
+      try {
+        const { roundId } = req.params;
+        const round = await storage.getRound(roundId);
+        if (!round) {
+          return res.status(404).json({ message: "Round not found" });
+        }
+
+        if (req.user!.role === "event_admin") {
+          const myEvents = await storage.getEventsByAdmin(req.user!.id);
+          if (!myEvents.some((e: any) => e.id === round.eventId)) {
+            return res.status(403).json({ message: "Access denied" });
+          }
+        }
+
+        // QA-609: same threshold the server enforces for auto-elimination.
+        const threshold = (round as any)?.violationThreshold || 3;
+
+        // Single query: attempts + users for the round (no N+1).
+        const rows = await storage.getRoundViolationFeed(roundId);
+
+        const violations: Array<{
+          attemptId: string;
+          userId: string;
+          userName: string;
+          attemptStatus: string;
+          startedAt: string | null;
+          type: string;
+          timestamp: string;
+          strikeNumber: number;
+          isEliminatingStrike: boolean;
+        }> = [];
+
+        for (const row of rows) {
+          // Strike-chronology fix: number strikes in true chronological order,
+          // not raw stored-array order. Out-of-order writes (retries, clock
+          // skew, direct writes) previously mislabeled the earliest violation
+          // as strike 2 or 3 in the admin feed.
+          const logs = sortViolationLogsByTimestamp((row.violationLogs as any[]) || []);
+          logs.forEach((log: any, index: number) => {
+            const strikeNumber = index + 1;
+            violations.push({
+              attemptId: row.attemptId,
+              userId: row.userId,
+              userName: row.userName || "Unknown",
+              attemptStatus: row.status,
+              startedAt: row.startedAt ? new Date(row.startedAt).toISOString() : null,
+              type: log.type || "unknown",
+              timestamp: new Date(log.timestamp).toISOString(),
+              strikeNumber,
+              isEliminatingStrike: strikeNumber >= threshold,
+            });
+          });
+        }
+
+        violations.sort(
+          (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
+        );
+
+        res.json({ roundId, threshold, violations });
+      } catch (error) {
+        console.error("Get round violations error:", error);
+        res.status(500).json({ message: "Internal server error" });
+      }
+    }
+  );
+
   // Get round statistics for live monitoring
   app.get("/api/rounds/:roundId/statistics", requireAuth, requireRoundAccess, async (req: AuthRequest, res: Response) => {
     try {
@@ -8305,6 +8850,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Serve uploaded images statically
   app.use('/uploads/questions', express.static(path.join(process.cwd(), 'uploads', 'questions')));
+  app.use('/uploads/certificates', express.static(path.join(process.cwd(), 'uploads', 'certificates')));
 
   // GET /api/rounds/:roundId/submissions - Get all completed test attempts with answers
   app.get(

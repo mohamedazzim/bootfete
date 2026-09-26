@@ -1,8 +1,21 @@
 import { eq, ne, and, desc, asc, sql, gte, lte, or, inArray, isNull } from 'drizzle-orm';
 import { db } from './db';
-import { users, events, eventAdmins, eventRules, rounds, roundRules, questions, participants, testAttempts, answers, reports, registrationForms, registrations, teamMembers, eventCredentials, auditLogs, emailLogs, participantRegistry, manualRoundEntries, eventWinners, systemSettings } from '@shared/schema';
-import type { User, InsertUser, Event, InsertEvent, EventRules, InsertEventRules, Round, InsertRound, RoundRules, InsertRoundRules, Question, InsertQuestion, Participant, InsertParticipant, TestAttempt, InsertTestAttempt, Answer, InsertAnswer, Report, InsertReport, RegistrationForm, InsertRegistrationForm, Registration, InsertRegistration, TeamMember, InsertTeamMember, EventCredential, InsertEventCredential, AuditLog, InsertAuditLog, EmailLog, InsertEmailLog, ParticipantRegistry, InsertParticipantRegistry, FoodType, ManualRoundEntry, InsertManualRoundEntry, EventWinner, InsertEventWinner } from '@shared/schema';
+import { users, events, eventAdmins, eventRules, rounds, roundRules, questions, participants, testAttempts, answers, reports, registrationForms, registrations, teamMembers, eventCredentials, auditLogs, emailLogs, participantRegistry, manualRoundEntries, eventWinners, systemSettings, certificateTemplates } from '@shared/schema';
+import type { User, InsertUser, Event, InsertEvent, EventRules, InsertEventRules, Round, InsertRound, RoundRules, InsertRoundRules, Question, InsertQuestion, Participant, InsertParticipant, TestAttempt, InsertTestAttempt, Answer, InsertAnswer, Report, InsertReport, RegistrationForm, InsertRegistrationForm, Registration, InsertRegistration, TeamMember, InsertTeamMember, EventCredential, InsertEventCredential, AuditLog, InsertAuditLog, EmailLog, InsertEmailLog, ParticipantRegistry, InsertParticipantRegistry, FoodType, ManualRoundEntry, InsertManualRoundEntry, EventWinner, InsertEventWinner, CertificateTemplate, CertificatePlaceholders } from '@shared/schema';
 import { normalizeDepartment } from './lib/departmentUtils';
+
+// Strike-chronology normalization. Violation log entries carry ISO timestamps,
+// but the stored jsonb array is append-ordered, which can differ from true
+// chronological order under retries, network jitter, or clock skew. Every
+// strike-numbering and threshold decision must run on this sorted view so
+// strike 1 is always the earliest violation. Entries without a usable
+// timestamp are dropped (logViolation always stamps them; only foreign
+// writes can produce timestamp-less entries).
+export function sortViolationLogsByTimestamp<T extends { timestamp?: unknown }>(logs: T[]): T[] {
+  return [...logs]
+    .filter((log) => log && log.timestamp)
+    .sort((a, b) => new Date(a.timestamp as string).getTime() - new Date(b.timestamp as string).getTime());
+}
 
 export interface LeaderboardEntry {
   userId: string;
@@ -80,6 +93,14 @@ export interface IStorage {
     startedAt: Date | null;
     submittedAt: Date | null;
     violationCount: number;
+  }>>;
+  getRoundViolationFeed(roundId: string): Promise<Array<{
+    attemptId: string;
+    userId: string;
+    userName: string;
+    status: string;
+    startedAt: Date | null;
+    violationLogs: unknown;
   }>>;
   createTestAttempt(attempt: InsertTestAttempt): Promise<TestAttempt>;
   updateTestAttempt(id: string, attempt: Partial<InsertTestAttempt>): Promise<TestAttempt | undefined>;
@@ -240,6 +261,16 @@ export interface IStorage {
   deleteEventWinner(id: string): Promise<void>;
   deleteEventWinnersByEvent(eventId: string): Promise<void>;
   replaceEventWinners(eventId: string, winners: InsertEventWinner[]): Promise<EventWinner[]>;
+
+  // Certificate templates (one active template per event)
+  getCertificateTemplateByEvent(eventId: string): Promise<CertificateTemplate | undefined>;
+  upsertCertificateTemplate(data: {
+    eventId: string;
+    templateUrl: string;
+    fileType: 'pdf' | 'image';
+    placeholders: CertificatePlaceholders;
+  }): Promise<CertificateTemplate>;
+  deleteCertificateTemplateByEvent(eventId: string): Promise<void>;
 
   // Round 1 qualifiers (from online tests)
   getRound1Qualifiers(eventId: string, limit?: number): Promise<Array<{
@@ -724,6 +755,40 @@ export class DatabaseStorage implements IStorage {
     }));
   }
 
+  // Proctoring timeline feed: attempts with their raw violation logs plus
+  // user info, in a single query. The violations endpoint flattens these
+  // into a chronological feed.
+  async getRoundViolationFeed(roundId: string): Promise<Array<{
+    attemptId: string;
+    userId: string;
+    userName: string;
+    status: string;
+    startedAt: Date | null;
+    violationLogs: unknown;
+  }>> {
+    const rows = await db
+      .select({
+        attemptId: testAttempts.id,
+        userId: testAttempts.userId,
+        fullName: users.fullName,
+        username: users.username,
+        status: testAttempts.status,
+        startedAt: testAttempts.startedAt,
+        violationLogs: testAttempts.violationLogs,
+      })
+      .from(testAttempts)
+      .leftJoin(users, eq(users.id, testAttempts.userId))
+      .where(eq(testAttempts.roundId, roundId));
+    return rows.map((r) => ({
+      attemptId: r.attemptId,
+      userId: r.userId,
+      userName: r.fullName || r.username || "Unknown",
+      status: r.status,
+      startedAt: r.startedAt,
+      violationLogs: r.violationLogs,
+    }));
+  }
+
   async createTestAttempt(insertAttempt: InsertTestAttempt): Promise<TestAttempt> {
     // H-15: the (user_id, round_id) unique constraint makes a double start
     // (double-click / retried request) a no-op returning the existing row
@@ -748,10 +813,18 @@ export class DatabaseStorage implements IStorage {
   // counter double-counted. This keeps the array append and the increment
   // inside a single UPDATE, so 500 students hammering violations can't lose
   // or duplicate strikes.
+  //
+  // Strike-chronology fix: the same statement re-sorts the array ascending by
+  // timestamp after appending, so the stored order is always chronological
+  // (append order can differ from true order under retries / clock skew).
+  // Strike numbering, the threshold evaluation, and the 5s dedup's "last log"
+  // check then all operate on true chronological order. ISO-8601 UTC strings
+  // sort lexicographically in chronological order, so ORDER BY on the text
+  // value is exact.
   async logViolation(attemptId: string, type: string): Promise<TestAttempt | undefined> {
     const entry = JSON.stringify([{ type, timestamp: new Date().toISOString() }]);
     const setClause: Record<string, unknown> = {
-      violationLogs: sql`COALESCE(${testAttempts.violationLogs}, '[]'::jsonb) || ${entry}::jsonb`,
+      violationLogs: sql`(SELECT jsonb_agg(elem ORDER BY elem->>'timestamp' ASC) FROM jsonb_array_elements(COALESCE(${testAttempts.violationLogs}, '[]'::jsonb) || ${entry}::jsonb) AS elem)`,
     };
     if (type === "tab_switch") {
       setClause.tabSwitchCount = sql`COALESCE(${testAttempts.tabSwitchCount}, 0) + 1`;
@@ -3003,6 +3076,44 @@ export class DatabaseStorage implements IStorage {
       const created = await tx.insert(eventWinners).values(winners as any).returning();
       return created;
     });
+  }
+
+  // Certificate templates: one active template per event. Re-uploading
+  // replaces the previous template (and its file is deleted by the route).
+  async getCertificateTemplateByEvent(eventId: string): Promise<CertificateTemplate | undefined> {
+    const [row] = await db.select().from(certificateTemplates).where(eq(certificateTemplates.eventId, eventId));
+    return row;
+  }
+
+  async upsertCertificateTemplate(data: {
+    eventId: string;
+    templateUrl: string;
+    fileType: 'pdf' | 'image';
+    placeholders: CertificatePlaceholders;
+  }): Promise<CertificateTemplate> {
+    const [row] = await db
+      .insert(certificateTemplates)
+      .values({
+        eventId: data.eventId,
+        templateUrl: data.templateUrl,
+        fileType: data.fileType,
+        placeholders: data.placeholders,
+      })
+      .onConflictDoUpdate({
+        target: [certificateTemplates.eventId],
+        set: {
+          templateUrl: data.templateUrl,
+          fileType: data.fileType,
+          placeholders: data.placeholders,
+          updatedAt: new Date(),
+        },
+      })
+      .returning();
+    return row;
+  }
+
+  async deleteCertificateTemplateByEvent(eventId: string): Promise<void> {
+    await db.delete(certificateTemplates).where(eq(certificateTemplates.eventId, eventId));
   }
 
   async exportEventData(eventId: string): Promise<any> {

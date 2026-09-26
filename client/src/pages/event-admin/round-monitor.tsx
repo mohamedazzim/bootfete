@@ -24,6 +24,7 @@ import { useToast } from '@/hooks/use-toast';
 import { successToast, errorToast } from '@/lib/toast';
 import type { Round } from '@shared/schema';
 import ScrollableTable from '@/components/ScrollableTable';
+import ProctoringTimeline from '@/components/admin/ProctoringTimeline';
 
 interface LeaderboardEntry {
     rank: number;
@@ -481,6 +482,10 @@ export default function RoundMonitorPage() {
                         )}
                     </CardContent>
                 </Card>
+
+                {/* Proctoring timeline: chronological violation feed with
+                    strike progression and disqualification recovery. */}
+                {roundId && <ProctoringTimeline roundId={roundId} />}
 
                 {/* Progress Info */}
                 {stats.status === 'in_progress' && (

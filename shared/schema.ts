@@ -386,6 +386,43 @@ export const manualRoundEntries = pgTable("manual_round_entries", {
 });
 
 // Event Winners - winners for each event with positions
+// Certificate templates — base assets (PDF/PNG/JPEG) uploaded by event
+// admins, with placeholder coordinates for overlaying verified participant
+// data onto the template.
+export interface CertificatePlaceholder {
+  x: number;
+  y: number;
+  fontSize: number;
+  fontColor: string; // hex, e.g. "#1e293b"
+  alignment?: "left" | "center" | "right";
+}
+
+export type CertificatePlaceholders = Partial<Record<
+  "name" | "event" | "position" | "college" | "date" | "location",
+  CertificatePlaceholder
+>>;
+
+export const certificateTemplates = pgTable("certificate_templates", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  eventId: varchar("event_id").references(() => events.id, { onDelete: 'cascade' }).notNull(),
+  templateUrl: text("template_url").notNull(), // /uploads/certificates/<file>
+  fileType: varchar("file_type", { enum: ['pdf', 'image'] }).notNull(),
+  placeholders: jsonb("placeholders").$type<CertificatePlaceholders>().notNull().default(sql`'{}'::jsonb`),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+},
+  // One active template per event — re-uploading replaces the previous one.
+  (t) => [unique("certificate_templates_event_unique").on(t.eventId)],
+);
+
+export const insertCertificateTemplateSchema = createInsertSchema(certificateTemplates).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+export type CertificateTemplate = typeof certificateTemplates.$inferSelect;
+export type InsertCertificateTemplate = z.infer<typeof insertCertificateTemplateSchema>;
+
 export const eventWinners = pgTable("event_winners", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   eventId: varchar("event_id").references(() => events.id, { onDelete: 'cascade' }).notNull(),

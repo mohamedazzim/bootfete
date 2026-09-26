@@ -12,6 +12,7 @@ import { useToast } from '@/hooks/use-toast';
 import { apiRequest, queryClient } from '@/lib/queryClient';
 import type { Event, Round } from '@shared/schema';
 import ScrollableTable from '@/components/ScrollableTable';
+import { CertificateTemplateManager } from '@/components/admin/CertificateTemplateManager';
 
 interface EventCredentialWithDetails {
   id: string;
@@ -210,6 +211,7 @@ export default function EventDetailsPage() {
             <TabsTrigger value="overview" data-testid="tab-overview" className="flex-1">Overview</TabsTrigger>
             <TabsTrigger value="rounds" data-testid="tab-rounds" className="flex-1">Rounds</TabsTrigger>
             <TabsTrigger value="participants" data-testid="tab-participants" className="flex-1">Participants</TabsTrigger>
+            <TabsTrigger value="certificates" data-testid="tab-certificates" className="flex-1">Certificates</TabsTrigger>
           </TabsList>
 
           <TabsContent value="overview">
@@ -417,6 +419,9 @@ export default function EventDetailsPage() {
                 )}
               </CardContent>
             </Card>
+          </TabsContent>
+          <TabsContent value="certificates">
+            <CertificateTemplateManager eventId={event.id} />
           </TabsContent>
         </Tabs>
       </div>

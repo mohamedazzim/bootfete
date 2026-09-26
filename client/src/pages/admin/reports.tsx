@@ -14,6 +14,7 @@ import { FileText, Download, Plus, Loader2 } from 'lucide-react';
 import type { Report } from '@shared/schema';
 import { formatIST } from '@/lib/utils';
 import ScrollableTable from '@/components/ScrollableTable';
+import LiveAnalytics from '@/components/reports/LiveAnalytics';
 
 export default function ReportsPage() {
   const [, setLocation] = useLocation();
@@ -147,6 +148,8 @@ export default function ReportsPage() {
             )}
           </CardContent>
         </Card>
+
+        <LiveAnalytics />
 
       </div>
     </AdminLayout>
