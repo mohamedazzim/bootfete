@@ -1,0 +1,96 @@
+# BootFete 2K26 CI — type check, production build, Playwright integration tests.
+#
+# Design notes (grounded in this repo, 2026-09-26):
+# - playwright.config.ts owns the server lifecycle via its `webServer` block
+#   (`cross-env PORT=5000 npm run dev`, health-checked on
+#   http://localhost:5000, reuseExistingServer=false under CI). Starting a
+#   second server manually would collide on port 5000, so `npx playwright
+#   test` is the single step that boots the server in the background.
+# - The config sets `headless: false`; the ubuntu-latest runner has no
+#   display, so tests run under `xvfb-run` (preinstalled on the runner).
+# - server/db.ts throws at boot without DATABASE_URL/LOCAL_DATABASE_URL, so
+#   a Postgres service is required alongside Redis; `npm run db:push`
+#   creates the schema before the test step.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-and-test:
+    name: Type check, build, Playwright
+    runs-on: ubuntu-latest
+
+    services:
+      redis:
+        image: redis:alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: bootfete_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      CI: "true"
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/bootfete_test
+      REDIS_HOST: localhost
+      REDIS_PORT: 6379
+      JWT_SECRET: ci-pipeline-test-secret
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type check
+        run: npx tsc --noEmit
+
+      - name: Production build
+        run: npm run build
+
+      - name: Prepare test database schema
+        run: npm run db:push
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps
+
+      - name: Run Playwright tests
+        # Playwright's webServer (playwright.config.ts) boots
+        # `PORT=5000 npm run dev` in the background and waits for
+        # http://localhost:5000 before running tests/e2e.
+        # xvfb-run provides the display the headed config requires.
+        run: xvfb-run -a npx playwright test
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: tests/reports/
+          retention-days: 7
