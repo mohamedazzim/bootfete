@@ -3,6 +3,7 @@
 // no file store to secure or clean up.
 import PDFDocument from "pdfkit";
 import type { Response } from "express";
+import { getBranding, type EventBranding } from "./brandingService";
 
 export interface CertificateData {
   participantName: string;
@@ -22,7 +23,15 @@ const INDIGO = "#4338ca";
 const SLATE = "#334155";
 const GOLD = "#b45309";
 
-export function generateCertificate(data: CertificateData, res: Response): void {
+export async function generateCertificate(
+  data: CertificateData,
+  res: Response,
+  eventBranding?: EventBranding,
+): Promise<void> {
+  // Phase B historical integrity: the caller resolves the event's snapshot
+  // FIRST (resolveEventBranding); live global_settings is only the fallback
+  // when the caller has no event (or the event predates the snapshot).
+  const branding = eventBranding ?? (await getBranding());
   const doc = new PDFDocument({ size: "A4", layout: "landscape", margin: 0 });
 
   res.setHeader("Content-Type", "application/pdf");
@@ -43,10 +52,10 @@ export function generateCertificate(data: CertificateData, res: Response): void 
 
   // --- Header / branding ---
   doc.font("Helvetica").fontSize(13).fillColor(SLATE)
-    .text("BISHOP HEBER COLLEGE (AUTONOMOUS)", 0, y, { align: "center", width: PAGE_W });
+    .text(branding.organizerName, 0, y, { align: "center", width: PAGE_W });
   y += 22;
   doc.font("Helvetica-Bold").fontSize(30).fillColor(INDIGO)
-    .text("BootFete 2K26", 0, y, { align: "center", width: PAGE_W });
+    .text(branding.appName, 0, y, { align: "center", width: PAGE_W });
   y += 48;
 
   // --- Title ---

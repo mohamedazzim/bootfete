@@ -14,6 +14,7 @@ import logger from "./services/loggerService";
 import { metricsService } from "./services/metricsService";
 import { monitoringService } from "./services/monitoringService";
 import { initSentry, initSentryErrorHandler } from "./sentry";
+import { getConfigGaps } from "./config/env";
 
 const app = express();
 
@@ -143,6 +144,31 @@ monitoringService.start();
 
 
 (async () => {
+  // REQUIRED ENV (see server/config/env.ts): APP_URL backs every link inside
+  // emails; SENDER_EMAIL is the envelope sender identity for outbound mail.
+  // The previous production domain expired, so there are deliberately NO
+  // hardcoded fallbacks — a silent substitute would send dead links or mail
+  // from an unauthenticated domain (rejected / spam-filtered).
+  // Degraded mode (chosen over refusing to boot, so local dev without email
+  // flows keeps working): the server starts, but any attempt to use a missing
+  // value throws a descriptive error, and /api/health reports the gap.
+  const configGaps = getConfigGaps();
+  if (configGaps.length > 0) {
+    const hint: Record<string, string> = {
+      APP_URL: "APP_URL=https://your-domain-here",
+      SENDER_EMAIL: "SENDER_EMAIL=info@your-domain-here",
+    };
+    console.error(
+      "\n" + "=".repeat(78) + "\n" +
+      `[env] FATAL CONFIG GAP: ${configGaps.join(", ")} ${configGaps.length === 1 ? "is" : "are"} not set.\n` +
+      "[env] Email links (password resets, event/test links) and outbound\n" +
+      "[env] mail WILL FAIL — there are no fallback values. Set before\n" +
+      "[env] relying on email:\n" +
+      configGaps.map((g) => `[env]   ${hint[g]}`).join("\n") + "\n" +
+      "=".repeat(78) + "\n"
+    );
+  }
+
   const server = await registerRoutes(app);
 
   // Setup WebSocket

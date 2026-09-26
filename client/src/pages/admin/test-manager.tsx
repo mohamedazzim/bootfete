@@ -51,7 +51,7 @@ export default function TestManagerPage() {
     // For now, let's try to list events and expand them? Or just use the existing endpoints.
     // Assuming /api/events returns all for superadmin.
     const { data: events, isLoading: eventsLoading } = useQuery<Event[]>({
-        queryKey: ["/api/events"], // This returns all events for super_admin
+        queryKey: ["/api/events"], // This returns all events for super_admin/ultimate_admin
     });
 
     // We need to fetch rounds for ALL events. This is tricky with current API structure 

@@ -10,6 +10,7 @@ import ExamTimer from '@/components/ExamTimer';
 import { Textarea } from '@/components/ui/textarea';
 import { Input } from '@/components/ui/input';
 import { Progress } from '@/components/ui/progress';
+import { useBranding } from '@/lib/branding';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { useToast } from '@/hooks/use-toast';
 import { apiRequest, queryClient } from '@/lib/queryClient';
@@ -46,6 +47,8 @@ export default function TakeTestPage() {
   const { attemptId } = useParams();
   const [, setLocation] = useLocation();
   const { toast } = useToast();
+  // Phase B: exam tab title follows live branding.
+  const branding = useBranding();
 
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
   const [answers, setAnswers] = useState<Record<string, string>>({});
@@ -746,13 +749,13 @@ export default function TakeTestPage() {
     const roundName = attempt?.round?.name;
     if (roundName) {
       document.title = eventName
-        ? `${eventName} — ${roundName} | BootFete 2K26`
-        : `${roundName} | BootFete 2K26`;
+        ? `${eventName} — ${roundName} | ${branding.appName}`
+        : `${roundName} | ${branding.appName}`;
     }
     return () => {
       document.title = previous;
     };
-  }, [attempt?.id]);
+  }, [attempt?.id, branding.appName]);
 
   // Phase 3: route-transition blocker for in-app back-button navigation.
   // Wouter has no built-in blocker, so a guard history entry absorbs the

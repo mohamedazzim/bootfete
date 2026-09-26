@@ -3,7 +3,11 @@ import { pgTable, text, varchar, timestamp, integer, boolean, jsonb, unique } fr
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 import { z } from "zod";
 
-// Users table - supports super_admin, event_admin, participant, and registration_committee roles
+// Users table - supports ultimate_admin, super_admin, event_admin, participant, and registration_committee roles.
+// ultimate_admin is the top tier: it inherits every super_admin capability (see
+// hasSuperAdminAccess in server/middleware/auth.ts) plus exclusive rights such
+// as branding administration. Existing super_admin rows are untouched by this
+// change — ultimate_admin is a distinct role, not a rename.
 export const users: any = pgTable("users", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   username: text("username").notNull().unique(),
@@ -11,7 +15,7 @@ export const users: any = pgTable("users", {
   email: text("email").notNull().unique(),
   fullName: text("full_name").notNull(),
   phone: text("phone"),
-  role: varchar("role", { enum: ['super_admin', 'event_admin', 'participant', 'registration_committee'] }).notNull(),
+  role: varchar("role", { enum: ['ultimate_admin', 'super_admin', 'event_admin', 'participant', 'registration_committee'] }).notNull(),
   createdBy: varchar("created_by").references(() => users.id, { onDelete: 'set null' }),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
@@ -32,6 +36,13 @@ export const events = pgTable("events", {
   createdBy: varchar("created_by").references(() => users.id, { onDelete: 'set null' }),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  // Phase B historical integrity: branding snapshot captured from
+  // global_settings at event-creation time. Certs/reports/emails for this
+  // event read these FIRST; live global_settings is only a fallback for
+  // events that predate this migration (backfilled, approximate).
+  appName: text("app_name"),
+  organizerName: text("organizer_name"),
+  logoUrl: text("logo_url"),
 });
 
 // Event Admins - assignment of admins to events
@@ -365,6 +376,26 @@ export const systemSettings = pgTable("system_settings", {
   updatedBy: varchar("updated_by").references(() => users.id, { onDelete: 'set null' }),
 });
 
+// Global branding settings (Phase A white-label foundation). Singleton row:
+// the application always reads/writes the single row with id = 'global'
+// (see server/services/brandingService.ts — the only writer). This is
+// deliberately DISTINCT from system_settings (migration 002), which holds
+// notification-preference toggles — the two tables never overlap.
+// Live chrome (header, landing, login, new certificates/reports/emails) reads
+// these values; historical artifacts must snapshot them at creation time
+// (Phase B) rather than re-reading this table.
+export const globalSettings = pgTable("global_settings", {
+  id: varchar("id").primaryKey().default('global'),
+  appName: text("app_name").notNull().default('BootFete 2K26'),
+  organizerName: text("organizer_name").notNull().default('MCA Dept, Bishop Heber College'),
+  logoUrl: text("logo_url"),
+  primaryColor: text("primary_color").notNull().default('#4F46E5'),
+  supportEmail: text("support_email").notNull().default('Not configured'),
+  footerText: text("footer_text").notNull().default('© 2026 BootFete. All rights reserved.'),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedBy: varchar("updated_by").references(() => users.id, { onDelete: 'set null' }),
+});
+
 // Manual Round Entries - for physical/offline round results entered manually
 // Used when Round 2+ happens outside the app (on paper, physically, etc.)
 export const manualRoundEntries = pgTable("manual_round_entries", {
@@ -615,6 +646,7 @@ export type EmailLog = typeof emailLogs.$inferSelect;
 export type InsertEmailLog = z.infer<typeof insertEmailLogSchema>;
 
 export type SystemSetting = typeof systemSettings.$inferSelect;
+export type GlobalSettings = typeof globalSettings.$inferSelect;
 
 export type ManualRoundEntry = typeof manualRoundEntries.$inferSelect;
 export type InsertManualRoundEntry = z.infer<typeof insertManualRoundEntrySchema>;

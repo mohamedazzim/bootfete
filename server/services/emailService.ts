@@ -8,6 +8,9 @@
 
 import { Resend } from 'resend';
 import { storage } from '../storage';
+import { getBranding, resolveEventBranding, type EventBranding } from './brandingService';
+import { getSenderEmail } from '../config/env';
+import type { EmailBrand } from '../templates/emailTemplates';
 import { redisClient } from './redisClient';
 import {
   generateRegistrationApprovedEmail,
@@ -92,7 +95,28 @@ interface EmailProviderStatus {
 
 export class EmailService {
   private static instance: EmailService;
-  private fromEmail = { name: 'BootFete 2K26', email: 'info@bootfete2k26.tech' };
+  // Sender identity is deployment infrastructure, not branding: the envelope
+  // address comes from the required SENDER_EMAIL env var (see
+  // server/config/env.ts). There is intentionally NO fallback — the previous
+  // production domain expired, and mail from an unauthenticated domain gets
+  // rejected or spam-filtered. When SENDER_EMAIL is unset, sending throws a
+  // descriptive error instead of silently using a dead domain.
+  private async resolveFromAddress(): Promise<{ name: string; email: string }> {
+    const branding = await getBranding();
+    return { name: branding.appName, email: getSenderEmail() };
+  }
+
+  // Phase B: event-scoped emails resolve the event's own brand snapshot
+  // FIRST (callers pass resolveEventBranding(event)). Live global_settings
+  // is only the fallback when no event is in scope (multi-event mails,
+  // test-email) or the event predates the snapshot migration. footerText
+  // is not part of the snapshot (snapshot holds app/organizer/logo only),
+  // so it always comes from live settings.
+  private async resolveEmailBrand(eventBranding?: EventBranding | null): Promise<EmailBrand> {
+    const eb = eventBranding ?? (await resolveEventBranding(null));
+    const live = await getBranding();
+    return { appName: eb.appName, footerText: live.footerText };
+  }
   // Brevo is primary - Resend domain not verified (returns 403)
   private activeProvider: EmailProvider = 'brevo';
   private preferredProvider: EmailProvider = 'brevo';
@@ -268,8 +292,8 @@ export class EmailService {
     return this.activeProvider;
   }
 
-  getFromAddress(): { name: string; email: string } {
-    return { ...this.fromEmail };
+  async getFromAddress(): Promise<{ name: string; email: string }> {
+    return this.resolveFromAddress();
   }
 
   // Send via Brevo (Using Fetch)
@@ -280,7 +304,7 @@ export class EmailService {
       const apiKey = process.env.BREVO_API_KEY || '';
 
       const payload = {
-        sender: this.fromEmail,
+        sender: await this.resolveFromAddress(),
         to: [{ email: options.to, name: options.recipientName }],
         subject: options.subject,
         htmlContent: options.htmlContent,
@@ -331,8 +355,9 @@ export class EmailService {
     try {
       console.log(`[Resend] Sending to ${options.to}`);
 
+      const from = await this.resolveFromAddress();
       const { data, error } = await resend.emails.send({
-        from: `${this.fromEmail.name} <${this.fromEmail.email}>`,
+        from: `${from.name} <${from.email}>`,
         to: options.to,
         subject: options.subject,
         html: options.htmlContent,
@@ -410,13 +435,15 @@ export class EmailService {
 
   // --- Template Methods ---
 
-  async sendRegistrationReceived(to: string, name: string, eventName: string, registrationId?: string) {
-    const html = generateRegistrationReceivedEmail(name, eventName, registrationId);
+  async sendRegistrationReceived(to: string, name: string, eventName: string, registrationId?: string, eventBranding?: EventBranding | null) {
+    const brand = await this.resolveEmailBrand(eventBranding);
+    const html = generateRegistrationReceivedEmail(name, eventName, registrationId, brand);
     return this.sendEmail(to, `Registration Successful - ${eventName}`, html, 'registration_received', name, { eventName });
   }
 
-  async sendConsolidatedRegistrationReceived(to: string, name: string, events: Array<{ name: string }>, details: any) {
-    const html = generateConsolidatedRegistrationEmail(name, events, details);
+  async sendConsolidatedRegistrationReceived(to: string, name: string, events: Array<{ name: string }>, details: any, eventBranding?: EventBranding | null) {
+    const brand = await this.resolveEmailBrand(eventBranding);
+    const html = generateConsolidatedRegistrationEmail(name, events, details, brand);
     const eventNames = events.map(e => e.name).join(', ');
     return this.sendEmail(
       to,
@@ -428,22 +455,26 @@ export class EmailService {
     );
   }
 
-  async sendRegistrationApproved(to: string, name: string, eventName: string, username: string, password: string) {
-    const html = generateRegistrationApprovedEmail(name, eventName, username, password);
+  async sendRegistrationApproved(to: string, name: string, eventName: string, username: string, password: string, eventBranding?: EventBranding | null) {
+    const brand = await this.resolveEmailBrand(eventBranding);
+    const html = generateRegistrationApprovedEmail(name, eventName, username, password, brand);
     return this.sendEmail(to, `Registration Approved - ${eventName}`, html, 'registration_approved', name, { eventName, username });
   }
 
-  async sendCredentials(to: string, name: string, eventName: string, username: string, password: string) {
-    const html = generateCredentialsEmail(name, eventName, username, password);
+  async sendCredentials(to: string, name: string, eventName: string, username: string, password: string, eventBranding?: EventBranding | null) {
+    const brand = await this.resolveEmailBrand(eventBranding);
+    const html = generateCredentialsEmail(name, eventName, username, password, brand);
     return this.sendEmail(to, `Your Credentials for ${eventName}`, html, 'credentials_distribution', name, { eventName, username });
   }
 
   async sendConsolidatedCredentials(
     to: string,
     name: string,
-    credentials: Array<{ eventName: string; username: string; password: string }>
+    credentials: Array<{ eventName: string; username: string; password: string }>,
+    eventBranding?: EventBranding | null
   ) {
-    const html = generateConsolidatedCredentialsEmail(name, credentials);
+    const brand = await this.resolveEmailBrand(eventBranding);
+    const html = generateConsolidatedCredentialsEmail(name, credentials, brand);
     const eventNames = credentials.map(c => c.eventName).join(', ');
     return this.sendEmail(
       to,
@@ -455,13 +486,15 @@ export class EmailService {
     );
   }
 
-  async sendTestStartReminder(to: string, name: string, eventName: string, roundName: string, startTime: Date) {
-    const html = generateTestStartReminderEmail(name, eventName, roundName, startTime);
+  async sendTestStartReminder(to: string, name: string, eventName: string, roundName: string, startTime: Date, eventBranding?: EventBranding | null) {
+    const brand = await this.resolveEmailBrand(eventBranding);
+    const html = generateTestStartReminderEmail(name, eventName, roundName, startTime, brand);
     return this.sendEmail(to, `Test Starting Soon - ${roundName}`, html, 'test_start_reminder', name, { eventName, roundName, startTime });
   }
 
-  async sendResultPublished(to: string, name: string, eventName: string, score: number, rank: number) {
-    const html = generateResultPublishedEmail(name, eventName, score, rank);
+  async sendResultPublished(to: string, name: string, eventName: string, score: number, rank: number, eventBranding?: EventBranding | null) {
+    const brand = await this.resolveEmailBrand(eventBranding);
+    const html = generateResultPublishedEmail(name, eventName, score, rank, brand);
     return this.sendEmail(to, `Results Published - ${eventName}`, html, 'result_published', name, { eventName, score, rank });
   }
 
@@ -471,9 +504,11 @@ export class EmailService {
     eventName: string,
     roundName: string,
     score: number,
-    maxScore: number
+    maxScore: number,
+    eventBranding?: EventBranding | null
   ) {
-    const html = generateTestQualificationEmail(name, eventName, roundName, score, maxScore);
+    const brand = await this.resolveEmailBrand(eventBranding);
+    const html = generateTestQualificationEmail(name, eventName, roundName, score, maxScore, brand);
     return this.sendEmail(
       to,
       `Round Qualification Update - ${eventName}`,
@@ -493,9 +528,11 @@ export class EmailService {
     maxScore: number,
     finalsRoom: string,
     finalsTime: string,
-    message?: string
+    message?: string,
+    eventBranding?: EventBranding | null
   ) {
-    const html = generateTestQualificationWithFinalsDetailsEmail(name, eventName, roundName, score, maxScore, finalsRoom, finalsTime, message);
+    const brand = await this.resolveEmailBrand(eventBranding);
+    const html = generateTestQualificationWithFinalsDetailsEmail(name, eventName, roundName, score, maxScore, finalsRoom, finalsTime, message, brand);
     return this.sendEmail(
       to,
       `ðŸŽ‰ You're Qualified! Finals Details - ${eventName}`,
@@ -513,9 +550,11 @@ export class EmailService {
     roundName: string,
     venueRoom: string,
     dateTime: string,
-    message?: string
+    message?: string,
+    eventBranding?: EventBranding | null
   ) {
-    const html = generateWinnerAnnouncementEmail(name, eventName, roundName, venueRoom, dateTime, message);
+    const brand = await this.resolveEmailBrand(eventBranding);
+    const html = generateWinnerAnnouncementEmail(name, eventName, roundName, venueRoom, dateTime, message, brand);
     return this.sendEmail(
       to,
       `ðŸ† Congratulations! You are a Winner in ${eventName}`,

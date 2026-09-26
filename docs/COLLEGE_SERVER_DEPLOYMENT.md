@@ -1,7 +1,7 @@
 # College Server Deployment Guide
 
 ## Overview
-This guide covers deploying the BootFeet 2K26 Symposium Management System on your college's local server for fast, reliable access independent of internet speed. This deployment includes full offline capabilities and local database management.
+This guide covers deploying the BootFete 2K26 Symposium Management System on your college's local server for fast, reliable access independent of internet speed. This deployment includes full offline capabilities and local database management.
 
 ---
 
@@ -203,7 +203,7 @@ SMTP_HOST=your_college_smtp_server.edu
 SMTP_PORT=587
 SMTP_USER=symposium@yourcollege.edu
 SMTP_PASS=your_email_password
-SMTP_FROM=BootFeet 2K26 <symposium@yourcollege.edu>
+SMTP_FROM=BootFete 2K26 <symposium@yourcollege.edu>
 ```
 
 Secure the file:

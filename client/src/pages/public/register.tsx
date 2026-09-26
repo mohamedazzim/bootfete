@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { useToast } from '@/hooks/use-toast';
+import { useBranding } from '@/lib/branding';
 import { useAuth } from '@/lib/auth';
 import { errorToast, successToast } from '@/lib/toast';
 
@@ -22,6 +23,8 @@ interface FieldErrors {
  * Auth (JWT/session) logic is untouched — auth.tsx handles it.
  */
 export default function ParticipantRegister() {
+  // Phase B: registration chrome follows live branding.
+  const branding = useBranding();
   const [fullName, setFullName] = useState('');
   const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
@@ -62,7 +65,7 @@ export default function ParticipantRegister() {
             successToast(
         toast,
         'Registration successful',
-        'Welcome to BootFete 2K26!',
+        `Welcome to ${branding.appName}!`,
       );
     } catch (error: any) {
       const message: string = error.message || 'Registration failed. Please try again.';
@@ -93,7 +96,7 @@ export default function ParticipantRegister() {
               <UserPlus className="h-6 w-6 text-white" />
             </div>
             <CardTitle className="text-2xl font-bold tracking-tight text-slate-950">
-              BootFete 2K26
+              {branding.appName}
             </CardTitle>
             <CardDescription>Participant Registration — create your account</CardDescription>
           </div>

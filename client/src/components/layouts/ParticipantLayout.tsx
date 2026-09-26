@@ -1,5 +1,6 @@
 import { ReactNode } from 'react';
 import { useAuth } from '@/lib/auth';
+import { useBranding } from '@/lib/branding';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { LogOut, Circle, LayoutDashboard, ClipboardList, Compass } from 'lucide-react';
@@ -15,6 +16,8 @@ export default function ParticipantLayout({ children }: ParticipantLayoutProps) 
   const { user, logout } = useAuth();
   const [location] = useLocation();
   const { isConnected } = useWebSocket();
+  // Phase B: participant header wordmark follows live branding.
+  const branding = useBranding();
 
   const { data: credentialData } = useQuery<any>({
     queryKey: ['/api/participants/my-credential'],
@@ -32,8 +35,8 @@ export default function ParticipantLayout({ children }: ParticipantLayoutProps) 
         <div className="px-4 md:px-6 py-3 flex justify-between items-center">
           <div className="flex items-center gap-2 md:gap-4">
             <Link href="/participant/dashboard">
-              <span className="text-lg font-bold text-slate-900 cursor-pointer" data-testid="heading-symposium">
-                BOOTFETE <span className="hidden sm:inline">2K26</span>
+              <span className="text-lg font-bold text-slate-900 cursor-pointer truncate max-w-[200px] sm:max-w-none" data-testid="heading-symposium">
+                {branding.appName}
               </span>
             </Link>
 

@@ -14,6 +14,7 @@
 
 import type { Request, Response, NextFunction } from "express";
 import { storage } from "../storage.js";
+import { hasSuperAdminAccess } from "./auth.js";
 
 interface AuthRequest extends Request {
   user?: { id: string; role: string };
@@ -36,8 +37,8 @@ export function requireEventScope(paramName: string = "eventId") {
         return res.status(401).json({ message: "Authentication required" });
       }
 
-      // Superadmin has global scope
-      if (user.role === "super_admin") {
+      // Superadmin (and ultimate_admin via inheritance) has global scope
+      if (hasSuperAdminAccess(user)) {
         return next();
       }
 
@@ -75,14 +76,15 @@ export function requireEventScope(paramName: string = "eventId") {
 
 /**
  * Helper: check if an event_admin is authorized for a given event ID.
- * Returns true for super_admin (global), checks assignment for event_admin.
+ * Returns true for super_admin / ultimate_admin (global), checks assignment
+ * for event_admin.
  */
 export async function isEventAuthorized(
   userId: string,
   role: string,
   eventId: string
 ): Promise<boolean> {
-  if (role === "super_admin") return true;
+  if (hasSuperAdminAccess({ role })) return true;
   if (role !== "event_admin") return false;
 
   const myEvents = await storage.getEventsByAdmin(userId);

@@ -1,4 +1,4 @@
-import { useAuth } from '@/lib/auth';
+import { useAuth, hasSuperAdminAccess } from '@/lib/auth';
 import { useEffect, useState } from 'react';
 import { useLocation } from 'wouter';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -41,11 +41,11 @@ export default function AdminSettings() {
 
   const { data: systemSettings, isLoading: settingsLoading } = useQuery<SystemSettings>({
     queryKey: ['/api/admin/system-settings'],
-    enabled: !!user && user.role === 'super_admin',
+    enabled: !!user && hasSuperAdminAccess(user.role),
   });
 
   useEffect(() => {
-    if (!isLoading && (!user || user.role !== 'super_admin')) {
+    if (!isLoading && (!user || !hasSuperAdminAccess(user.role))) {
       setLocation('/login');
     }
   }, [user, isLoading, setLocation]);
@@ -155,11 +155,15 @@ export default function AdminSettings() {
                     <Label htmlFor="email-from">From Address</Label>
                     <Input
                       id="email-from"
-                      value={systemSettings.email.from || "BootFeet 2K26 <noreply@bootfeet.com>"}
+                      value={systemSettings.email.from || "Not configured — set SENDER_EMAIL"}
                       disabled
                       data-testid="input-email-from"
                     />
-                    <p className="text-xs text-green-600">✓ Configured</p>
+                    {systemSettings.email.from ? (
+                      <p className="text-xs text-green-600">✓ Configured</p>
+                    ) : (
+                      <p className="text-xs text-amber-600">Set the SENDER_EMAIL environment variable</p>
+                    )}
                   </div>
                 </>
               ) : (
@@ -198,7 +202,7 @@ export default function AdminSettings() {
                     <Label htmlFor="email-from">From Address</Label>
                     <Input
                       id="smtp-from"
-                      placeholder="BootFeet 2K26 <noreply@bootfeet.com>"
+                      placeholder="Not configured — set SENDER_EMAIL"
                       disabled
                       data-testid="input-smtp-from"
                     />

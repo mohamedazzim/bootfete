@@ -21,6 +21,15 @@ export interface AuthRequest extends Request {
   };
 }
 
+// Phase A RBAC hierarchy: ultimate_admin is the top tier and inherits every
+// super_admin capability. This is the SINGLE place that defines the
+// inheritance — all ad-hoc `role === 'super_admin'` checks across the server
+// must go through this helper so a future role change can't silently lock
+// ultimate_admin out of (or into) anything.
+export function hasSuperAdminAccess(user: { role?: string } | undefined | null): boolean {
+  return !!user && (user.role === "super_admin" || user.role === "ultimate_admin");
+}
+
 export async function requireAuth(req: AuthRequest, res: Response, next: NextFunction) {
   try {
     const token = req.headers.authorization?.replace("Bearer ", "");
@@ -68,8 +77,22 @@ export function requireSuperAdmin(req: AuthRequest, res: Response, next: NextFun
     return res.status(401).json({ message: "Authentication required" });
   }
 
-  if (req.user.role !== "super_admin") {
+  if (!hasSuperAdminAccess(req.user)) {
     return res.status(403).json({ message: "Super Admin access required" });
+  }
+
+  next();
+}
+
+// Strict: ONLY ultimate_admin. Used for white-label branding administration
+// and anything else that must never be reachable by a standard super_admin.
+export function requireUltimateAdmin(req: AuthRequest, res: Response, next: NextFunction) {
+  if (!req.user) {
+    return res.status(401).json({ message: "Authentication required" });
+  }
+
+  if (req.user.role !== "ultimate_admin") {
+    return res.status(403).json({ message: "Ultimate Admin access required" });
   }
 
   next();
@@ -80,7 +103,7 @@ export function requireEventAdmin(req: AuthRequest, res: Response, next: NextFun
     return res.status(401).json({ message: "Authentication required" });
   }
 
-  if (req.user.role !== "event_admin" && req.user.role !== "super_admin") {
+  if (req.user.role !== "event_admin" && !hasSuperAdminAccess(req.user)) {
     return res.status(403).json({ message: `Event Admin access required (Current Role: ${req.user.role})` });
   }
 
@@ -104,7 +127,7 @@ export function requireRegistrationCommittee(req: AuthRequest, res: Response, ne
     return res.status(401).json({ message: "Authentication required" });
   }
 
-  if (req.user.role !== "registration_committee" && req.user.role !== "super_admin") {
+  if (req.user.role !== "registration_committee" && !hasSuperAdminAccess(req.user)) {
     return res.status(403).json({ message: "Registration Committee access required" });
   }
 
@@ -116,7 +139,7 @@ export async function requireEventAccess(req: AuthRequest, res: Response, next: 
     return res.status(401).json({ message: "Authentication required" });
   }
 
-  if (req.user.role === "super_admin") {
+  if (hasSuperAdminAccess(req.user)) {
     return next();
   }
 
@@ -154,7 +177,7 @@ export async function requireRoundAccess(req: AuthRequest, res: Response, next: 
     return res.status(401).json({ message: "Authentication required" });
   }
 
-  if (req.user.role === "super_admin") {
+  if (hasSuperAdminAccess(req.user)) {
     return next();
   }
 
@@ -209,7 +232,7 @@ export async function requireEventAdminOrSuperAdmin(req: AuthRequest, res: Respo
     return res.status(401).json({ message: "Authentication required" });
   }
 
-  if (req.user.role === "super_admin") {
+  if (hasSuperAdminAccess(req.user)) {
     return next();
   }
 

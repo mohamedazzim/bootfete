@@ -4,6 +4,7 @@ import jwt from 'jsonwebtoken';
 import { storage } from './storage';
 import { createAdapter } from "@socket.io/redis-adapter";
 import { redisClient } from "./services/redisClient";
+import { hasSuperAdminAccess } from "./middleware/auth";
 
 const JWT_SECRET = (() => {
   const secret = process.env.JWT_SECRET;
@@ -86,7 +87,8 @@ export function setupWebSocket(httpServer: HTTPServer) {
     const user = socket.data.user;
     console.log(`WebSocket: User connected: ${user.username} (${user.role})`);
 
-    if (user.role === 'super_admin') {
+    // Phase A: ultimate_admin inherits super_admin's realtime admin feed.
+    if (hasSuperAdminAccess(user)) {
       socket.join('super_admin');
     } else if (user.role === 'event_admin') {
       // C1 (round 2): event rooms are always resolved via storage — the old

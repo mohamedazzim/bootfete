@@ -1,4 +1,5 @@
-import { useAuth } from '@/lib/auth';
+import { useAuth, hasSuperAdminAccess } from '@/lib/auth';
+import { useBranding } from '@/lib/branding';
 import { useWebSocket } from '@/contexts/WebSocketContext';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -20,12 +21,14 @@ const PERSONA_LABELS: Record<string, string> = {
 export default function Header() {
   const { user, logout } = useAuth();
   const { isConnected } = useWebSocket();
+  // Phase B: sitewide live branding — header wordmark follows global_settings.
+  const branding = useBranding();
 
   const personaLabel = user ? (PERSONA_LABELS[user.role] ?? user.role) : null;
   // Phase 4: all three administrative personas share the <AdminSidebar />
   // shell, so the mobile drawer toggle is available to each of them.
   const showSidebarToggle =
-    user?.role === 'super_admin' ||
+    hasSuperAdminAccess(user?.role) ||
     user?.role === 'event_admin' ||
     user?.role === 'registration_committee';
 
@@ -51,15 +54,16 @@ export default function Header() {
             <GraduationCap className="h-5 w-5 text-white" />
           </div>
           <span className="hidden sm:block text-sm font-medium text-slate-700 truncate max-w-[220px] lg:max-w-none">
-            Bishop Heber College (Autonomous)
+            {branding.organizerName}
           </span>
           <span className="hidden sm:block text-slate-300" aria-hidden="true">|</span>
-          {/* Compact mobile lockup: short wordmark, never breaks mid-word */}
-          <span className="sm:hidden text-base font-bold tracking-tight text-slate-950 whitespace-nowrap">
-            BootFete
+          {/* Compact mobile lockup: dynamic wordmark, truncated so a long
+              renamed brand can never overflow the 390px viewport */}
+          <span className="sm:hidden text-base font-bold tracking-tight text-slate-950 truncate max-w-[160px]">
+            {branding.appName}
           </span>
           <span className="hidden sm:block text-base font-bold tracking-tight text-slate-950 whitespace-nowrap">
-            BootFete 2K26
+            {branding.appName}
           </span>
           {personaLabel && (
             <Badge variant="secondary" className="hidden min-[420px]:inline-flex bg-indigo-50 text-indigo-700 border-indigo-100 whitespace-nowrap">
@@ -110,7 +114,7 @@ export default function Header() {
               </Button>
             </>
           ) : (
-            <span className="text-sm font-normal text-slate-500">BootFete 2K26</span>
+            <span className="text-sm font-normal text-slate-500">{branding.appName}</span>
           )}
         </div>
       </div>

@@ -1,4 +1,4 @@
-# Setup Instructions for BootFeet 2K26 Symposium Management System
+# Setup Instructions for BootFete 2K26 Symposium Management System
 
 ## ✅ Completed Setup Steps
 
@@ -44,7 +44,7 @@ Set these environment variables in Secrets:
 - `SMTP_PORT` - e.g., `587`
 - `SMTP_USER` - Your email address
 - `SMTP_PASS` - Your email password or app-specific password
-- `SMTP_FROM` - e.g., `BootFeet 2K26 <noreply@bootfeet.com>`
+- `SMTP_FROM` - e.g., `BootFete 2K26 <noreply@bootfeet.com>`
 
 **Note:** Email features are optional. The app will work without them, but email notifications won't be sent.
 

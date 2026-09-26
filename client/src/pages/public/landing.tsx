@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
+import { useBranding } from '@/lib/branding';
 
 
 interface PublicEvent {
@@ -82,6 +83,12 @@ function EventCard({ event }: { event: PublicEvent }) {
 }
 
 export default function LandingPage() {
+  // Phase B: hero follows live branding (accent stays on the trailing token,
+  // e.g. the "2K26" in "BootFete 2K26", for any renamed brand).
+  const branding = useBranding();
+  const heroWords = branding.appName.split(' ');
+  const heroTail = heroWords.pop() ?? '';
+  const heroHead = heroWords.join(' ');
   const { data: events, isLoading, isError } = useQuery<PublicEvent[]>({
     queryKey: ['/api/events/for-registration'],
     queryFn: async () => {
@@ -101,10 +108,10 @@ export default function LandingPage() {
         <div className="mx-auto max-w-5xl px-4 py-16 md:py-24 text-center space-y-6">
           <div className="flex items-center justify-center gap-2 text-indigo-300 text-sm font-medium tracking-wide">
             <GraduationCap className="h-4 w-4" aria-hidden="true" />
-            Bishop Heber College (Autonomous)
+            {branding.organizerName}
           </div>
           <h1 className="text-4xl md:text-6xl font-black tracking-tight" data-testid="heading-landing">
-            BootFete <span className="text-indigo-400">2K26</span>
+            {heroHead ? <>{heroHead} </> : null}<span className="text-indigo-400">{heroTail}</span>
           </h1>
           <p className="text-base md:text-lg text-slate-300 max-w-2xl mx-auto">
             The annual technical and cultural symposium. Discover open events below,

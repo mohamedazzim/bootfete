@@ -1,4 +1,5 @@
 import { ReactNode } from 'react';
+import { useAuth } from '@/lib/auth';
 import AdminSidebar from '@/components/AdminSidebar';
 import {
   Calendar,
@@ -10,14 +11,15 @@ import {
   ShieldAlert,
   Mail,
   ClipboardCheck,
-  Settings
+  Settings,
+  Palette
 } from 'lucide-react';
 
 interface AdminLayoutProps {
   children: ReactNode;
 }
 
-const navigation = [
+const BASE_NAVIGATION = [
   { name: 'Dashboard', href: '/admin/dashboard', icon: LayoutDashboard },
   { name: 'Events', href: '/admin/events', icon: Calendar },
   { name: 'Event Admins', href: '/admin/event-admins', icon: Users },
@@ -34,8 +36,16 @@ const navigation = [
 /**
  * AdminLayout — superadmin implementation of the shared <AdminSidebar />
  * shell. Global identity/account chrome lives in <Header />.
+ *
+ * Phase B: ultimate admins additionally see "Branding Settings" alongside
+ * "Super Admin Overrides". Strict ultimate-only — never inherited by
+ * super_admin.
  */
 export default function AdminLayout({ children }: AdminLayoutProps) {
+  const { user } = useAuth();
+  const navigation = user?.role === 'ultimate_admin'
+    ? [...BASE_NAVIGATION, { name: 'Branding Settings', href: '/ultimate-admin/settings', icon: Palette }]
+    : BASE_NAVIGATION;
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col">
       <AdminSidebar navItems={navigation} personaLabel="Super Admin">

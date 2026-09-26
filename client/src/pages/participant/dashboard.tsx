@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import { useLocation } from 'wouter';
 import ParticipantLayout from '@/components/layouts/ParticipantLayout';
+import { useBranding } from '@/lib/branding';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -15,6 +16,8 @@ import { useWebSocket } from '@/contexts/WebSocketContext';
 
 export default function ParticipantDashboard() {
   const [, setLocation] = useLocation();
+  // Phase B: dashboard heading follows live branding.
+  const branding = useBranding();
   const [agreed, setAgreed] = useState(false);
   const [selectedEventId, setSelectedEventId] = useState<string>('');
   const { toast } = useToast();
@@ -121,7 +124,7 @@ export default function ParticipantDashboard() {
         )}
         <div className="text-center mb-8">
           <h1 className="text-3xl font-bold text-gray-900 mb-2" data-testid="heading-dashboard">
-            BootFete 2K26 | {event?.name || 'Event'} | {team && team.length > 0 ? team.map((m: any) => m.name).join(', ') : (user?.fullName || 'Participant')}
+            {branding.appName} | {event?.name || 'Event'} | {team && team.length > 0 ? team.map((m: any) => m.name).join(', ') : (user?.fullName || 'Participant')}
           </h1>
           <p className="text-gray-600" data-testid="text-event-description">
             {event?.description}

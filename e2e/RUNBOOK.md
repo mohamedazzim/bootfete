@@ -94,7 +94,8 @@ npm run build              # vite + esbuild; must exit 0
 pm2 start ecosystem.config.cjs
 pm2 logs bootfete --lines 40   # confirm "listening", no boot errors
 curl -s http://localhost:3000/api/health
-# -> {"status":"ok","message":"BootFete 2K26 API is running"}
+# -> {"status":"ok","message":"BootFete 2K26 API is running","config":{"appUrl":true,"senderEmail":true,"gaps":[]}}
+# (status is "degraded" with gaps listed when APP_URL/SENDER_EMAIL are unset)
 ```
 
 Notes:

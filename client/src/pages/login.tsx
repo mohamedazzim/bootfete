@@ -1,15 +1,18 @@
 import { useState, useEffect } from 'react';
-import { useAuth } from '@/lib/auth';
+import { useAuth, hasSuperAdminAccess } from '@/lib/auth';
 import { useLocation, Link } from 'wouter';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { useToast } from '@/hooks/use-toast';
+import { useBranding } from '@/lib/branding';
 import { errorToast, infoToast, successToast } from '@/lib/toast';
 import { Eye, EyeOff, AlertCircle, GraduationCap } from 'lucide-react';
 
 export default function Login() {
+  // Phase B: login chrome follows live branding.
+  const branding = useBranding();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -22,7 +25,7 @@ export default function Login() {
 
   useEffect(() => {
     if (user) {
-      if (user.role === 'super_admin') {
+      if (hasSuperAdminAccess(user.role)) {
         setLocation('/admin/dashboard');
       } else if (user.role === 'event_admin') {
         setLocation('/event-admin/dashboard');
@@ -88,7 +91,7 @@ export default function Login() {
               <GraduationCap className="h-6 w-6 text-white" />
             </div>
             <CardTitle className="text-2xl font-bold tracking-tight text-slate-950">
-              BootFete 2K26
+              {branding.appName}
             </CardTitle>
             <CardDescription>Staff login — sign in to access your dashboard</CardDescription>
           </div>
@@ -171,7 +174,7 @@ export default function Login() {
             </Button>
           </form>
           <p className="mt-6 text-center text-sm text-slate-600">
-            New to BootFete?{' '}
+            New to {branding.appName}?{' '}
             <Link href="/register" className="font-medium text-indigo-600 hover:text-indigo-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 rounded-sm">
               Register as a participant
             </Link>

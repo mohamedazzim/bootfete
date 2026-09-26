@@ -2,7 +2,7 @@
 
 ## Overview
 
-The BootFeet 2K26 Symposium Management System uses WebSocket communication for real-time updates across the platform. This enables instant notifications for registration updates, round status changes, admin overrides, and result publishing.
+The BootFete 2K26 Symposium Management System uses WebSocket communication for real-time updates across the platform. This enables instant notifications for registration updates, round status changes, admin overrides, and result publishing.
 
 ## Connection
 

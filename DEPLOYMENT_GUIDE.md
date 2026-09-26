@@ -1,4 +1,4 @@
-# Complete Deployment Guide for BootFeet 2K26
+# Complete Deployment Guide for BootFete 2K26
 
 ## 🎯 Quick Start Overview
 

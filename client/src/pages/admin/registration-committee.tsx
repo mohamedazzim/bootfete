@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { useAuth } from '@/lib/auth';
+import { useAuth, hasSuperAdminAccess } from '@/lib/auth';
 import { useLocation } from 'wouter';
 import { useQuery } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
@@ -23,14 +23,14 @@ export default function RegistrationCommitteePage() {
   const [, setLocation] = useLocation();
 
   useEffect(() => {
-    if (!authLoading && (!user || user.role !== 'super_admin')) {
+    if (!authLoading && (!user || !hasSuperAdminAccess(user.role))) {
       setLocation('/login');
     }
   }, [user, authLoading, setLocation]);
 
   const { data: users = [], isLoading } = useQuery<any[]>({
     queryKey: ['/api/users'],
-    enabled: !!user && user.role === 'super_admin',
+    enabled: !!user && hasSuperAdminAccess(user.role),
   });
 
   const committeeUsers = users.filter(u => u.role === 'registration_committee');

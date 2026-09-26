@@ -1,7 +1,7 @@
 # Vercel Deployment Guide
 
 ## Overview
-This guide covers deploying the BootFeet 2K26 Symposium Management System to Vercel with your Neon PostgreSQL database.
+This guide covers deploying the BootFete 2K26 Symposium Management System to Vercel with your Neon PostgreSQL database.
 
 ---
 
@@ -91,7 +91,7 @@ postgresql://neondb_owner:YOUR_PASSWORD@YOUR_HOST.neon.tech/neondb?sslmode=requi
 | SMTP_PORT | `587` |
 | SMTP_USER | `your-email@gmail.com` |
 | SMTP_PASS | `your-app-password` |
-| SMTP_FROM | `BootFeet 2K26 <noreply@bootfeet.com>` |
+| SMTP_FROM | `BootFete 2K26 <noreply@bootfeet.com>` |
 
 ---
 

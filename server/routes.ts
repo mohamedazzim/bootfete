@@ -20,6 +20,8 @@ import { eq, and, inArray } from "drizzle-orm"
 import {
   requireAuth,
   requireSuperAdmin,
+  requireUltimateAdmin,
+  hasSuperAdminAccess,
   requireEventAdmin,
   requireParticipant,
   requireEventAccess,
@@ -30,6 +32,8 @@ import {
 } from "./middleware/auth"
 import { loginLimiter, publicApiLimiter, examApiLimiter } from "./middleware/rateLimit"
 import { emailService } from "./services/emailService"
+import { getBranding, DEFAULT_BRANDING, updateBranding, resolveEventBranding, type EventBranding } from "./services/brandingService"
+import { getConfigGaps } from "./config/env"
 import { WebSocketService } from "./services/websocketService"
 import fs from "fs";
 import path from "path";
@@ -117,6 +121,41 @@ const uploadCertificateTemplate = multer({
       cb(null, true);
     } else {
       cb(new Error('Invalid file type. Only PDF, PNG, JPEG allowed.'));
+    }
+  }
+});
+
+// Phase B: branding logo uploads (ultimate_admin only). Images only, 2MB max.
+const brandingLogoStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const uploadDir = path.join(process.cwd(), 'uploads', 'branding');
+    if (!fs.existsSync(uploadDir)) {
+      fs.mkdirSync(uploadDir, { recursive: true });
+    }
+    cb(null, uploadDir);
+  },
+  filename: (req, file, cb) => {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    const mimeToExt: Record<string, string> = {
+      'image/png': '.png',
+      'image/jpeg': '.jpg',
+      'image/svg+xml': '.svg',
+      'image/webp': '.webp',
+    };
+    const ext = mimeToExt[file.mimetype] || '';
+    cb(null, `logo-${uniqueSuffix}${ext}`);
+  }
+});
+
+const uploadBrandingLogo = multer({
+  storage: brandingLogoStorage,
+  limits: { fileSize: 2 * 1024 * 1024 }, // 2MB max
+  fileFilter: (req, file, cb) => {
+    const allowedTypes = ['image/png', 'image/jpeg', 'image/svg+xml', 'image/webp'];
+    if (allowedTypes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Invalid file type. Only PNG, JPEG, SVG, WebP allowed.'));
     }
   }
 });
@@ -346,8 +385,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
     return { ok: true };
   }
 
-  app.get("/api/health", (_req, res) => {
-    res.json({ status: "ok", message: "BootFete 2K26 API is running" });
+  app.get("/api/health", async (_req, res) => {
+    // Phase B: health message follows live branding; DEFAULT_BRANDING keeps
+    // the exact original string if settings are unreachable.
+    let branding = DEFAULT_BRANDING;
+    try {
+      branding = await getBranding();
+    } catch {
+      branding = DEFAULT_BRANDING;
+    }
+    // Required-env config gaps (APP_URL, SENDER_EMAIL): reported here so a
+    // monitor checking only /health notices a misconfigured deploy instead
+    // of a flat "ok". Gaps drive HTTP 503 (no consumer depends on
+    // always-200 yet), while the body keeps the machine-readable detail.
+    const configGaps = getConfigGaps();
+    res.status(configGaps.length > 0 ? 503 : 200).json({
+      status: configGaps.length > 0 ? "degraded" : "ok",
+      message: `${branding.appName} API is running`,
+      config: {
+        appUrl: !configGaps.includes("APP_URL"),
+        senderEmail: !configGaps.includes("SENDER_EMAIL"),
+        gaps: configGaps,
+      },
+    });
   });
 
   app.get("/api/users", requireAuth, requireSuperAdmin, async (req: AuthRequest, res: Response) => {
@@ -415,11 +475,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const targetUser = await storage.getUser(targetId)
-      if (targetUser && targetUser.role === "super_admin") {
+      // Phase A: rank protection. A caller may never delete an account whose
+      // role outranks their own, and the last remaining top-tier admin can
+      // never be deleted (ultimate_admin inherits all super_admin powers, so
+      // either role counts toward the anti-lockout invariant).
+      if (targetUser && (targetUser.role === "super_admin" || targetUser.role === "ultimate_admin")) {
+        if (targetUser.role === "ultimate_admin" && req.user!.role !== "ultimate_admin") {
+          return res.status(403).json({ message: "Only an Ultimate Admin can delete an Ultimate Admin account" })
+        }
         const allUsers = await storage.getUsers()
-        const superAdminCount = allUsers.filter((u) => u.role === "super_admin").length
-        if (superAdminCount <= 1) {
-          return res.status(400).json({ message: "Cannot delete the last Super Admin" })
+        const privilegedCount = allUsers.filter((u) => u.role === "super_admin" || u.role === "ultimate_admin").length
+        if (privilegedCount <= 1) {
+          return res.status(400).json({ message: "Cannot delete the last remaining admin account" })
         }
       }
 
@@ -434,6 +501,58 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   })
 
+  // Phase A white-label: public branding read (cached, DB-backed singleton
+  // with hardcoded BootFete 2K26 defaults as fallback). No auth required —
+  // the client chrome (header, landing, login) renders this.
+  app.get("/api/settings/branding", publicApiLimiter, async (req: Request, res: Response) => {
+    try {
+      res.json(await getBranding())
+    } catch (error) {
+      console.error("Get branding error:", error)
+      res.status(500).json({ message: "Internal server error" })
+    }
+  })
+
+  // Phase A white-label: STRICTLY ultimate_admin. Updates the singleton
+  // branding row and invalidates the Redis cache so the new brand is live
+  // immediately. A standard super_admin gets 403 here by design.
+  app.put("/api/admin/settings/branding", requireAuth, requireUltimateAdmin, async (req: AuthRequest, res: Response) => {
+    try {
+      const branding = await updateBranding(req.body ?? {}, req.user!.id)
+      res.json(branding)
+    } catch (error: any) {
+      console.error("Update branding error:", error)
+      if (error?.message && /must be|No valid branding/.test(error.message)) {
+        return res.status(400).json({ message: error.message })
+      }
+      res.status(500).json({ message: "Internal server error" })
+    }
+  })
+
+  // Phase B: branding logo upload (ultimate_admin only). Returns the
+  // site-relative logoUrl to store via PUT /api/admin/settings/branding.
+  app.post(
+    "/api/admin/settings/branding/logo",
+    requireAuth,
+    requireUltimateAdmin,
+    uploadBrandingLogo.single("logo"),
+    async (req: AuthRequest, res: Response) => {
+      try {
+        if (!req.file) {
+          return res.status(400).json({ message: "No logo file uploaded" })
+        }
+        const logoUrl = `/uploads/branding/${req.file.filename}`
+        res.json({ logoUrl })
+      } catch (error: any) {
+        if (req.file) {
+          try { fs.unlinkSync(req.file.path) } catch (e) { /* ignore */ }
+        }
+        console.error("Upload branding logo error:", error)
+        res.status(500).json({ message: "Internal server error" })
+      }
+    }
+  )
+
   app.get("/api/admin/orphaned-admins", requireAuth, requireSuperAdmin, async (req: AuthRequest, res: Response) => {
     try {
       const orphanedAdmins = await storage.getOrphanedEventAdmins()
@@ -447,7 +566,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/admin/system-settings", requireAuth, requireSuperAdmin, async (req: AuthRequest, res: Response) => {
     try {
-      const from = emailService.getFromAddress();
+      // SENDER_EMAIL is required env; when unset the sender is reported as
+      // unconfigured rather than failing this whole settings read.
+      let from: string | null = null;
+      try {
+        const addr = await emailService.getFromAddress();
+        from = `${addr.name} <${addr.email}>`;
+      } catch {
+        from = null;
+      }
       const activeProvider = emailService.getActiveProvider();
       // QA-1102 (certified): notification preferences are DB-persisted in
       // system_settings, surviving backend restarts.
@@ -465,7 +592,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           configured: true,
           host: activeProvider === 'brevo' ? 'api.brevo.com' : 'api.resend.com',
           user: activeProvider,
-          from: `${from.name} <${from.email}>`,
+          from,
         },
         notifications,
       })
@@ -574,13 +701,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Full name must be at least 2 characters" })
       }
 
-      const validRoles = ["super_admin", "event_admin", "participant", "registration_committee"]
+      const validRoles = ["ultimate_admin", "super_admin", "event_admin", "participant", "registration_committee"]
       if (!validRoles.includes(role)) {
         return res.status(400).json({ message: "Invalid role" })
       }
 
-      // SECURITY: privileged accounts must only ever be created by a Super Admin.
+      // SECURITY: privileged accounts must only ever be created by an admin.
       // Public/self-registration is restricted to the participant role.
+      // Phase A: ultimate_admin accounts can ONLY be created by an existing
+      // ultimate_admin — a super_admin must never be able to mint its own
+      // superior. Other admin roles require super-admin-level access.
       if (role !== "participant") {
         const token = req.headers.authorization?.replace("Bearer ", "")
         if (!token) {
@@ -596,7 +726,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
 
         const adminUser = await storage.getUser(adminUserId)
-        if (!adminUser || adminUser.role !== "super_admin") {
+        if (role === "ultimate_admin") {
+          if (!adminUser || adminUser.role !== "ultimate_admin") {
+            return res.status(403).json({ message: "Only an Ultimate Admin can create Ultimate Admin accounts" })
+          }
+        } else if (!adminUser || !hasSuperAdminAccess(adminUser)) {
           return res.status(403).json({ message: "Super Admin access required to create admin accounts" })
         }
       }
@@ -858,7 +992,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const user = req.user!
-      const isAdmin = user.role === "super_admin" ||
+      const isAdmin = hasSuperAdminAccess(user) ||
         (user.role === "event_admin" && (await storage.isUserEventAdmin(user.id, existing.eventId)))
 
       if (!isAdmin && existing.userId !== user.id) {
@@ -901,7 +1035,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Get all events
   app.get("/api/events", requireAuth, async (req: AuthRequest, res: Response) => {
     try {
-      if (req.user!.role === "super_admin" || req.user!.role === "registration_committee") {
+      if (hasSuperAdminAccess(req.user!) || req.user!.role === "registration_committee") {
         const events = await cacheService.get(
           'events:list:all',
           () => storage.getEvents(),
@@ -1102,6 +1236,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
 
+      // Phase B: capture the brand this event is created under as its own
+      // snapshot. Certs/reports/emails for this event read the snapshot
+      // FIRST; a later rename must not rewrite this event's identity.
+      const creationBranding = await getBranding();
       const event = await storage.createEvent({
         name,
         description,
@@ -1113,6 +1251,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         minMembers: minMembers || 1,
         maxMembers: maxMembers || 1,
         createdBy: req.user!.id,
+        appName: creationBranding.appName,
+        organizerName: creationBranding.organizerName,
+        logoUrl: creationBranding.logoUrl,
       })
 
       // Dev log: what was stored
@@ -1485,8 +1626,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return res.status(404).json({ message: "Round not found" });
         }
 
-        // Only super_admin can delete test data (destructive operation)
-        if (req.user!.role !== "super_admin") {
+        // Only super_admin (or ultimate_admin via inheritance) can delete test data (destructive operation)
+        if (!hasSuperAdminAccess(req.user!)) {
           return res.status(403).json({ message: "Only Super Admin can delete test data" });
         }
 
@@ -1859,7 +2000,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Never leak the answer key to participants mid-exam (H-09): apply the
       // same sanitization rule as the round questions list endpoint.
-      const isPrivileged = req.user!.role === "super_admin" || req.user!.role === "event_admin";
+      const isPrivileged = hasSuperAdminAccess(req.user!) || req.user!.role === "event_admin";
       if (!isPrivileged && req.user!.role === "participant") {
         const round = await storage.getRound(roundId);
         const canViewAnswers = round?.showAnswers || (round?.resultsPublished && round?.status === "completed");
@@ -2109,6 +2250,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           }
 
           // Only send qualification emails for PRELIMS (with time/location if needed)
+          // Phase B: qualification emails carry the event's own brand snapshot.
+          const qualBrand = await resolveEventBranding(event);
           for (const qualifier of qualifiers) {
             try {
               await emailService.sendTestQualificationWithFinalsDetails(
@@ -2120,7 +2263,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
                 0, // maxScore removed (not applicable for this use case)
                 finalsRoom || '', // finalsRoom (if provided)
                 finalsTime || '', // finalsTime (if provided)
-                "Congratulations on qualifying for the next round!"
+                "Congratulations on qualifying for the next round!",
+                qualBrand
               );
             } catch (emailError: any) {
               console.error(`[Results] Failed to send email to ${qualifier.email}:`, emailError);
@@ -2291,6 +2435,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
           const event = await storage.getEvent(round.eventId)
           let sentCount = 0
+          // Phase B: result emails carry the event's own brand snapshot.
+          const resultBrand = await resolveEventBranding(event)
 
           for (const userId of userIds) {
             const attempt = await storage.getTestAttemptByUserAndRound(userId, req.params.roundId)
@@ -2307,6 +2453,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
                   roundName: round.name,
                   score: attempt.totalScore || 0,
                   maxScore: attempt.maxScore || 100, // Fallback
+                  eventBranding: resultBrand,
                 },
                 user.fullName
               ).catch(err => console.error(`Failed to queue result email for ${user.email}`, err));
@@ -2419,7 +2566,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       );
 
       const round = await storage.getRound(roundId);
-      const isPrivileged = req.user!.role === 'super_admin' || req.user!.role === 'event_admin';
+      const isPrivileged = hasSuperAdminAccess(req.user!) || req.user!.role === 'event_admin';
 
       if (!isPrivileged && req.user!.role === 'participant') {
         const canViewAnswers = round?.showAnswers || (round?.resultsPublished && round?.status === 'completed');
@@ -2787,7 +2934,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // canViewResults is true if admin has enabled "Show Answers" for the round
       const canViewResults = round?.showAnswers ?? false
 
-      const isAdmin = req.user!.role === "super_admin" || req.user!.role === "event_admin"
+      const isAdmin = hasSuperAdminAccess(req.user!) || req.user!.role === "event_admin"
 
       // Hide scores and answers if showAnswers is not enabled (for participants only)
       let responseData: any = {
@@ -2914,7 +3061,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
           });
         const rank = completed.findIndex((a) => a.id === attempt.id) + 1;
 
-        generateCertificate(
+        // Phase B: the certificate carries the event's own brand snapshot —
+        // re-generating after a rename must still show the original brand.
+        const certBranding = await resolveEventBranding(event);
+        await generateCertificate(
           {
             participantName: user?.fullName || user?.username || "Participant",
             eventName: event?.name || "BootFete Event",
@@ -2926,6 +3076,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             certificateId: attempt.id,
           },
           res,
+          certBranding,
         );
       } catch (error) {
         console.error("Generate certificate error:", error);
@@ -3847,7 +3998,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         30,
       );
 
-      const isAdmin = req.user!.role === "super_admin" || req.user!.role === "event_admin";
+      const isAdmin = hasSuperAdminAccess(req.user!) || req.user!.role === "event_admin";
       const answersVisible = rounds.length > 0 && rounds.every((round) => round.showAnswers);
 
       if (isAdmin) {
@@ -4453,7 +4604,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/registrations", requireAuth, async (req: AuthRequest, res: Response) => {
     try {
       const user = req.user!
-      if (user.role !== "super_admin" && user.role !== "registration_committee") {
+      if (!hasSuperAdminAccess(user) && user.role !== "registration_committee") {
         return res.status(403).json({ message: "Forbidden" })
       }
 
@@ -4481,7 +4632,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.patch("/api/registrations/:id", requireAuth, async (req: AuthRequest, res: Response) => {
     try {
       const user = req.user!;
-      if (user.role !== "super_admin" && user.role !== "registration_committee") {
+      if (!hasSuperAdminAccess(user) && user.role !== "registration_committee") {
         return res.status(403).json({ message: "Forbidden" });
       }
 
@@ -4556,7 +4707,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/registrations/download-excel", requireAuth, async (req: AuthRequest, res: Response) => {
     try {
       const user = req.user!
-      if (user.role !== "super_admin" && user.role !== "registration_committee") {
+      if (!hasSuperAdminAccess(user) && user.role !== "registration_committee") {
         return res.status(403).json({ message: "Forbidden" })
       }
 
@@ -4901,12 +5052,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
         {
           name: organizerName,
           eventName: event.name,
-          registrationId: registration.id
+          registrationId: registration.id,
+          eventBranding: await resolveEventBranding(event),
         },
         organizerName
       ).catch(err => console.error(`Failed to queue registration email for ${organizerEmail}:`, err))
 
       // 2. Team Members
+      // Phase B: resolve the event's brand snapshot once for all member emails.
+      const memberBrand = await resolveEventBranding(event)
       if (teamMembers && teamMembers.length > 0) {
         teamMembers.forEach((member: any) => {
           queueService.addEmailJob(
@@ -4916,7 +5070,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
             {
               name: member.memberName,
               eventName: event.name,
-              registrationId: registration.id
+              registrationId: registration.id,
+              eventBranding: memberBrand,
             },
             member.memberName
           ).catch(err => console.error(`Failed to queue registration email for ${member.memberEmail}:`, err))
@@ -5187,13 +5342,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // "Participant" usually means the person registering (Organizer).
         // Team members might only be in one event, so individual email is fine/better for them unless they are in both.
         // For simplicity and matching the main request (Organizer gets consolidated):
+        // Phase B: resolve the event's brand snapshot once for all member emails.
+        const bulkMemberBrand = await resolveEventBranding(event)
         if (teamMembers && teamMembers.length > 0) {
           teamMembers.forEach((member: any) => {
             queueService.addEmailJob(
               member.memberEmail,
               `Registration Successful - ${event.name}`,
               'registration_received',
-              { name: member.memberName, eventName: event.name, registrationId: registration.id },
+              { name: member.memberName, eventName: event.name, registrationId: registration.id, eventBranding: bulkMemberBrand },
               member.memberName
             ).catch(console.error)
           })
@@ -5267,7 +5424,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/registrations/colleges", requireAuth, async (req: AuthRequest, res: Response) => {
     try {
       const user = req.user!
-      if (user.role !== "super_admin" && user.role !== "registration_committee") {
+      if (!hasSuperAdminAccess(user) && user.role !== "registration_committee") {
         return res.status(403).json({ message: "Forbidden" })
       }
 
@@ -5287,7 +5444,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.delete("/api/registrations/:id", requireAuth, async (req: AuthRequest, res: Response) => {
     try {
       const user = req.user!
-      if (user.role !== "super_admin" && user.role !== "registration_committee") {
+      if (!hasSuperAdminAccess(user) && user.role !== "registration_committee") {
         return res.status(403).json({ message: "Forbidden" })
       }
 
@@ -5319,7 +5476,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.patch("/api/registrations/:id/confirm", requireAuth, async (req: AuthRequest, res: Response) => {
     try {
       const user = req.user!
-      if (user.role !== "super_admin" && user.role !== "registration_committee") {
+      if (!hasSuperAdminAccess(user) && user.role !== "registration_committee") {
         return res.status(403).json({ message: "Forbidden" })
       }
 
@@ -5532,7 +5689,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/registrations/bulk-confirm", requireAuth, async (req: AuthRequest, res: Response) => {
     try {
       const user = req.user!
-      if (user.role !== "super_admin" && user.role !== "registration_committee") {
+      if (!hasSuperAdminAccess(user) && user.role !== "registration_committee") {
         return res.status(403).json({ message: "Forbidden" })
       }
 
@@ -5975,7 +6132,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // logged-in user could enumerate participant UUIDs and dump PII. A
       // participant may read only their own record; admins keep access.
       const isSelf = participant.userId === req.user!.id;
-      const isAdmin = req.user!.role === "super_admin" || req.user!.role === "event_admin" || req.user!.role === "registration_committee";
+      const isAdmin = hasSuperAdminAccess(req.user!) || req.user!.role === "event_admin" || req.user!.role === "registration_committee";
       if (!isSelf && !isAdmin) {
         return res.status(403).json({ message: "Access denied" });
       }
@@ -6242,7 +6399,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (!isEventAdmin) {
           return res.status(403).json({ message: "Not authorized for this event" })
         }
-      } else if (user.role !== "super_admin") {
+      } else if (!hasSuperAdminAccess(user)) {
         return res.status(403).json({ message: "Forbidden" })
       }
 
@@ -6276,7 +6433,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (!isEventAdmin) {
           return res.status(403).json({ message: "Not authorized for this event" })
         }
-      } else if (user.role !== "super_admin" && user.role !== "registration_committee") {
+      } else if (!hasSuperAdminAccess(user) && user.role !== "registration_committee") {
         return res.status(403).json({ message: "Forbidden" })
       }
 
@@ -6412,7 +6569,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           if (!isEventAdmin) {
             return res.status(403).json({ message: "Not authorized for this event" })
           }
-        } else if (user.role !== "super_admin") {
+        } else if (!hasSuperAdminAccess(user)) {
           return res.status(403).json({ message: "Forbidden" })
         }
 
@@ -6443,7 +6600,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           if (!isEventAdmin) {
             return res.status(403).json({ message: "Not authorized for this event" })
           }
-        } else if (user.role !== "super_admin") {
+        } else if (!hasSuperAdminAccess(user)) {
           return res.status(403).json({ message: "Forbidden" })
         }
 
@@ -6470,7 +6627,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           if (!isEventAdmin) {
             return res.status(403).json({ message: "Not authorized for this event" })
           }
-        } else if (user.role !== "super_admin") {
+        } else if (!hasSuperAdminAccess(user)) {
           return res.status(403).json({ message: "Forbidden" })
         }
 
@@ -6511,7 +6668,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           if (!isEventAdmin) {
             return res.status(403).json({ message: "Not authorized for this event" })
           }
-        } else if (user.role !== "super_admin") {
+        } else if (!hasSuperAdminAccess(user)) {
           return res.status(403).json({ message: "Forbidden" })
         }
 
@@ -6548,7 +6705,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (!isEventAdmin) {
           return res.status(403).json({ message: "Not authorized for this event" })
         }
-      } else if (user.role !== "super_admin") {
+      } else if (!hasSuperAdminAccess(user)) {
         return res.status(403).json({ message: "Forbidden" })
       }
 
@@ -6575,7 +6732,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Analytics for Super Admin
   app.get("/api/admin/stats", requireAuth, async (req: AuthRequest, res: Response) => {
     try {
-      if (req.user!.role !== "super_admin") {
+      if (!hasSuperAdminAccess(req.user!)) {
         return res.status(403).json({ message: "Forbidden" })
       }
       const stats = await storage.getRegistrationStats()
@@ -6595,7 +6752,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/event-admin/stats", requireAuth, async (req: AuthRequest, res: Response) => {
     try {
       const user = req.user!
-      if (user.role !== "event_admin" && user.role !== "super_admin") {
+      if (user.role !== "event_admin" && !hasSuperAdminAccess(user)) {
         return res.status(403).json({ message: "Forbidden" })
       }
 
@@ -6678,6 +6835,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const leaderboard = await storage.getEventLeaderboard(eventId)
 
         const workbook = new ExcelJS.Workbook()
+        // Phase B: event report carries the event's own brand snapshot.
+        const branding = await resolveEventBranding(event)
+        workbook.creator = branding.appName
+        workbook.company = branding.organizerName
 
         const sheet1 = workbook.addWorksheet("Event Overview")
         sheet1.columns = [
@@ -6833,7 +6994,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
         doc.pipe(res)
 
-        doc.fontSize(20).font("Helvetica-Bold").text(`Event Report: ${event.name}`, { align: "center" })
+        // Phase B: event report carries the event's own brand snapshot.
+        const branding = await resolveEventBranding(event)
+        doc.fontSize(11).font("Helvetica").fillColor("#64748b").text(branding.appName, { align: "center" })
+        doc.moveDown(0.25)
+        doc.fontSize(20).font("Helvetica-Bold").fillColor("#0f172a").text(`Event Report: ${event.name}`, { align: "center" })
+        doc.fillColor("#000000")
         doc.moveDown()
 
         doc.fontSize(14).font("Helvetica-Bold").text("Event Statistics", { underline: true })
@@ -7062,6 +7228,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const participants = allUsers.filter((u) => u.role === "participant")
 
         const workbook = new ExcelJS.Workbook()
+        // Phase B: symposium-wide report spans all events — no single event
+        // identity applies, so this stays live (the report itself is a
+        // "now" aggregate; its per-event rows keep their own data).
+        const branding = await getBranding()
+        workbook.creator = branding.appName
+        workbook.company = branding.organizerName
 
         const sheet1 = workbook.addWorksheet("Symposium Overview")
         sheet1.columns = [
@@ -7207,7 +7379,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
         doc.pipe(res)
 
-        doc.fontSize(20).font("Helvetica-Bold").text("Symposium-wide Report", { align: "center" })
+        // Phase B: symposium-wide report spans all events — no single event
+        // identity applies, so this stays live (the report itself is a
+        // "now" aggregate; its per-event rows keep their own data).
+        const branding = await getBranding()
+        doc.fontSize(11).font("Helvetica").fillColor("#64748b").text(branding.appName, { align: "center" })
+        doc.moveDown(0.25)
+        doc.fontSize(20).font("Helvetica-Bold").fillColor("#0f172a").text("Symposium-wide Report", { align: "center" })
+        doc.fillColor("#000000")
         doc.moveDown()
 
         doc.fontSize(14).font("Helvetica-Bold").text("Symposium Overview", { underline: true })
@@ -7919,7 +8098,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const result = await emailService.sendRegistrationApproved(
         to,
         name,
-        "BootFeet 2K26 Test Event",
+        "BootFete 2K26 Test Event",
         "test-user-001",
         "testpass123"
       )
@@ -7988,13 +8167,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const user = req.user!;
 
-      if (user.role !== "event_admin" && user.role !== "super_admin") {
+      if (user.role !== "event_admin" && !hasSuperAdminAccess(user)) {
         return res.status(403).json({ message: "Forbidden - Admin access only" });
       }
 
       // Get events allowed for this admin
       let eventIds: string[] = [];
-      if (user.role === "super_admin") {
+      if (hasSuperAdminAccess(user)) {
         const allEvents = await storage.getEvents();
         eventIds = allEvents.map(e => e.id);
       } else {
@@ -8409,7 +8588,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         30,
       );
 
-      const isAdmin = req.user!.role === "super_admin" || req.user!.role === "event_admin";
+      const isAdmin = hasSuperAdminAccess(req.user!) || req.user!.role === "event_admin";
 
       if (isAdmin) {
         return res.json({
@@ -8851,6 +9030,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Serve uploaded images statically
   app.use('/uploads/questions', express.static(path.join(process.cwd(), 'uploads', 'questions')));
   app.use('/uploads/certificates', express.static(path.join(process.cwd(), 'uploads', 'certificates')));
+  app.use('/uploads/branding', express.static(path.join(process.cwd(), 'uploads', 'branding')));
 
   // GET /api/rounds/:roundId/submissions - Get all completed test attempts with answers
   app.get(

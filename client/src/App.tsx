@@ -4,7 +4,8 @@ import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { AuthProvider, useAuth } from "@/lib/auth";
+import { AuthProvider, useAuth, hasSuperAdminAccess } from "@/lib/auth";
+import { BrandingProvider } from "@/lib/branding";
 import { WebSocketProvider } from "@/contexts/WebSocketContext";
 import AppHeader from "@/components/Header";
 // Track-4: the exam-taking flow and its immediate dependencies stay in the
@@ -46,6 +47,8 @@ const RegistrationCommitteeEditPage = lazy(() => import("@/pages/admin/registrat
 const SuperAdminOverridesPage = lazy(() => import("@/pages/admin/super-admin-overrides"));
 const EmailLogsPage = lazy(() => import("@/pages/admin/email-logs"));
 const AdminSettingsPage = lazy(() => import("@/pages/admin/settings"));
+// Ultimate-admin surfaces (lazy) — Phase B branding settings, strict ultimate-only.
+const UltimateAdminBrandingPage = lazy(() => import("@/pages/ultimate-admin/settings"));
 // Event-admin surfaces (lazy)
 const EventAdminDashboard = lazy(() => import("@/pages/event-admin/dashboard"));
 const EventAdminEventsPage = lazy(() => import("@/pages/event-admin/events"));
@@ -93,7 +96,8 @@ function ProtectedRoute({
     return <Redirect to="/login" />;
   }
 
-  if (allowedRoles && !allowedRoles.includes(user.role)) {
+  if (allowedRoles && !allowedRoles.includes(user.role) &&
+      !(user.role === 'ultimate_admin' && allowedRoles.includes('super_admin'))) {
     return <Redirect to="/login" />;
   }
 
@@ -124,7 +128,7 @@ function Router() {
 
       <Route path="/">
         {user ? (
-          user.role === 'super_admin' ? <Redirect to="/admin/dashboard" /> :
+          hasSuperAdminAccess(user.role) ? <Redirect to="/admin/dashboard" /> :
             user.role === 'event_admin' ? <Redirect to="/event-admin/dashboard" /> :
               user.role === 'registration_committee' ? <Redirect to="/registration-committee/dashboard" /> :
                 <Redirect to="/participant/dashboard" />
@@ -203,6 +207,11 @@ function Router() {
       </Route>
       <Route path="/admin/settings">
         <ProtectedRoute component={AdminSettingsPage} allowedRoles={['super_admin']} />
+      </Route>
+      {/* Phase B: strict ultimate_admin only — inheritance does NOT grant
+          super_admin access here (allowedRoles has no 'super_admin'). */}
+      <Route path="/ultimate-admin/settings">
+        <ProtectedRoute component={UltimateAdminBrandingPage} allowedRoles={['ultimate_admin']} />
       </Route>
 
       <Route path="/registration-committee/dashboard">
@@ -320,6 +329,7 @@ function App() {
 
   return (
     <QueryClientProvider client={queryClient}>
+      <BrandingProvider>
       <AuthProvider>
         <WebSocketProvider>
           <TooltipProvider>
@@ -333,6 +343,7 @@ function App() {
           </TooltipProvider>
         </WebSocketProvider>
       </AuthProvider>
+      </BrandingProvider>
     </QueryClientProvider>
   );
 }

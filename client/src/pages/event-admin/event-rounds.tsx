@@ -1,5 +1,5 @@
 import { useParams, useLocation } from 'wouter';
-import { useAuth } from '@/lib/auth';
+import { useAuth, hasSuperAdminAccess } from '@/lib/auth';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import { useState, useEffect } from 'react';
 import EventAdminLayout from '@/components/layouts/EventAdminLayout';
@@ -277,7 +277,7 @@ export default function EventRoundsPage() {
                         </TableCell>
                         <TableCell className="text-right">
                           <div className="flex justify-end gap-2">
-                            {(user?.role === 'super_admin' || user?.role === 'event_admin') && (
+                            {(hasSuperAdminAccess(user?.role) || user?.role === 'event_admin') && (
                               <>
                                 {round.status === 'not_started' && (
                                   <Button

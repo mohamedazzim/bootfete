@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent } from '@/components/ui/sheet';
 import { ChevronLeft, ChevronRight, type LucideIcon } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { useBranding } from '@/lib/branding';
 
 export interface AdminNavItem {
   name: string;
@@ -21,13 +22,15 @@ interface AdminSidebarProps {
  * AdminSidebar — the single shared shell for administrative personas.
  * Light sidebar + mobile drawer + content region on an 8pt spacing rhythm.
  * Role-scoped navigation is passed in; identity/account chrome lives in the
- * global <Header />. Wired for super_admin (AdminLayout), event_admin
+ * global <Header />. Wired for super_admin/ultimate_admin (AdminLayout), event_admin
  * (EventAdminLayout) and registration_committee (RegistrationCommitteeLayout).
  */
 export default function AdminSidebar({ navItems, personaLabel, children }: AdminSidebarProps) {
   const [location, setLocation] = useLocation();
   const [open, setOpen] = useState(false);
   const [isCollapsed, setIsCollapsed] = useState(false);
+  // Phase B: sidebar header wordmark follows live branding.
+  const branding = useBranding();
 
   // The mobile menu button lives in the global <Header /> (above this shell in
   // the tree), so it toggles the drawer via a window event bridge.
@@ -74,7 +77,7 @@ export default function AdminSidebar({ navItems, personaLabel, children }: Admin
       <Sheet open={open} onOpenChange={setOpen}>
         <SheetContent side="left" className="w-64 p-4 pt-10">
           <div className="mb-6 px-2">
-            <h2 className="text-lg font-bold text-slate-900">BootFete 2K26</h2>
+            <h2 className="text-lg font-bold text-slate-900 truncate">{branding.appName}</h2>
             <p className="text-sm font-normal text-slate-500">{personaLabel}</p>
           </div>
           {renderNav(() => setOpen(false))}

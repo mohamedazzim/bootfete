@@ -1,4 +1,4 @@
-# BootFeet 2K26 - Symposium Management System
+# BootFete 2K26 - Symposium Management System
 
 A comprehensive React-based web application for managing symposium events with role-based access control, proctored online testing, real-time updates, and advanced reporting capabilities.
 
@@ -404,7 +404,7 @@ SMTP_HOST=smtp.gmail.com
 SMTP_PORT=587
 SMTP_USER=your-email@gmail.com
 SMTP_PASS=your-app-password
-SMTP_FROM=BootFeet 2K26 <noreply@bootfeet.com>
+SMTP_FROM=BootFete 2K26 <noreply@bootfeet.com>
 ```
 
 ### Installation Steps
@@ -849,7 +849,7 @@ Additional documentation available:
 
 ## 🤝 Contributing
 
-This is a proprietary system built for BootFeet 2K26 Symposium.
+This is a proprietary system built for BootFete 2K26 Symposium.
 
 ## 📄 License
 
@@ -857,7 +857,7 @@ Proprietary - All rights reserved
 
 ---
 
-**Built with ❤️ for BootFeet 2K26 Symposium**
+**Built with ❤️ for BootFete 2K26 Symposium**
 
 For support or inquiries, contact the system administrator.
 "# SympoAzzi" 

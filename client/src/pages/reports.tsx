@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { useAuth } from '@/lib/auth';
+import { useAuth, hasSuperAdminAccess } from '@/lib/auth';
 import AdminLayout from '@/components/layouts/AdminLayout';
 import EventAdminLayout from '@/components/layouts/EventAdminLayout';
 import { Button } from '@/components/ui/button';
@@ -20,8 +20,8 @@ export default function ReportsPage() {
   const [isDownloading, setIsDownloading] = useState(false);
 
   const { data: events, isLoading: eventsLoading } = useQuery<Event[]>({
-    // super_admin gets all events; event_admin gets only its assigned events
-    queryKey: user?.role === 'super_admin' ? ['/api/events'] : ['/api/event-admin/events'],
+    // super_admin/ultimate_admin gets all events; event_admin gets only its assigned events
+    queryKey: hasSuperAdminAccess(user?.role) ? ['/api/events'] : ['/api/event-admin/events'],
   });
 
   const handleDownload = async () => {
@@ -86,7 +86,7 @@ export default function ReportsPage() {
     }
   };
 
-  const Layout = user?.role === 'super_admin' ? AdminLayout : EventAdminLayout;
+  const Layout = hasSuperAdminAccess(user?.role) ? AdminLayout : EventAdminLayout;
 
   return (
     <Layout>
@@ -111,7 +111,7 @@ export default function ReportsPage() {
                     <SelectValue placeholder="Select an event" />
                   </SelectTrigger>
                   <SelectContent>
-                    {user?.role === 'super_admin' && (
+                    {hasSuperAdminAccess(user?.role) && (
                       <SelectItem value="symposium" data-testid="option-symposium">
                         All Events (Symposium)
                       </SelectItem>
@@ -188,7 +188,7 @@ export default function ReportsPage() {
             </CardContent>
           </Card>
 
-          {user?.role === 'super_admin' && (
+          {hasSuperAdminAccess(user?.role) && (
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">

@@ -1,4 +1,4 @@
-import { useAuth } from '@/lib/auth';
+import { useAuth, hasSuperAdminAccess } from '@/lib/auth';
 import { useEffect, useState } from 'react';
 import { useLocation } from 'wouter';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -41,7 +41,7 @@ export default function AdminDashboard() {
 
   const { data: events = [] } = useQuery<Event[]>({
     queryKey: ['/api/events'],
-    enabled: !!user && user.role === 'super_admin',
+    enabled: !!user && hasSuperAdminAccess(user.role),
   });
 
   const { data: stats } = useQuery<{
@@ -53,19 +53,19 @@ export default function AdminDashboard() {
     nonVegCount: number;
   }>({
     queryKey: ['/api/admin/stats'],
-    enabled: !!user && user.role === 'super_admin',
+    enabled: !!user && hasSuperAdminAccess(user.role),
   });
 
   const { data: emailProviderStats, isLoading: emailStatsLoading, refetch: refetchEmailStats } = useQuery<EmailProviderStatus>({
     queryKey: ['/api/email-provider'],
-    enabled: !!user && user.role === 'super_admin',
+    enabled: !!user && hasSuperAdminAccess(user.role),
     refetchInterval: 30000, // Refetch every 30 seconds
   });
 
   // Phase 5: operational metrics from existing APIs only (no invented backends).
   const { data: allRounds = [], isLoading: roundsLoading } = useQuery<(Round & { eventName: string })[]>({
     queryKey: ['/api/super-admin/all-rounds'],
-    enabled: !!user && user.role === 'super_admin',
+    enabled: !!user && hasSuperAdminAccess(user.role),
     refetchInterval: 30000,
   });
 
@@ -78,7 +78,7 @@ export default function AdminDashboard() {
       const res = await apiRequest('GET', '/api/registrations?page=1&pageSize=200');
       return res.json();
     },
-    enabled: !!user && user.role === 'super_admin',
+    enabled: !!user && hasSuperAdminAccess(user.role),
     refetchInterval: 30000,
   });
 
@@ -113,7 +113,7 @@ export default function AdminDashboard() {
   });
 
   useEffect(() => {
-    if (!isLoading && (!user || user.role !== 'super_admin')) {
+    if (!isLoading && (!user || !hasSuperAdminAccess(user.role))) {
       setLocation('/login');
     }
   }, [user, isLoading, setLocation]);

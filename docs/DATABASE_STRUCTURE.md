@@ -1,7 +1,7 @@
 # Database Structure Documentation
 
 ## Overview
-This document provides a comprehensive reference for the BootFeet 2K26 Symposium Management System database structure. The database uses PostgreSQL with Drizzle ORM.
+This document provides a comprehensive reference for the BootFete 2K26 Symposium Management System database structure. The database uses PostgreSQL with Drizzle ORM.
 
 ## Entity Relationship Diagram (ERD)
 

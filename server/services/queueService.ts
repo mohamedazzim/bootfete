@@ -84,7 +84,8 @@ class QueueService {
                             to,
                             variables.name,
                             variables.eventName,
-                            variables.registrationId
+                            variables.registrationId,
+                            variables.eventBranding
                         );
                         break;
                     case 'registration_received_consolidated':
@@ -92,7 +93,8 @@ class QueueService {
                             to,
                             variables.name,
                             variables.events,
-                            variables.details
+                            variables.details,
+                            variables.eventBranding
                         );
                         break;
                     case 'registration_approved':
@@ -101,7 +103,8 @@ class QueueService {
                             variables.name,
                             variables.eventName,
                             variables.username,
-                            variables.password
+                            variables.password,
+                            variables.eventBranding
                         );
                         break;
                     case 'credentials_distribution':
@@ -110,7 +113,8 @@ class QueueService {
                             variables.name,
                             variables.eventName,
                             variables.username,
-                            variables.password
+                            variables.password,
+                            variables.eventBranding
                         );
                         break;
                     case 'test_start_reminder':
@@ -119,7 +123,8 @@ class QueueService {
                             variables.name,
                             variables.eventName,
                             variables.roundName,
-                            new Date(variables.startTime)
+                            new Date(variables.startTime),
+                            variables.eventBranding
                         );
                         break;
                     case 'result_published':
@@ -128,7 +133,8 @@ class QueueService {
                             variables.name,
                             variables.eventName,
                             variables.score,
-                            variables.rank
+                            variables.rank,
+                            variables.eventBranding
                         );
                         break;
                     case 'test_result_qualified':
@@ -138,14 +144,16 @@ class QueueService {
                             variables.eventName,
                             variables.roundName,
                             variables.score,
-                            variables.maxScore
+                            variables.maxScore,
+                            variables.eventBranding
                         );
                         break;
                     case 'credentials_consolidated':
                         result = await emailService.sendConsolidatedCredentials(
                             to,
                             variables.name,
-                            variables.credentials
+                            variables.credentials,
+                            variables.eventBranding
                         );
                         break;
                     // Add other cases as needed, or fallback to generic if we can construct HTML
@@ -230,28 +238,28 @@ class QueueService {
             let result;
             switch (templateName) {
                 case 'registration_received':
-                    result = await emailService.sendRegistrationReceived(to, variables.name, variables.eventName, variables.registrationId);
+                    result = await emailService.sendRegistrationReceived(to, variables.name, variables.eventName, variables.registrationId, variables.eventBranding);
                     break;
                 case 'registration_received_consolidated':
-                    result = await emailService.sendConsolidatedRegistrationReceived(to, variables.name, variables.events, variables.details);
+                    result = await emailService.sendConsolidatedRegistrationReceived(to, variables.name, variables.events, variables.details, variables.eventBranding);
                     break;
                 case 'registration_approved':
-                    result = await emailService.sendRegistrationApproved(to, variables.name, variables.eventName, variables.username, variables.password);
+                    result = await emailService.sendRegistrationApproved(to, variables.name, variables.eventName, variables.username, variables.password, variables.eventBranding);
                     break;
                 case 'credentials_distribution':
-                    result = await emailService.sendCredentials(to, variables.name, variables.eventName, variables.username, variables.password);
+                    result = await emailService.sendCredentials(to, variables.name, variables.eventName, variables.username, variables.password, variables.eventBranding);
                     break;
                 case 'test_start_reminder':
-                    result = await emailService.sendTestStartReminder(to, variables.name, variables.eventName, variables.roundName, new Date(variables.startTime));
+                    result = await emailService.sendTestStartReminder(to, variables.name, variables.eventName, variables.roundName, new Date(variables.startTime), variables.eventBranding);
                     break;
                 case 'result_published':
-                    result = await emailService.sendResultPublished(to, variables.name, variables.eventName, variables.score, variables.rank);
+                    result = await emailService.sendResultPublished(to, variables.name, variables.eventName, variables.score, variables.rank, variables.eventBranding);
                     break;
                 case 'test_result_qualified':
-                    result = await emailService.sendTestQualification(to, variables.name, variables.eventName, variables.roundName, variables.score, variables.maxScore);
+                    result = await emailService.sendTestQualification(to, variables.name, variables.eventName, variables.roundName, variables.score, variables.maxScore, variables.eventBranding);
                     break;
                 case 'credentials_consolidated':
-                    result = await emailService.sendConsolidatedCredentials(to, variables.name, variables.credentials);
+                    result = await emailService.sendConsolidatedCredentials(to, variables.name, variables.credentials, variables.eventBranding);
                     break;
                 default:
                     throw new Error(`Unknown template name: ${templateName}`);

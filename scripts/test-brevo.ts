@@ -2,7 +2,11 @@
 // @ts-ignore
 import SibApiV3Sdk from 'sib-api-v3-sdk';
 
-const apiKey = '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';
+const apiKey = process.env.BREVO_API_KEY?.trim();
+if (!apiKey) {
+    console.error("BREVO_API_KEY is not set. Export it before running this script.");
+    process.exit(1);
+}
 
 async function testBrevo() {
     console.log("Testing Brevo API connection...");

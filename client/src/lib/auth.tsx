@@ -22,6 +22,12 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
+// Phase A RBAC hierarchy (client mirror of server/middleware/auth.ts
+// hasSuperAdminAccess): ultimate_admin inherits every super_admin UI gate.
+export function hasSuperAdminAccess(role: string | undefined | null): boolean {
+  return role === 'super_admin' || role === 'ultimate_admin';
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [token, setToken] = useState<string | null>(localStorage.getItem('token'));
@@ -101,7 +107,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setToken(data.token);
     setUser(data.user);
     
-    if (data.user.role === 'super_admin') {
+    if (hasSuperAdminAccess(data.user.role)) {
       setLocation('/admin/dashboard');
     } else if (data.user.role === 'event_admin') {
       setLocation('/event-admin/dashboard');
@@ -134,7 +140,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setToken(data.token);
     setUser(data.user);
     
-    if (data.user.role === 'super_admin') {
+    if (hasSuperAdminAccess(data.user.role)) {
       setLocation('/admin/dashboard');
     } else if (data.user.role === 'event_admin') {
       setLocation('/event-admin/dashboard');

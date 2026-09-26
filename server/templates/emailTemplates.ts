@@ -1,9 +1,29 @@
+
+import { getAppBaseUrl } from "../config/env";
+
+// Infrastructure, NOT display branding: the base URL for links inside emails
+// comes from the required APP_URL env var (see server/config/env.ts) — there
+// is intentionally NO fallback domain. This must NEVER be derived from
+// app_name/organizer_name — a domain does not change when branding does.
+
 ﻿// Runner-up announcement email - for final round runners-up
+
+// Phase A white-label: brand strings threaded through every template.
+// Defaults are byte-identical to the original hardcoded literals.
+export interface EmailBrand {
+  appName: string;
+  footerText: string;
+}
+export const DEFAULT_EMAIL_BRAND: EmailBrand = {
+  appName: "BootFete 2K26",
+  footerText: "${brand.footerText}",
+};
 export function generateRunnerAnnouncementEmail(
   name: string,
   eventName: string,
   roundName: string,
-  message?: string
+  message?: string,
+  brand: EmailBrand = DEFAULT_EMAIL_BRAND
 ): string {
   return `
     <!DOCTYPE html>
@@ -51,7 +71,7 @@ export function generateRunnerAnnouncementEmail(
                       </p>
                     </div>
                     <div style="text-align: center; margin: 32px 0;">
-                      <a href="${process.env.APP_URL || 'https://dashboard.bootfete2k26.tech'}/participant/my-tests" 
+                      <a href="${getAppBaseUrl()}/participant/my-tests" 
                          style="display: inline-block; background: linear-gradient(135deg, #60a5fa 0%, #2563eb 100%); color: white; padding: 14px 32px; border-radius: 8px; text-decoration: none; font-weight: 600; font-size: 16px;">
                         View Dashboard
                       </a>
@@ -79,7 +99,8 @@ export function generateRunnerAnnouncementEmail(
 export function generateRegistrationReceivedEmail(
   name: string,
   eventName: string,
-  registrationId?: string
+  registrationId?: string,
+  brand: EmailBrand = DEFAULT_EMAIL_BRAND
 ): string {
   return `
     <!DOCTYPE html>
@@ -96,7 +117,7 @@ export function generateRegistrationReceivedEmail(
               <table role="presentation" style="width: 600px; max-width: 100%; background: white; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
                 <tr>
                   <td style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 40px 30px; text-align: center; border-radius: 12px 12px 0 0;">
-                    <h1 style="margin: 0; color: white; font-size: 28px; font-weight: 700;">BootFete2K26</h1>
+                    <h1 style="margin: 0; color: white; font-size: 28px; font-weight: 700;">${brand.appName}</h1>
                     <p style="margin: 10px 0 0; color: rgba(255,255,255,0.9); font-size: 14px;">PG DEPARTMENT OF COMPUTER APPLICATIONS - BISHOP HEBER COLLEGE</p>
                   </td>
                 </tr>
@@ -144,7 +165,7 @@ export function generateRegistrationReceivedEmail(
                       Questions? Contact our support team
                     </p>
                     <p style="margin: 0; color: #9ca3af; font-size: 12px; text-align: center;">
-                      Â© 2026 BootFete. All rights reserved.
+                      ${brand.footerText}
                     </p>
                   </td>
                 </tr>
@@ -161,7 +182,8 @@ export function generateRegistrationApprovedEmail(
   name: string,
   eventName: string,
   username: string,
-  password: string
+  password: string,
+  brand: EmailBrand = DEFAULT_EMAIL_BRAND
 ): string {
   return `
     <!DOCTYPE html>
@@ -180,7 +202,7 @@ export function generateRegistrationApprovedEmail(
                 <tr>
                   <td style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 40px 30px; text-align: center; border-radius: 12px 12px 0 0;">
                     <div style="text-align: center; margin: 0 0 10px 0;">
-                      <h1 style="margin: 0; color: white; font-size: 28px; font-weight: 700;">BootFete2K26</h1>
+                      <h1 style="margin: 0; color: white; font-size: 28px; font-weight: 700;">${brand.appName}</h1>
                       <p style="margin: 0; color: rgba(255,255,255,0.9); font-size: 16px; font-weight: 600;">PG DEPARTMENT OF COMPUTER APPLICATIONS</p>
                       <p style="margin: 0; color: rgba(255,255,255,0.9); font-size: 16px; font-weight: 600;">BISHOP HEBER COLLEGE</p>
                     </div>
@@ -224,7 +246,7 @@ export function generateRegistrationApprovedEmail(
                     </table>
                     
                     <div style="text-align: center; margin: 32px 0;">
-                      <a href="${process.env.APP_URL || 'https://symposium.replit.app'}/login" 
+                      <a href="${getAppBaseUrl()}/login" 
                          style="display: inline-block; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 14px 32px; border-radius: 8px; text-decoration: none; font-weight: 600; font-size: 16px;">
                         Login to Platform
                       </a>
@@ -245,7 +267,7 @@ export function generateRegistrationApprovedEmail(
                       Need help? Contact our support team
                     </p>
                     <p style="margin: 0; color: #9ca3af; font-size: 12px; text-align: center;">
-                      Â© 2026 BootFete. All rights reserved.
+                      ${brand.footerText}
                     </p>
                   </td>
                 </tr>
@@ -262,7 +284,8 @@ export function generateCredentialsEmail(
   name: string,
   eventName: string,
   username: string,
-  password: string
+  password: string,
+  brand: EmailBrand = DEFAULT_EMAIL_BRAND
 ): string {
   return `
     <!DOCTYPE html>
@@ -279,7 +302,7 @@ export function generateCredentialsEmail(
               <table role="presentation" style="width: 600px; max-width: 100%; background: white; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
                 <tr>
                   <td style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 40px 30px; text-align: center; border-radius: 12px 12px 0 0;">
-                    <h1 style="margin: 0; color: white; font-size: 28px; font-weight: 700;">BootFete 2K26</h1>
+                    <h1 style="margin: 0; color: white; font-size: 28px; font-weight: 700;">${brand.appName}</h1>
                     <p style="margin: 10px 0 0; color: rgba(255,255,255,0.9); font-size: 14px;">Symposium Management Platform</p>
                   </td>
                 </tr>
@@ -320,7 +343,7 @@ export function generateCredentialsEmail(
                     </table>
                     
                     <div style="text-align: center; margin: 32px 0;">
-                      <a href="${process.env.APP_URL || 'https://symposium.replit.app'}/login" 
+                      <a href="${getAppBaseUrl()}/login" 
                          style="display: inline-block; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 14px 32px; border-radius: 8px; text-decoration: none; font-weight: 600; font-size: 16px;">
                         Access Platform
                       </a>
@@ -340,7 +363,7 @@ export function generateCredentialsEmail(
                       Questions? Contact our support team
                     </p>
                     <p style="margin: 0; color: #9ca3af; font-size: 12px; text-align: center;">
-                      Â© 2026 BootFete. All rights reserved.
+                      ${brand.footerText}
                     </p>
                   </td>
                 </tr>
@@ -357,7 +380,8 @@ export function generateTestStartReminderEmail(
   name: string,
   eventName: string,
   roundName: string,
-  startTime: Date
+  startTime: Date,
+  brand: EmailBrand = DEFAULT_EMAIL_BRAND
 ): string {
   const formattedTime = startTime.toLocaleString('en-US', {
     dateStyle: 'full',
@@ -379,7 +403,7 @@ export function generateTestStartReminderEmail(
               <table role="presentation" style="width: 600px; max-width: 100%; background: white; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
                 <tr>
                   <td style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 40px 30px; text-align: center; border-radius: 12px 12px 0 0;">
-                    <h1 style="margin: 0; color: white; font-size: 28px; font-weight: 700;">BootFete 2K26</h1>
+                    <h1 style="margin: 0; color: white; font-size: 28px; font-weight: 700;">${brand.appName}</h1>
                     <p style="margin: 10px 0 0; color: rgba(255,255,255,0.9); font-size: 14px;">Symposium Management Platform</p>
                   </td>
                 </tr>
@@ -424,7 +448,7 @@ export function generateTestStartReminderEmail(
                     </table>
                     
                     <div style="text-align: center; margin: 32px 0;">
-                      <a href="${process.env.APP_URL || 'https://symposium.replit.app'}/participant/my-tests" 
+                      <a href="${getAppBaseUrl()}/participant/my-tests" 
                          style="display: inline-block; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 14px 32px; border-radius: 8px; text-decoration: none; font-weight: 600; font-size: 16px;">
                         Go to Dashboard
                       </a>
@@ -444,7 +468,7 @@ export function generateTestStartReminderEmail(
                       Good luck! You've got this! ðŸš€
                     </p>
                     <p style="margin: 0; color: #9ca3af; font-size: 12px; text-align: center;">
-                      Â© 2026 BootFete. All rights reserved.
+                      ${brand.footerText}
                     </p>
                   </td>
                 </tr>
@@ -461,7 +485,8 @@ export function generateResultPublishedEmail(
   name: string,
   eventName: string,
   score: number,
-  rank: number
+  rank: number,
+  brand: EmailBrand = DEFAULT_EMAIL_BRAND
 ): string {
   return `
     <!DOCTYPE html>
@@ -478,7 +503,7 @@ export function generateResultPublishedEmail(
               <table role="presentation" style="width: 600px; max-width: 100%; background: white; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
                 <tr>
                   <td style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 40px 30px; text-align: center; border-radius: 12px 12px 0 0;">
-                    <h1 style="margin: 0; color: white; font-size: 28px; font-weight: 700;">BootFete 2K26</h1>
+                    <h1 style="margin: 0; color: white; font-size: 28px; font-weight: 700;">${brand.appName}</h1>
                     <p style="margin: 10px 0 0; color: rgba(255,255,255,0.9); font-size: 14px;">Symposium Management Platform</p>
                   </td>
                 </tr>
@@ -523,7 +548,7 @@ export function generateResultPublishedEmail(
                     </table>
                     
                     <div style="text-align: center; margin: 32px 0;">
-                      <a href="${process.env.APP_URL || 'https://symposium.replit.app'}/participant/test-results" 
+                      <a href="${getAppBaseUrl()}/participant/test-results" 
                          style="display: inline-block; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 14px 32px; border-radius: 8px; text-decoration: none; font-weight: 600; font-size: 16px;">
                         View Full Results
                       </a>
@@ -543,7 +568,7 @@ export function generateResultPublishedEmail(
                       Thank you for participating! ðŸŽ‰
                     </p>
                     <p style="margin: 0; color: #9ca3af; font-size: 12px; text-align: center;">
-                      Â© 2026 BootFete. All rights reserved.
+                      ${brand.footerText}
                     </p>
                   </td>
                 </tr>
@@ -561,7 +586,8 @@ export function generateAdminNotificationEmail(
   recipientEmail: string,
   recipientName: string,
   eventName: string,
-  additionalDetails: Record<string, any>
+  additionalDetails: Record<string, any>,
+  brand: EmailBrand = DEFAULT_EMAIL_BRAND
 ): string {
   const timestamp = new Date().toLocaleString();
   const detailsHtml = Object.entries(additionalDetails)
@@ -667,7 +693,7 @@ export function generateAdminNotificationEmail(
                 <tr>
                   <td style="padding: 20px; background: #f9fafb; border-radius: 0 0 12px 12px; border-top: 1px solid #e5e7eb;">
                     <p style="margin: 0; color: #9ca3af; font-size: 12px; text-align: center;">
-                      Â© 2026 BootFete. All rights reserved. | Super Admin Dashboard
+                      ${brand.footerText} | Super Admin Dashboard
                     </p>
                   </td>
                 </tr>
@@ -683,7 +709,8 @@ export function generateAdminNotificationEmail(
 export function generateConsolidatedRegistrationEmail(
   name: string,
   events: Array<{ name: string }>,
-  additionalDetails: { college?: string; rollNo?: string }
+  additionalDetails: { college?: string; rollNo?: string },
+  brand: EmailBrand = DEFAULT_EMAIL_BRAND
 ): string {
   const eventsList = events.map(event => `<li style="margin: 8px 0; color: #7c3aed; font-weight: 600;">${event.name}</li>`).join('');
 
@@ -703,7 +730,7 @@ export function generateConsolidatedRegistrationEmail(
                 <!-- Header -->
                 <tr>
                   <td style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 40px 30px; text-align: center; border-radius: 12px 12px 0 0;">
-                    <h1 style="margin: 0; color: white; font-size: 28px; font-weight: 700;">BootFete2K26</h1>
+                    <h1 style="margin: 0; color: white; font-size: 28px; font-weight: 700;">${brand.appName}</h1>
                     <p style="margin: 10px 0 0; color: rgba(255,255,255,0.9); font-size: 14px;">PG DEPARTMENT OF COMPUTER APPLICATIONS - BISHOP HEBER COLLEGE</p>
                   </td>
                 </tr>
@@ -745,7 +772,7 @@ export function generateConsolidatedRegistrationEmail(
                       Questions? Contact our support team
                     </p>
                     <p style="margin: 0; color: #9ca3af; font-size: 12px; text-align: center;">
-                      Â© 2026 BootFete. All rights reserved.
+                      ${brand.footerText}
                     </p>
                   </td>
                 </tr>
@@ -763,7 +790,8 @@ export function generateTestQualificationEmail(
   eventName: string,
   roundName: string,
   score: number,
-  maxScore: number
+  maxScore: number,
+  brand: EmailBrand = DEFAULT_EMAIL_BRAND
 ): string {
   return `
     <!DOCTYPE html>
@@ -780,7 +808,7 @@ export function generateTestQualificationEmail(
               <table role="presentation" style="width: 600px; max-width: 100%; background: white; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
                 <tr>
                   <td style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 40px 30px; text-align: center; border-radius: 12px 12px 0 0;">
-                    <h1 style="margin: 0; color: white; font-size: 28px; font-weight: 700;">BootFete 2K26</h1>
+                    <h1 style="margin: 0; color: white; font-size: 28px; font-weight: 700;">${brand.appName}</h1>
                     <p style="margin: 10px 0 0; color: rgba(255,255,255,0.9); font-size: 14px;">Symposium Management Platform</p>
                   </td>
                 </tr>
@@ -826,7 +854,7 @@ export function generateTestQualificationEmail(
                       Questions? Contact our support team
                     </p>
                     <p style="margin: 0; color: #9ca3af; font-size: 12px; text-align: center;">
-                      Â© 2026 BootFete. All rights reserved.
+                      ${brand.footerText}
                     </p>
                   </td>
                 </tr>
@@ -848,7 +876,8 @@ export function generateTestQualificationWithFinalsDetailsEmail(
   maxScore: number,
   finalsRoom: string,
   finalsTime: string,
-  message?: string
+  message?: string,
+  brand: EmailBrand = DEFAULT_EMAIL_BRAND
 ): string {
   // Finals time is not needed in this email
 
@@ -906,7 +935,8 @@ export function generateWinnerAnnouncementEmail(
   roundName: string,
   venueRoom: string,
   dateTime: string,
-  message?: string
+  message?: string,
+  brand: EmailBrand = DEFAULT_EMAIL_BRAND
 ): string {
   return `
     <!DOCTYPE html>
@@ -954,7 +984,7 @@ export function generateWinnerAnnouncementEmail(
                       </p>
                     </div>
                     <div style="text-align: center; margin: 32px 0;">
-                      <a href="${process.env.APP_URL || 'https://dashboard.bootfete2k26.tech'}/participant/my-tests" 
+                      <a href="${getAppBaseUrl()}/participant/my-tests" 
                          style="display: inline-block; background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%); color: white; padding: 14px 32px; border-radius: 8px; text-decoration: none; font-weight: 600; font-size: 16px;">
                         View Dashboard
                       </a>
@@ -985,7 +1015,8 @@ export function generateWinnerAnnouncementEmail(
 
 export function generateConsolidatedCredentialsEmail(
   name: string,
-  credentials: Array<{ eventName: string; username: string; password: string }>
+  credentials: Array<{ eventName: string; username: string; password: string }>,
+  brand: EmailBrand = DEFAULT_EMAIL_BRAND
 ): string {
   const credentialsHtml = credentials.map(cred => `
     <tr>
@@ -1007,7 +1038,7 @@ export function generateConsolidatedCredentialsEmail(
       <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Your Event Credentials - BootFete 2K26</title>
+        <title>Your Event Credentials - ${brand.appName}</title>
       </head>
       <body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #f3f4f6;">
         <table role="presentation" style="width: 100%; border-collapse: collapse;">
@@ -1016,7 +1047,7 @@ export function generateConsolidatedCredentialsEmail(
               <table role="presentation" style="width: 600px; max-width: 100%; background: white; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
                 <tr>
                   <td style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 40px 30px; text-align: center; border-radius: 12px 12px 0 0;">
-                    <h1 style="margin: 0; color: white; font-size: 28px; font-weight: 700;">BootFete 2K26</h1>
+                    <h1 style="margin: 0; color: white; font-size: 28px; font-weight: 700;">${brand.appName}</h1>
                     <p style="margin: 10px 0 0; color: rgba(255,255,255,0.9); font-size: 14px;">Symposium Management Platform</p>
                   </td>
                 </tr>
@@ -1051,7 +1082,7 @@ export function generateConsolidatedCredentialsEmail(
                     </table>
                     
                     <div style="text-align: center; margin: 32px 0;">
-                      <a href="${process.env.APP_URL || 'https://dashboard.bootfete2k26.tech'}/login" 
+                      <a href="${getAppBaseUrl()}/login" 
                          style="display: inline-block; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 14px 32px; border-radius: 8px; text-decoration: none; font-weight: 600; font-size: 16px;">
                         Login to Platform
                       </a>
@@ -1071,7 +1102,7 @@ export function generateConsolidatedCredentialsEmail(
                       Need help? Contact our support team
                     </p>
                     <p style="margin: 0; color: #9ca3af; font-size: 12px; text-align: center;">
-                      Â© 2026 BootFete. All rights reserved.
+                      ${brand.footerText}
                     </p>
                   </td>
                 </tr>
