@@ -50,7 +50,12 @@ jobs:
 
     env:
       CI: "true"
+      # drizzle-kit push reads DATABASE_URL; the app runtime (server/db.ts)
+      # needs LOCAL_DATABASE_URL for a vanilla Postgres — without it the
+      # Neon WebSocket driver tries wss://localhost/v2 and every DB query
+      # fails. Both point at the same service database here.
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/bootfete_test
+      LOCAL_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/bootfete_test
       REDIS_HOST: localhost
       REDIS_PORT: 6379
       JWT_SECRET: ci-pipeline-test-secret
@@ -76,6 +81,13 @@ jobs:
 
       - name: Prepare test database schema
         run: npm run db:push
+
+      - name: Seed bootstrap superadmin
+        # tests/e2e/proctored-test.spec.ts logs in as the bootstrap super
+        # admin (superadmin / Azzi@03, overridable via E2E_ADMIN_USER /
+        # E2E_ADMIN_PASS). db:push creates only the schema on the fresh
+        # service database, so the seed must run before the tests.
+        run: npm run db:seed
 
       - name: Install Playwright browsers
         run: npx playwright install --with-deps

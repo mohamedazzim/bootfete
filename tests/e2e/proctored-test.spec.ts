@@ -1,4 +1,6 @@
 import { test, expect, Page } from '@playwright/test';
+import fs from 'node:fs';
+import path from 'node:path';
 
 // The suite runs against the remote Neon database, which adds latency to every
 // API round trip. Give hooks and tests generous room so slow DB responses are
@@ -64,6 +66,27 @@ test.beforeAll(async () => {
   test.setTimeout(180000);
   const adminUser = process.env.E2E_ADMIN_USER || 'superadmin';
   const adminPass = process.env.E2E_ADMIN_PASS || 'Azzi@03';
+
+  // Retry resilience: Playwright may restart the worker between retries, so
+  // module-level `shared` does not survive. The bootstrap token + fixtures
+  // are cached in a file (gitignored); on a retry the cached token is probed
+  // and reused instead of logging in again. Without this, every retry burns
+  // one of the 10 logins / 15 min the per-username rate limiter allows for
+  // `superadmin`, tripping a 429 that cascades every remaining test into a
+  // misleading "Bootstrap admin login failed" error.
+  const cachePath = path.join(process.cwd(), 'tests', 'e2e', '.bootstrap-cache.json');
+  try {
+    const cached = JSON.parse(fs.readFileSync(cachePath, 'utf8'));
+    if (cached?.token && cached?.shared) {
+      const probe = await fetch(`${BASE_URL}/api/auth/me`, {
+        headers: { 'Authorization': `Bearer ${cached.token}` }
+      });
+      if (probe.ok) {
+        shared = cached.shared;
+        return;
+      }
+    }
+  } catch { /* no usable cache — run the full bootstrap below */ }
 
   // 1. Login as bootstrap super admin
   const loginRes = await fetch(`${BASE_URL}/api/auth/login`, {
@@ -144,6 +167,8 @@ test.beforeAll(async () => {
   await apiRequest('POST', `/api/rounds/${roundId}/start`, eventAdminToken, {});
 
   shared = { superAdminToken, eventAdminToken, eventId, roundId, questionIds };
+  // Persist for retry resilience (see the cache probe at the top of this hook).
+  fs.writeFileSync(cachePath, JSON.stringify({ token: superAdminToken, shared }));
 });
 
 // Every test gets its own participant, because the backend allows exactly one
@@ -208,7 +233,8 @@ test.beforeEach(async () => {
 
 // Helper functions
 async function loginAsParticipant(page: Page) {
-  await page.goto(BASE_URL);
+  // The login form lives at /login; / is the public landing page (no form).
+  await page.goto(`${BASE_URL}/login`);
   await page.waitForSelector('[data-testid="input-username"]', { timeout: 30000 });
   await page.fill('[data-testid="input-username"]', testContext.participantCredentials.username);
   await page.fill('[data-testid="input-password"]', testContext.participantCredentials.password);
@@ -248,7 +274,13 @@ async function waitForFullscreen(page: Page) {
 // Simulates a tab switch: defines document.hidden as true (as a backgrounded
 // tab reports it) and dispatches visibilitychange + blur events. The desktop
 // elimination threshold is 3 violations, so callers pass the count they need.
-async function triggerTabSwitch(page: Page, times = 1) {
+//
+// gapMs spaces consecutive dispatches: the server coalesces same-type
+// violations inside a 5s anti-spam window (and the client throttles at 3s),
+// so a multi-strike test must use gapMs > 5000 or the triggers collapse
+// into a single strike. The 5s window is protected product behavior — the
+// test adapts to it, not the other way round.
+async function triggerTabSwitch(page: Page, times = 1, gapMs = 400) {
   await page.evaluate(() => {
     try {
       Object.defineProperty(document, 'hidden', {
@@ -258,6 +290,7 @@ async function triggerTabSwitch(page: Page, times = 1) {
     } catch (e) {}
   });
   for (let i = 0; i < times; i++) {
+    if (i > 0) await page.waitForTimeout(gapMs);
     await page.evaluate(() => {
       document.dispatchEvent(new Event('visibilitychange'));
       window.dispatchEvent(new Event('blur'));
@@ -372,7 +405,7 @@ test.describe('Tab Switch Detection Tests', () => {
 
     // Desktop elimination threshold is 3 violations: warnings at 1 and 2,
     // disqualification + auto-submit at 3.
-    await triggerTabSwitch(page, 3);
+    await triggerTabSwitch(page, 3, 5500);
 
     // Check the participant record is disqualified
     await expect.poll(
@@ -413,8 +446,10 @@ test.describe('Page Refresh Prevention Tests', () => {
 
     await page.waitForTimeout(500);
 
-    // The beforeunload dialog should have been shown
-    expect(dialogShown).toBe(true);
+    // The beforeunload dialog should have been shown. Polled rather than a
+    // fixed wait: under xvfb the dialog event can arrive late, which flaked
+    // this assertion once.
+    await expect.poll(() => dialogShown, { timeout: 10000 }).toBe(true);
     expect(dialogType).toBe('beforeunload');
   });
 
@@ -532,16 +567,19 @@ test.describe('Violation Tracking & Auto-Submit Tests', () => {
     await page.waitForTimeout(500);
 
     // Desktop elimination threshold: 3 violations -> disqualify + auto-submit
-    await triggerTabSwitch(page, 3);
+    await triggerTabSwitch(page, 3, 5500);
 
-    // Check if test was auto-submitted
+    // The 3rd violation POST atomically flips the attempt in_progress ->
+    // disqualified (server owns elimination; the client's delayed auto-submit
+    // is refused with 400 once the attempt is no longer in_progress). The
+    // terminal state is therefore "disqualified", not "completed".
     await expect.poll(
       async () => {
         const attempt = await apiRequest('GET', `/api/attempts/${testContext.attemptId}`, testContext.participantToken);
         return attempt.status;
       },
       { timeout: 20000 }
-    ).toBe('completed');
+    ).toBe('disqualified');
 
     await page.screenshot({ path: 'tests/reports/screenshots/auto-submit-violation.png' });
   });
@@ -565,22 +603,24 @@ test.describe('Violation Tracking & Auto-Submit Tests', () => {
     const answerCountBefore = attemptBefore.answers?.length || 0;
     expect(answerCountBefore).toBeGreaterThan(0);
 
-    // Trigger auto-submit via tab switch (3 violations)
-    await triggerTabSwitch(page, 3);
+    // Trigger elimination via tab switch (3 violations). The 3rd strike
+    // disqualifies the attempt server-side (terminal state "disqualified";
+    // see the note in "should auto-submit test on violation threshold").
+    await triggerTabSwitch(page, 3, 5500);
 
-    // Wait for auto-submit to complete
+    // Wait for elimination to complete
     await expect.poll(
       async () => {
         const attempt = await apiRequest('GET', `/api/attempts/${testContext.attemptId}`, testContext.participantToken);
         return attempt.status;
       },
       { timeout: 20000 }
-    ).toBe('completed');
+    ).toBe('disqualified');
 
-    // Get attempt after auto-submit
+    // Get attempt after elimination
     const attemptAfter = await apiRequest('GET', `/api/attempts/${testContext.attemptId}`, testContext.participantToken);
 
-    // Answers should be preserved
+    // Answers should be preserved (disqualification never wipes answers)
     expect(attemptAfter.answers?.length).toBe(answerCountBefore);
     expect(attemptAfter.answers?.[0]?.answer).toBe('Option A');
   });
@@ -682,8 +722,10 @@ test.describe('Test Flow Integration', () => {
     // Trigger a real tab-switch violation so the frontend warning alert renders
     await triggerTabSwitch(page, 1);
 
-    // Check for the violation warning alert (shown for ~5 seconds)
-    await expect(page.locator('[role="alert"]')).toBeVisible({ timeout: 5000 });
+    // Check for the violation warning alert (shown for ~5 seconds).
+    // Scoped to the exam shell: the toast viewport also renders role="alert"
+    // (the violation toast), which would trip strict mode on a bare lookup.
+    await expect(page.locator('[data-testid="exam-shell"] [role="alert"]')).toBeVisible({ timeout: 5000 });
 
     // Take screenshot to show warning
     await page.screenshot({ path: 'tests/reports/screenshots/violation-warning.png' });
@@ -758,12 +800,29 @@ test.describe('Edge Cases and Error Handling', () => {
 
     const initialViolations = await getViolationCount(testContext.attemptId);
 
-    // Trigger window blur
+    // A lone blur event must NOT log a violation. H-11 removed the
+    // blur-based detector: a real tab switch fires both blur and
+    // visibilitychange, which double-counted strikes. visibilitychange is
+    // the single canonical detector now.
     await page.evaluate(() => {
       window.dispatchEvent(new Event('blur'));
     });
+    await page.waitForTimeout(1500);
 
-    // Blur is treated as a tab switch violation
+    const afterLoneBlur = await getViolationCount(testContext.attemptId);
+    expect(afterLoneBlur.tabSwitch).toBe(initialViolations.tabSwitch);
+
+    // visibilitychange (with the document hidden, as a backgrounded tab
+    // reports) remains the canonical tab-switch detector.
+    await page.evaluate(() => {
+      try {
+        Object.defineProperty(document, 'hidden', {
+          get: () => true,
+          configurable: true
+        });
+      } catch (e) {}
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
     await expect.poll(
       async () => (await getViolationCount(testContext.attemptId)).tabSwitch,
       { timeout: 10000 }

@@ -17,3 +17,6 @@ ecosystem.config.js.save
 # `migrations/` rule above would otherwise swallow this directory).
 !server/migrations/
 !server/migrations/001_timestamptz_and_constraints.sql
+
+# Playwright e2e bootstrap token cache (retry resilience, regenerated per run)
+tests/e2e/.bootstrap-cache.json
