@@ -14,6 +14,23 @@ const WebSocketContext = createContext<WebSocketContextType>({
   socket: null
 });
 
+// Track-3: leading-edge throttle for burst refetches. During the
+// final-minutes submit burst, testSubmitted + leaderboardUpdate can fire
+// many times per second, and each handler refetches leaderboard +
+// statistics immediately (bypassing staleTime) — right after the server
+// invalidated the 30s Redis cache, so every refetch recomputes from the DB.
+// The first event refetches immediately (no UX delay for isolated submits);
+// subsequent ones are capped at one per window per query key.
+const BURST_REFETCH_WINDOW_MS = 5000;
+const lastBurstRefetch = new Map<string, number>();
+function coalescedRefetch(queryKey: string[]) {
+  const k = JSON.stringify(queryKey);
+  const now = Date.now();
+  if (now - (lastBurstRefetch.get(k) ?? 0) < BURST_REFETCH_WINDOW_MS) return;
+  lastBurstRefetch.set(k, now);
+  queryClient.refetchQueries({ queryKey });
+}
+
 export function WebSocketProvider({ children }: { children: ReactNode }) {
   const [isConnected, setIsConnected] = useState(false);
   const socketRef = useRef<Socket | null>(null);
@@ -164,8 +181,10 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
     // Test submitted - IMMEDIATE leaderboard update
     socket.on('testSubmitted', (data) => {
       if (data.roundId) {
-        queryClient.refetchQueries({ queryKey: [`/api/rounds/${data.roundId}/leaderboard`] });
-        queryClient.refetchQueries({ queryKey: [`/api/rounds/${data.roundId}/statistics`] });
+        // Track-3: coalesced — the submit burst fires this many times per
+        // second; cap at one refetch per window per key.
+        coalescedRefetch([`/api/rounds/${data.roundId}/leaderboard`]);
+        coalescedRefetch([`/api/rounds/${data.roundId}/statistics`]);
       }
       refetchEventQueries(data.eventId);
       // Refresh Super Admin view if checking submissions via test manager
@@ -175,8 +194,9 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
     // Leaderboard update event - for direct leaderboard broadcasts
     socket.on('leaderboardUpdate', (data) => {
       if (data.roundId) {
-        queryClient.refetchQueries({ queryKey: [`/api/rounds/${data.roundId}/leaderboard`] });
-        queryClient.refetchQueries({ queryKey: [`/api/rounds/${data.roundId}/statistics`] });
+        // Track-3: coalesced (see testSubmitted above).
+        coalescedRefetch([`/api/rounds/${data.roundId}/leaderboard`]);
+        coalescedRefetch([`/api/rounds/${data.roundId}/statistics`]);
       }
       refetchEventQueries(data.eventId);
     });

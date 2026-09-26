@@ -1,3 +1,4 @@
+import { lazy, Suspense, type ComponentType } from "react";
 import { Switch, Route, Redirect, useLocation } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
@@ -6,71 +7,76 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { AuthProvider, useAuth } from "@/lib/auth";
 import { WebSocketProvider } from "@/contexts/WebSocketContext";
 import AppHeader from "@/components/Header";
+// Track-4: the exam-taking flow and its immediate dependencies stay in the
+// initial chunk — a participant must reach a live exam with zero lazy-load
+// latency. Everything admin-side is route-split.
 import NotFound from "@/pages/not-found";
 import Login from "@/pages/login";
-import AdminDashboard from "@/pages/admin/dashboard";
-import EventsPage from "@/pages/admin/events";
-import EventCreatePage from "@/pages/admin/event-create";
-import EventEditPage from "@/pages/admin/event-edit";
-import TestManagerPage from "@/pages/admin/test-manager";
-import AdminEventDetails from "@/pages/admin/event-details";
-import EventAdminsPage from "@/pages/admin/event-admins";
-import EventAdminCreatePage from "@/pages/admin/event-admin-create";
-import EventAdminEditPage from "@/pages/admin/event-admin-edit";
-import ReportsPage from "@/pages/admin/reports";
-import ReportGenerateEventPage from "@/pages/admin/report-generate-event";
-import ReportGenerateSymposiumPage from "@/pages/admin/report-generate-symposium";
-import DownloadReportsPage from "@/pages/reports";
-import EventAdminDashboard from "@/pages/event-admin/dashboard";
-import EventAdminEventsPage from "@/pages/event-admin/events";
-import EventAdminEventDetailsPage from "@/pages/event-admin/event-details";
-import EventRulesPage from "@/pages/event-admin/event-rules";
-import EventRoundsPage from "@/pages/event-admin/event-rounds";
-import RoundCreatePage from "@/pages/event-admin/round-create";
-import RoundEditPage from "@/pages/event-admin/round-edit";
-import RoundQuestionsPage from "@/pages/event-admin/round-questions";
-import RoundRulesPage from "@/pages/event-admin/round-rules";
-import QuestionCreatePage from "@/pages/event-admin/question-create";
-import QuestionEditPage from "@/pages/event-admin/question-edit";
-import QuestionsBulkUploadPage from "@/pages/event-admin/questions-bulk-upload";
-import EventParticipantsPage from "@/pages/event-admin/event-participants";
-import AllParticipantsPage from "@/pages/event-admin/all-participants";
-import RoundMonitorPage from "@/pages/event-admin/round-monitor";
+import LandingPage from "@/pages/public/landing";
+import ParticipantRegisterPage from "@/pages/public/register";
+import PublicRegistrationFormPage from "@/pages/public/registration-form";
+import EventRegistrationPage from "@/pages/public/event-registration";
 import ParticipantDashboard from "@/pages/participant/dashboard";
 import ParticipantEventsPage from "@/pages/participant/events";
 import ParticipantEventDetailsPage from "@/pages/participant/event-details";
 import TakeTestPage from "@/pages/participant/take-test";
 import TestResultsPage from "@/pages/participant/test-results";
 import MyTestsPage from "@/pages/participant/my-tests";
-
-import EventAdminLeaderboardPage from "@/pages/event-admin/leaderboard";
-import EventResultsPage from "@/pages/event-admin/event-results";
-import RoundSubmissionsPage from "@/pages/event-admin/round-submissions";
-import EvaluateSubmissionPage from "@/pages/event-admin/evaluate-submission";
-import EvaluatedLeaderboardPage from "@/pages/event-admin/evaluated-leaderboard";
-import RegistrationFormsPage from "@/pages/admin/registration-forms";
-import RegistrationFormCreatePage from "@/pages/admin/registration-form-create";
-import RegistrationFormEditPage from "@/pages/admin/registration-form-edit";
-import AdminRegistrationsPage from "@/pages/admin/registrations";
-import RegistrationCommitteePage from "@/pages/admin/registration-committee";
-import RegistrationCommitteeCreatePage from "@/pages/admin/registration-committee-create";
-import RegistrationCommitteeEditPage from "@/pages/admin/registration-committee-edit";
-import RegistrationCommitteeDashboard from "@/pages/registration-committee/dashboard";
-import RegistrationCommitteeRegistrationsPage from "@/pages/registration-committee/registrations";
-import OnSpotRegistrationPage from "@/pages/registration-committee/on-spot-registration";
-import PublicRegistrationFormPage from "@/pages/public/registration-form";
-import EventRegistrationPage from "@/pages/public/event-registration";
-import LandingPage from "@/pages/public/landing";
-import ParticipantRegisterPage from "@/pages/public/register";
-import SuperAdminOverridesPage from "@/pages/admin/super-admin-overrides";
-import EmailLogsPage from "@/pages/admin/email-logs";
-import AdminSettingsPage from "@/pages/admin/settings";
+// Super-admin surfaces (lazy)
+const AdminDashboard = lazy(() => import("@/pages/admin/dashboard"));
+const EventsPage = lazy(() => import("@/pages/admin/events"));
+const EventCreatePage = lazy(() => import("@/pages/admin/event-create"));
+const EventEditPage = lazy(() => import("@/pages/admin/event-edit"));
+const TestManagerPage = lazy(() => import("@/pages/admin/test-manager"));
+const AdminEventDetails = lazy(() => import("@/pages/admin/event-details"));
+const EventAdminsPage = lazy(() => import("@/pages/admin/event-admins"));
+const EventAdminCreatePage = lazy(() => import("@/pages/admin/event-admin-create"));
+const EventAdminEditPage = lazy(() => import("@/pages/admin/event-admin-edit"));
+const ReportsPage = lazy(() => import("@/pages/admin/reports"));
+const ReportGenerateEventPage = lazy(() => import("@/pages/admin/report-generate-event"));
+const ReportGenerateSymposiumPage = lazy(() => import("@/pages/admin/report-generate-symposium"));
+const DownloadReportsPage = lazy(() => import("@/pages/reports"));
+const RegistrationFormsPage = lazy(() => import("@/pages/admin/registration-forms"));
+const RegistrationFormCreatePage = lazy(() => import("@/pages/admin/registration-form-create"));
+const RegistrationFormEditPage = lazy(() => import("@/pages/admin/registration-form-edit"));
+const AdminRegistrationsPage = lazy(() => import("@/pages/admin/registrations"));
+const RegistrationCommitteePage = lazy(() => import("@/pages/admin/registration-committee"));
+const RegistrationCommitteeCreatePage = lazy(() => import("@/pages/admin/registration-committee-create"));
+const RegistrationCommitteeEditPage = lazy(() => import("@/pages/admin/registration-committee-edit"));
+const SuperAdminOverridesPage = lazy(() => import("@/pages/admin/super-admin-overrides"));
+const EmailLogsPage = lazy(() => import("@/pages/admin/email-logs"));
+const AdminSettingsPage = lazy(() => import("@/pages/admin/settings"));
+// Event-admin surfaces (lazy)
+const EventAdminDashboard = lazy(() => import("@/pages/event-admin/dashboard"));
+const EventAdminEventsPage = lazy(() => import("@/pages/event-admin/events"));
+const EventAdminEventDetailsPage = lazy(() => import("@/pages/event-admin/event-details"));
+const EventRulesPage = lazy(() => import("@/pages/event-admin/event-rules"));
+const EventRoundsPage = lazy(() => import("@/pages/event-admin/event-rounds"));
+const RoundCreatePage = lazy(() => import("@/pages/event-admin/round-create"));
+const RoundEditPage = lazy(() => import("@/pages/event-admin/round-edit"));
+const RoundQuestionsPage = lazy(() => import("@/pages/event-admin/round-questions"));
+const RoundRulesPage = lazy(() => import("@/pages/event-admin/round-rules"));
+const QuestionCreatePage = lazy(() => import("@/pages/event-admin/question-create"));
+const QuestionEditPage = lazy(() => import("@/pages/event-admin/question-edit"));
+const QuestionsBulkUploadPage = lazy(() => import("@/pages/event-admin/questions-bulk-upload"));
+const EventParticipantsPage = lazy(() => import("@/pages/event-admin/event-participants"));
+const AllParticipantsPage = lazy(() => import("@/pages/event-admin/all-participants"));
+const RoundMonitorPage = lazy(() => import("@/pages/event-admin/round-monitor"));
+const EventAdminLeaderboardPage = lazy(() => import("@/pages/event-admin/leaderboard"));
+const EventResultsPage = lazy(() => import("@/pages/event-admin/event-results"));
+const RoundSubmissionsPage = lazy(() => import("@/pages/event-admin/round-submissions"));
+const EvaluateSubmissionPage = lazy(() => import("@/pages/event-admin/evaluate-submission"));
+const EvaluatedLeaderboardPage = lazy(() => import("@/pages/event-admin/evaluated-leaderboard"));
+// Registration-committee surfaces (lazy)
+const RegistrationCommitteeDashboard = lazy(() => import("@/pages/registration-committee/dashboard"));
+const RegistrationCommitteeRegistrationsPage = lazy(() => import("@/pages/registration-committee/registrations"));
+const OnSpotRegistrationPage = lazy(() => import("@/pages/registration-committee/on-spot-registration"));
 
 function ProtectedRoute({
   component: Component,
   allowedRoles
 }: {
-  component: () => JSX.Element;
+  component: ComponentType;
   allowedRoles?: string[]
 }) {
   const { user, isLoading } = useAuth();
@@ -106,7 +112,14 @@ function Router() {
   }
 
   return (
-    <Switch>
+    <Suspense
+      fallback={
+        <div className="min-h-screen flex items-center justify-center">
+          <div className="text-center">Loading...</div>
+        </div>
+      }
+    >
+      <Switch>
       <Route path="/login" component={Login} />
 
       <Route path="/">
@@ -294,7 +307,8 @@ function Router() {
 
 
       <Route component={NotFound} />
-    </Switch>
+      </Switch>
+    </Suspense>
   );
 }
 

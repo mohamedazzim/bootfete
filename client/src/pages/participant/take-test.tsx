@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import ExamShell from '@/components/ExamShell';
+import ExamTimer from '@/components/ExamTimer';
 import { Textarea } from '@/components/ui/textarea';
 import { Input } from '@/components/ui/input';
 import { Progress } from '@/components/ui/progress';
@@ -48,7 +49,6 @@ export default function TakeTestPage() {
 
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
   const [answers, setAnswers] = useState<Record<string, string>>({});
-  const [timeRemaining, setTimeRemaining] = useState(0);
   const [violationCount, setViolationCount] = useState(0);
   const [showViolationWarning, setShowViolationWarning] = useState(false);
   const [violationMessage, setViolationMessage] = useState('');
@@ -66,8 +66,6 @@ export default function TakeTestPage() {
 
   // Ref to track test status for event handlers
   const testStatusRef = useRef<string>('in_progress');
-  const hasShown5MinWarning = useRef(false);
-  const hasShown1MinWarning = useRef(false);
   const hasTriggeredSubmit = useRef(false);
   // Round-2 H10: dedupe window keyed on TIME ALONE. One physical action can
   // fire detectors of different types (Alt+Tab -> 'alt_tab' keydown +
@@ -302,6 +300,35 @@ export default function TakeTestPage() {
     submitTestMutation.mutate();
   }, [attemptId, submitTestMutation]);
 
+  // Track-4: timer event handlers for <ExamTimer />. Expiry delegates to the
+  // C3-guarded triggerSubmit (unchanged semantics: single guarded trigger,
+  // and a failed auto-submit is retried on the next tick, not stranded).
+  // Warnings keep the original toast + banner behavior verbatim.
+  const handleTimerExpire = useCallback(() => {
+    triggerSubmit();
+  }, [triggerSubmit]);
+
+  const handleTimerWarning = useCallback((kind: 'five' | 'one') => {
+    if (kind === 'five') {
+      setTimeWarningMessage('5 minutes remaining!');
+      setShowTimeWarning(true);
+      toast({
+        title: 'Time Warning',
+        description: '5 minutes remaining in your test',
+        variant: 'default',
+      });
+    } else {
+      setTimeWarningMessage('1 minute remaining!');
+      setShowTimeWarning(true);
+      toast({
+        title: 'Time Warning',
+        description: '1 minute remaining in your test',
+        variant: 'destructive',
+      });
+    }
+    setTimeout(() => setShowTimeWarning(false), 5000);
+  }, [toast]);
+
   // Initialize answers from existing data
   useEffect(() => {
     if (attempt?.answers) {
@@ -323,18 +350,9 @@ export default function TakeTestPage() {
     }
   }, [attempt, attemptId]);
 
-  // Initialize timer
-  useEffect(() => {
-    if (attempt?.round && attempt.startedAt) {
-      const duration = attempt.round.duration * 60; // Convert to seconds
-      const startTime = new Date(attempt.startedAt).getTime();
-      const isPaused = currentRound?.status === 'paused';
-      const effectiveNow = isPaused && currentRound?.updatedAt ? new Date(currentRound.updatedAt).getTime() : Date.now();
-      const elapsed = Math.floor((effectiveNow - startTime) / 1000);
-      const remaining = Math.max(0, duration - elapsed);
-      setTimeRemaining(remaining);
-    }
-  }, [attempt, currentRound?.status, currentRound?.updatedAt]);
+  // Track-4: timer init/tick/warnings/resync now live inside the memoized
+  // <ExamTimer /> (client/src/components/ExamTimer.tsx), which owns its own
+  // state so the 1s tick no longer re-renders this page.
 
   // Auto-submit  // Check if round ended or paused
   useEffect(() => {
@@ -350,60 +368,7 @@ export default function TakeTestPage() {
     }
   }, [currentRound?.status, attempt?.status, triggerSubmit, toast]);
 
-  // Countdown interval - created once per active test, NOT on every tick.
-  // (Previously this effect depended on `timeRemaining`, tearing down and
-  // recreating the interval every second.)
-  useEffect(() => {
-    if (!attempt || !hasStarted) return;
-    if (attempt.status !== 'in_progress') return;
-
-    const timer = setInterval(() => {
-      if (currentRound?.status === 'paused') return;
-      setTimeRemaining((prev) => (prev <= 1 ? 0 : prev - 1));
-    }, 1000);
-
-    return () => clearInterval(timer);
-  }, [attempt, hasStarted, currentRound?.status]);
-
-  // Auto-submit + time warnings react to timeRemaining changes
-  useEffect(() => {
-    if (!attempt || !hasStarted) return;
-
-    if (timeRemaining <= 0 && attempt.status === 'in_progress') {
-      // Round-2 C3: single guarded trigger — the submitted flags are set in
-      // onSuccess only, and onError resets the guard so a failed auto-submit
-      // (e.g. flush threw on a network blip) is retried, not stranded.
-      triggerSubmit();
-      return;
-    }
-
-    // Show 5 minute warning (Round-2 M28: <= with the shown-flags — exact
-    // equality never fires when a throttled interval jumps 301 -> 299)
-    if (timeRemaining <= 300 && !hasShown5MinWarning.current) {
-      hasShown5MinWarning.current = true;
-      setTimeWarningMessage('5 minutes remaining!');
-      setShowTimeWarning(true);
-      toast({
-        title: 'Time Warning',
-        description: '5 minutes remaining in your test',
-        variant: 'default',
-      });
-      setTimeout(() => setShowTimeWarning(false), 5000);
-    }
-
-    // Show 1 minute warning
-    if (timeRemaining <= 60 && !hasShown1MinWarning.current) {
-      hasShown1MinWarning.current = true;
-      setTimeWarningMessage('1 minute remaining!');
-      setShowTimeWarning(true);
-      toast({
-        title: 'Time Warning',
-        description: '1 minute remaining in your test',
-        variant: 'destructive',
-      });
-      setTimeout(() => setShowTimeWarning(false), 5000);
-    }
-  }, [timeRemaining, attempt, hasStarted, attemptId, triggerSubmit, toast]);
+  // Track-4: countdown interval moved into <ExamTimer />.
 
   // Handle fullscreen start - Skip on mobile devices that don't support it
   const handleBeginTest = async () => {
@@ -810,23 +775,7 @@ export default function TakeTestPage() {
     return () => window.removeEventListener('popstate', onPopState);
   }, [hasStarted]);
 
-  // Round-2 M19: setInterval is throttled to ~1/min in backgrounded tabs, so
-  // the displayed countdown can drift minutes off. On return, recompute from
-  // the cached attempt.startedAt — no network needed. (While paused the
-  // pause overlay owns the timer, so we skip then.)
-  useEffect(() => {
-    if (!hasStarted) return;
-    const resync = () => {
-      if (document.visibilityState !== 'visible') return;
-      if (!attempt?.startedAt || !attempt?.round) return;
-      if (currentRound?.status === 'paused') return;
-      const duration = attempt.round.duration * 60;
-      const elapsed = Math.floor((Date.now() - new Date(attempt.startedAt).getTime()) / 1000);
-      setTimeRemaining(Math.max(0, duration - elapsed));
-    };
-    document.addEventListener('visibilitychange', resync);
-    return () => document.removeEventListener('visibilitychange', resync);
-  }, [hasStarted, attempt, currentRound?.status]);
+  // Track-4: background-tab timer resync moved into <ExamTimer />.
 
   // H-12: debounced, serialized answer saving. Typing used to fire one POST per
   // keystroke with no ordering, so an earlier keystroke could overwrite a
@@ -930,11 +879,8 @@ export default function TakeTestPage() {
     triggerSubmit();
   };
 
-  const formatTime = (seconds: number) => {
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return `${mins}:${secs.toString().padStart(2, '0')}`;
-  };
+  // Track-4: formatTime moved to components/ExamTimer.tsx alongside the
+  // timer that is its only consumer.
 
   if (isLoading) {
     return (
@@ -1246,15 +1192,19 @@ export default function TakeTestPage() {
             >
               {saveFailedCount > 0 ? 'Save failed — will retry' : savePendingCount > 0 ? `Saving… (${savePendingCount})` : 'Saved ✓'}
             </span>
-            <div className={`flex items-center gap-2 px-4 py-2 rounded-lg ${timeRemaining < 300 ? 'bg-red-100' : 'bg-blue-100'
-              }`}>
-              <Clock className={`h-5 w-5 ${timeRemaining < 300 ? 'text-red-600' : 'text-blue-600'}`} />
-              {/* Round-2 M28: screen-reader users need to hear time warnings. */}
-              <span className={`font-mono text-lg font-bold ${timeRemaining < 300 ? 'text-red-900' : 'text-blue-900'
-                }`} data-testid="text-timer" aria-live="polite" aria-label={`Time remaining: ${formatTime(timeRemaining)}`}>
-                {formatTime(timeRemaining)}
-              </span>
-            </div>
+            {/* Track-4: standalone memoized timer — ticks re-render only this
+                badge, not the whole exam page. Semantics (init, pause
+                freeze, resync, warnings, expiry) preserved verbatim. */}
+            <ExamTimer
+              durationSeconds={(attempt?.round?.duration ?? 0) * 60}
+              startedAt={attempt?.startedAt}
+              roundStatus={currentRound?.status}
+              roundUpdatedAt={currentRound?.updatedAt}
+              hasStarted={hasStarted}
+              attemptInProgress={attempt?.status === 'in_progress'}
+              onExpire={handleTimerExpire}
+              onWarning={handleTimerWarning}
+            />
           </div>
         </div>
 

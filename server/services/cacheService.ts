@@ -100,18 +100,25 @@ class CacheService {
     }
 
     /**
-     * Delete all keys matching pattern
+     * Delete all keys matching pattern.
+     * Track-3: SCAN cursor loop instead of KEYS. KEYS is O(N) over the whole
+     * keyspace and blocks the single-threaded Redis event loop — at the
+     * final-minutes submit burst this stalled sessions, pub/sub and the
+     * rate-limiter INCRs sharing the same Redis.
      */
     async deletePattern(pattern: string): Promise<void> {
         const client = redisClient.getClient();
         if (!client || !redisClient.isAvailable()) return;
 
         try {
-            const keys = await client.keys(pattern);
-            if (keys.length > 0) {
-                await client.del(...keys);
-                // console.debug('Cache pattern deleted', { pattern, count: keys.length });
-            }
+            let cursor = "0";
+            do {
+                const [nextCursor, keys] = await client.scan(cursor, "MATCH", pattern, "COUNT", 100);
+                cursor = nextCursor;
+                if (keys.length > 0) {
+                    await client.del(...keys);
+                }
+            } while (cursor !== "0");
         } catch (error) {
             console.error('Cache deletePattern error:', error);
         }

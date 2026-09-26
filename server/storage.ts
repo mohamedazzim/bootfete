@@ -71,8 +71,19 @@ export interface IStorage {
   getTestAttemptByUserAndRound(userId: string, roundId: string): Promise<TestAttempt | undefined>;
   getTestAttemptsByUser(userId: string): Promise<TestAttempt[]>;
   getTestAttemptsByRound(roundId: string): Promise<TestAttempt[]>;
+  getRoundAttemptsWithUsers(roundId: string): Promise<Array<{
+    id: string;
+    userId: string;
+    userName: string;
+    status: string;
+    totalScore: number | null;
+    startedAt: Date | null;
+    submittedAt: Date | null;
+    violationCount: number;
+  }>>;
   createTestAttempt(attempt: InsertTestAttempt): Promise<TestAttempt>;
   updateTestAttempt(id: string, attempt: Partial<InsertTestAttempt>): Promise<TestAttempt | undefined>;
+  disqualifyAttempt(attemptId: string, participantId: string | null): Promise<TestAttempt | undefined>;
   deleteTestAttemptsByRound(roundId: string): Promise<void>;
 
   getAnswersByAttempt(attemptId: string): Promise<Answer[]>;
@@ -671,6 +682,48 @@ export class DatabaseStorage implements IStorage {
     return await db.select().from(testAttempts).where(eq(testAttempts.roundId, roundId));
   }
 
+  // Track-2: single JOIN with explicit column projection for the Round
+  // Monitor participant table. The old route did getUser() per attempt
+  // (N+1), and each getUser() was SELECT * — dragging the bcrypt password
+  // hash into Node for every row. This projects only the columns the UI
+  // needs; password is never selected.
+  async getRoundAttemptsWithUsers(roundId: string): Promise<Array<{
+    id: string;
+    userId: string;
+    userName: string;
+    status: string;
+    totalScore: number | null;
+    startedAt: Date | null;
+    submittedAt: Date | null;
+    violationCount: number;
+  }>> {
+    const rows = await db
+      .select({
+        id: testAttempts.id,
+        userId: testAttempts.userId,
+        fullName: users.fullName,
+        username: users.username,
+        status: testAttempts.status,
+        totalScore: testAttempts.totalScore,
+        startedAt: testAttempts.startedAt,
+        submittedAt: testAttempts.submittedAt,
+        violationLogs: testAttempts.violationLogs,
+      })
+      .from(testAttempts)
+      .leftJoin(users, eq(users.id, testAttempts.userId))
+      .where(eq(testAttempts.roundId, roundId));
+    return rows.map((r) => ({
+      id: r.id,
+      userId: r.userId,
+      userName: r.fullName || r.username || "Unknown",
+      status: r.status,
+      totalScore: r.totalScore,
+      startedAt: r.startedAt,
+      submittedAt: r.submittedAt,
+      violationCount: ((r.violationLogs as any[]) || []).length,
+    }));
+  }
+
   async createTestAttempt(insertAttempt: InsertTestAttempt): Promise<TestAttempt> {
     // H-15: the (user_id, round_id) unique constraint makes a double start
     // (double-click / retried request) a no-op returning the existing row
@@ -762,11 +815,63 @@ export class DatabaseStorage implements IStorage {
         const [current] = await tx.select().from(testAttempts).where(eq(testAttempts.id, attemptId)).limit(1);
         return current;
       }
-      for (const g of grading) {
+      // Track-3: batch the grading writes into ONE statement instead of N
+      // sequential UPDATEs. The old loop held a pooled connection for the
+      // whole burst — at the T-0 deadline spike (500 concurrent submits x
+      // ~50 answers) that's ~25k serialized UPDATEs. Single CASE-based
+      // UPDATE shortens the transaction hold time dramatically.
+      if (grading.length > 0) {
+        const ids = grading.map((g) => g.answerId);
+        // NOTE: the THEN values must be explicitly cast. Drizzle sends
+        // interpolated params without a type OID, so Postgres unifies the
+        // CASE branches to text — and `is_correct = <text>` fails on the
+        // boolean column (42804). The old per-row .update() path inferred
+        // the type from the assignment target, which is why only the
+        // batched form needs the casts.
+        const isCorrectCases = sql.join(
+          grading.map((g) => sql`WHEN ${g.answerId} THEN ${g.isCorrect}`),
+          sql` `,
+        );
+        const pointsCases = sql.join(
+          grading.map((g) => sql`WHEN ${g.answerId} THEN ${g.pointsAwarded}`),
+          sql` `,
+        );
+        await tx.execute(sql`
+          UPDATE answers
+          SET is_correct = (CASE id ${isCorrectCases} END)::boolean,
+              points_awarded = (CASE id ${pointsCases} END)::integer
+          WHERE id IN (${sql.join(ids.map((id) => sql`${id}`), sql`, `)})
+        `);
+      }
+      return updated;
+    });
+  }
+
+  // Track-1: atomic disqualification with compare-and-set inside one
+  // transaction. The old route ran an unconditional UPDATE by id, so a
+  // concurrent submit that had already CAS-flipped in_progress -> completed
+  // got clobbered back to disqualified. The CAS means exactly one of
+  // (submit, disqualify) wins the in_progress -> terminal race; the loser
+  // sees status != 'in_progress' and stands down. The participant flip rides
+  // in the same transaction so the two can never diverge on a crash.
+  // Returns the disqualified attempt, or undefined when the CAS loses.
+  async disqualifyAttempt(
+    attemptId: string,
+    participantId: string | null,
+  ): Promise<TestAttempt | undefined> {
+    return await db.transaction(async (tx) => {
+      const now = new Date();
+      const [updated] = await tx
+        .update(testAttempts)
+        .set({ status: "disqualified", submittedAt: now, completedAt: now })
+        .where(and(eq(testAttempts.id, attemptId), eq(testAttempts.status, "in_progress")))
+        .returning();
+      if (!updated) return undefined;
+      if (participantId) {
         await tx
-          .update(answers)
-          .set({ isCorrect: g.isCorrect, pointsAwarded: g.pointsAwarded })
-          .where(eq(answers.id, g.answerId));
+          .update(participants)
+          .set({ status: "disqualified" })
+          .where(eq(participants.id, participantId));
       }
       return updated;
     });

@@ -335,6 +335,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "User not found" })
       }
 
+      // Track-3: drop the cached auth user row so credential/role changes
+      // propagate immediately instead of waiting out the 20s TTL.
+      await cacheService.delete(`auth:user:${req.params.id}`)
+
       const { password: _, ...userWithoutPassword } = user
       res.json({
         message: "User credentials updated successfully",
@@ -369,6 +373,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       await storage.deleteUser(targetId)
+      // Track-3: drop the cached auth row so the deleted user cannot keep
+      // authenticating for the remainder of the 20s TTL.
+      await cacheService.delete(`auth:user:${targetId}`)
       res.json({ message: "User deleted successfully" })
     } catch (error) {
       console.error("Delete user error:", error)
@@ -825,6 +832,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
           ));
       }
       await cacheService.deletePattern('leaderboard:*');
+      // Track-1: drop cached participant rows so the stale status is never
+      // served after a disqualification (participant:{id} is 600s TTL).
+      await cacheService.delete(`participant:${participantId}`);
+      await cacheService.deletePattern('participant:credential:*');
 
       res.json({
         message: "Participant disqualified successfully",
@@ -1165,6 +1176,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           // If only assigned to this event (length 1 and it's this event), delete user
           if (adminEvents.length === 1 && adminEvents[0].id === req.params.id) {
             await storage.deleteUser(admin.id);
+            // Track-3: drop the cached auth row for the cascade-deleted admin.
+            await cacheService.delete(`auth:user:${admin.id}`);
           }
         }
       }
@@ -3055,23 +3068,39 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const threshold = (roundForThreshold as any)?.violationThreshold || 3
 
         if (updatedAttempt && violationCount >= threshold && updatedAttempt.status === 'in_progress') {
-          // Atomically disqualify: mark attempt, prevent further mutations
-          await storage.updateTestAttempt(attemptId, {
-            status: 'disqualified',
-            submittedAt: new Date(),
-            completedAt: new Date(),
-          } as any)
-
           // Also mark participant as disqualified for this event
           const participant = await storage.getParticipantByUserAndEvent(
             attempt.userId,
             roundForThreshold!.eventId
           )
-          if (participant) {
-            await storage.updateParticipantStatus(participant.id, 'disqualified')
+          // Track-1: atomic disqualify with CAS inside one transaction.
+          // Exactly one of (submit, disqualify) can win the
+          // in_progress -> terminal race: the submit path CAS-flips
+          // in_progress -> completed, and this CAS flips
+          // in_progress -> disqualified. The loser stands down instead of
+          // clobbering the winner, and the participant flip rides in the
+          // same transaction so the two can never diverge on a crash.
+          const disqualifiedAttempt = await storage.disqualifyAttempt(
+            attemptId,
+            participant?.id ?? null,
+          )
+          if (!disqualifiedAttempt) {
+            // CAS lost: a concurrent submit already finalized the attempt.
+            // The violation was still logged above; return the current
+            // (submitted) attempt so the client lands on results, not a
+            // wrongful DQ screen.
+            const current = await storage.getTestAttempt(attemptId)
+            return res.json(current)
           }
 
-          const disqualifiedAttempt = await storage.getTestAttempt(attemptId)
+          // Invalidate participant caches so the disqualified status is
+          // never shadowed by stale entries (participant:{id} is 600s TTL).
+          if (participant) {
+            await cacheService.delete(`participant:${participant.id}`)
+          }
+          await cacheService.deletePattern('participant:credential:*')
+          await cacheService.deletePattern('leaderboard:*')
+
           return res.status(403).json({
             message: 'Disqualified: violation threshold exceeded',
             code: 'VIOLATION_THRESHOLD_EXCEEDED',
@@ -5355,6 +5384,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (confirmedCount === 0) {
           const firstFailure = eventResults.find(r => r.status === 'failed')
           await storage.deleteUser(newUser.id);
+          // Track-3: defensive — the user was just created, but drop any
+          // cached auth row so a rollback can never leave one behind.
+          await cacheService.delete(`auth:user:${newUser.id}`);
           return res.status(409).json({
             message: firstFailure?.error || 'Registration failed for all selected events',
             code: 'DEPARTMENT_LIMIT_EXCEEDED',
@@ -5517,6 +5549,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
 
         const { password: _, ...userWithoutPassword } = updatedUser
+        // Track-3: drop the cached auth user row so detail changes
+        // propagate immediately instead of waiting out the 20s TTL.
+        await cacheService.delete(`auth:user:${req.params.id}`)
         res.json(userWithoutPassword)
       } catch (error: any) {
         console.error("Update on-spot participant error:", error)
@@ -5549,6 +5584,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
         // Invalidate caches
         await cacheService.deletePattern('registrations:*')
+        // Track-3: drop the cached auth row for the deleted participant user.
+        await cacheService.delete(`auth:user:${req.params.id}`)
 
         res.json({ message: "Participant deleted successfully" })
       } catch (error) {
@@ -7684,6 +7721,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
 
         await cacheService.deletePattern("leaderboard:*");
+        // Track-1: the reset reverts participant disqualified -> registered;
+        // drop the cached rows so the stale disqualified status is never
+        // served after a reset.
+        if (participant) {
+          await cacheService.delete(`participant:${participant.id}`);
+        }
+        await cacheService.deletePattern("participant:credential:*");
 
         await logSuperAdminAction(
           req.user!.id,
@@ -7738,22 +7782,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           }
         }
 
-        const attempts = await storage.getTestAttemptsByRound(roundId);
-        const rows = await Promise.all(
-          attempts.map(async (attempt) => {
-            const user = await storage.getUser(attempt.userId);
-            return {
-              id: attempt.id,
-              userId: attempt.userId,
-              userName: user?.fullName || user?.username || "Unknown",
-              status: attempt.status,
-              totalScore: attempt.totalScore,
-              startedAt: attempt.startedAt,
-              submittedAt: attempt.submittedAt,
-              violationCount: ((attempt.violationLogs as any[]) || []).length,
-            };
-          })
-        );
+        const rows = await storage.getRoundAttemptsWithUsers(roundId);
         res.json(rows);
       } catch (error) {
         console.error("Get round attempts error:", error);

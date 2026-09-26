@@ -8,6 +8,10 @@ class RedisClient {
   private isConnected: boolean = false;
   private connectionRetries: number = 0;
   private readonly MAX_RETRIES = 3;
+  // Track-3: timer for scheduled re-initialization after the retry strategy
+  // gives up. Without this, one transient managed-Redis blip permanently
+  // disabled caching AND the Socket.IO Redis adapter until manual restart.
+  private reconnectTimer: NodeJS.Timeout | null = null;
   // C-05/BUG-S-07: listeners fired every time Redis (re)connects, so the
   // Socket.IO Redis adapter can be (re)attached after a late or dropped
   // connection instead of silently running in single-server mode.
@@ -34,9 +38,10 @@ class RedisClient {
         password: process.env.REDIS_PASSWORD,
         retryStrategy: (times) => {
           if (times > this.MAX_RETRIES) {
-            console.error('Redis connection failed after max retries. Caching disabled.');
+            console.error('Redis connection failed after max retries. Scheduling re-initialization with backoff.');
             this.client = null;
-            return null; // Stop retrying
+            this.scheduleReconnect();
+            return null; // Stop this client's retry loop
           }
           const delay = Math.min(times * 50, 2000);
           return delay;
@@ -96,6 +101,27 @@ class RedisClient {
     // If already connected, fire immediately so late subscribers still attach.
     if (this.isAvailable()) {
       try { cb(); } catch (e) { console.error('Redis connect listener error:', e); }
+    }
+  }
+
+  // Track-3: after the retry strategy gives up, schedule a fresh
+  // initializeClient() with backoff instead of staying dead forever. The
+  // new client gets a fresh retry budget; its 'connect' handler re-fires
+  // connectListeners (e.g. Socket.IO adapter re-attach). Cache calls fail
+  // open while disconnected, so this is safe to retry indefinitely.
+  private scheduleReconnect(): void {
+    if (this.reconnectTimer) return; // already scheduled
+    if (process.env.NODE_ENV === 'test' || process.env.DISABLE_REDIS === 'true') return;
+    const delayMs = 30000;
+    console.warn(`Redis re-initialization scheduled in ${delayMs / 1000}s`);
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      console.log('Attempting Redis re-initialization...');
+      this.initializeClient();
+    }, delayMs);
+    // Don't hold the process open for this timer alone.
+    if (typeof this.reconnectTimer.unref === 'function') {
+      this.reconnectTimer.unref();
     }
   }
 

@@ -247,11 +247,13 @@ BEGIN
 END $$;
 DO $$
 BEGIN
-  IF EXISTS (SELECT 1 FROM test_attempts WHERE NOT (status IN ('in_progress','completed','auto_submitted','disqualified'))) THEN
+  IF EXISTS (SELECT 1 FROM test_attempts WHERE NOT (status IN ('in_progress','completed','auto_submitted','disqualified','expired'))) THEN
     RAISE EXCEPTION 'Migration 001 aborted: test_attempts has rows violating %. Fix the status values first, then re-run.', 'test_attempts_status_check';
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'test_attempts_status_check') THEN
-    ALTER TABLE test_attempts ADD CONSTRAINT test_attempts_status_check CHECK (status IN ('in_progress','completed','auto_submitted','disqualified'));
+    -- 'expired' is written by examTimerService.assertAttemptNotExpired on every
+    -- timer-expiry auto-submit; omitting it would turn those submits into 500s.
+    ALTER TABLE test_attempts ADD CONSTRAINT test_attempts_status_check CHECK (status IN ('in_progress','completed','auto_submitted','disqualified','expired'));
   END IF;
 END $$;
 DO $$

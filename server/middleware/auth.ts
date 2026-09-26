@@ -1,6 +1,12 @@
 import { Request, Response, NextFunction } from "express";
 import jwt from "jsonwebtoken";
 import { storage } from "../storage";
+import { cacheService } from "../services/cacheService";
+
+// Track-3: bounds how long a role change takes to propagate to in-flight
+// requests. Disqualification-critical paths check participant.status from
+// the DB per request, so they are unaffected by this window.
+const AUTH_USER_CACHE_TTL_SECONDS = 20;
 
 const JWT_SECRET = process.env.JWT_SECRET || "symposium-secret-key-change-in-production";
 
@@ -24,18 +30,30 @@ export async function requireAuth(req: AuthRequest, res: Response, next: NextFun
     }
 
     const decoded = jwt.verify(token, JWT_SECRET) as { id: string; username: string; role: string; eventId?: string };
-    const user = await storage.getUser(decoded.id);
+    // Track-3: cache the projected user row in Redis (20s TTL) to eliminate
+    // a Neon round-trip on every request — answer saves hit this
+    // ~40/min/user at peak. The password hash is never cached; req.user
+    // only needs id/username/email/fullName/role.
+    const authUser = await cacheService.get(
+      `auth:user:${decoded.id}`,
+      async () => {
+        const u = await storage.getUser(decoded.id);
+        if (!u) return null;
+        return { id: u.id, username: u.username, email: u.email, fullName: u.fullName, role: u.role };
+      },
+      AUTH_USER_CACHE_TTL_SECONDS,
+    );
 
-    if (!user) {
+    if (!authUser) {
       return res.status(401).json({ message: `User not found (ID: ${decoded.id})` });
     }
 
     req.user = {
-      id: user.id,
-      username: user.username,
-      email: user.email,
-      fullName: user.fullName,
-      role: user.role,
+      id: authUser.id,
+      username: authUser.username,
+      email: authUser.email,
+      fullName: authUser.fullName,
+      role: authUser.role,
       eventId: decoded.eventId
     };
 
@@ -151,8 +169,9 @@ export async function requireRoundAccess(req: AuthRequest, res: Response, next: 
   }
 
   if (req.user.role === "event_admin") {
-    const admins = await storage.getEventAdminsByEvent(round.eventId);
-    const isAssigned = admins.some(admin => admin.id === req.user!.id);
+    // Track-2: single indexed lookup on (admin_id, event_id) instead of
+    // fetching every assigned admin and scanning in JS.
+    const isAssigned = await storage.isUserEventAdmin(req.user.id, round.eventId);
 
     if (!isAssigned) {
       return res.status(403).json({ message: "You are not assigned to this event" });
@@ -164,21 +183,21 @@ export async function requireRoundAccess(req: AuthRequest, res: Response, next: 
   // Allow participants who have an attempt in this round to access round info
   // This is needed for checking if round is paused/ended during the test
   if (req.user.role === "participant") {
-    const attempts = await storage.getTestAttemptsByRound(roundId);
-    const hasAttempt = attempts.some(attempt => attempt.userId === req.user!.id);
+    // Track-2: single indexed lookup on the (user_id, round_id) unique
+    // constraint instead of SELECT *-ing every attempt in the round and
+    // scanning in JS (polled every 5s by monitors/dashboards).
+    const attempt = await storage.getTestAttemptByUserAndRound(req.user.id, roundId);
 
-    if (hasAttempt) {
+    if (attempt) {
       return next();
     }
 
-    // Also allow if participant is registered for this event
-    const event = await storage.getEvent(round.eventId);
-    if (event) {
-      const participants = await storage.getParticipantsByEvent(round.eventId);
-      const isRegistered = participants.some(p => p.userId === req.user!.id);
-      if (isRegistered) {
-        return next();
-      }
+    // Also allow if participant is registered for this event.
+    // Track-2: single indexed lookup on the (user_id, event_id) unique
+    // constraint instead of fetching all event participants and scanning.
+    const participant = await storage.getParticipantByUserAndEvent(req.user.id, round.eventId);
+    if (participant) {
+      return next();
     }
   }
 

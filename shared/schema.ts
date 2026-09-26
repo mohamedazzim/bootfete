@@ -149,7 +149,7 @@ export const testAttempts = pgTable("test_attempts", {
   userId: varchar("user_id").references(() => users.id, { onDelete: 'cascade' }).notNull(),
   startedAt: timestamp("started_at", { withTimezone: true }).defaultNow().notNull(),
   submittedAt: timestamp("submitted_at", { withTimezone: true }),
-  status: text("status").notNull().default('in_progress'), // in_progress, completed, auto_submitted
+  status: text("status").notNull().default('in_progress'), // in_progress, completed, auto_submitted, disqualified, expired
 
   // Proctoring violations
   tabSwitchCount: integer("tab_switch_count").notNull().default(0),
