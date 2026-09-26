@@ -22,6 +22,7 @@ import { Plus, Search, Pencil, Trash2 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { apiRequest, queryClient } from '@/lib/queryClient';
 import type { User } from '@shared/schema';
+import ScrollableTable from '@/components/ScrollableTable';
 
 export default function EventAdminsPage() {
   const [, setLocation] = useLocation();
@@ -96,7 +97,8 @@ export default function EventAdminsPage() {
                 {searchTerm ? 'No event admins found matching your search' : 'No event admins created yet'}
               </div>
             ) : (
-              <div className="overflow-x-auto">
+                            <ScrollableTable>
+
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -161,7 +163,7 @@ export default function EventAdminsPage() {
                     ))}
                   </TableBody>
                 </Table>
-              </div>
+                            </ScrollableTable>
             )}
           </CardContent>
         </Card>

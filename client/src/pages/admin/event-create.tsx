@@ -9,6 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useToast } from '@/hooks/use-toast';
+import { errorToast, successToast } from '@/lib/toast';
 import { apiRequest, queryClient } from '@/lib/queryClient';
 import { insertEventSchema, type InsertEvent } from '@shared/schema';
 import { z } from 'zod';
@@ -62,19 +63,20 @@ export default function EventCreatePage() {
 
       await apiRequest('POST', '/api/events', eventData);
 
-      toast({
-        title: 'Event created',
-        description: 'The event has been created successfully',
-      });
+            successToast(
+        toast,
+        'Event created',
+        'The event has been created successfully',
+      );
 
       queryClient.invalidateQueries({ queryKey: ['/api/events'] });
       setLocation('/admin/events');
     } catch (error: any) {
-      toast({
-        title: 'Creation failed',
-        description: error.message,
-        variant: 'destructive',
-      });
+            errorToast(
+        toast,
+        'Creation failed',
+        error.message,
+      );
     }
   }
 

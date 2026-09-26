@@ -11,6 +11,7 @@ import { useToast } from '@/hooks/use-toast';
 import { ArrowLeft, Plus, Edit, FileQuestion, Trash2 } from 'lucide-react';
 import { apiRequest, queryClient } from '@/lib/queryClient';
 import type { Question } from '@shared/schema';
+import ScrollableTable from '@/components/ScrollableTable';
 
 export default function RoundQuestionsPage() {
   const { roundId } = useParams();
@@ -140,7 +141,8 @@ export default function RoundQuestionsPage() {
                 </Button>
               </div>
             ) : (
-              <div className="overflow-x-auto">
+                            <ScrollableTable>
+
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -189,7 +191,7 @@ export default function RoundQuestionsPage() {
                     ))}
                   </TableBody>
                 </Table>
-              </div>
+                            </ScrollableTable>
             )}
           </CardContent>
         </Card>

@@ -1,11 +1,11 @@
-import { Switch, Route, Redirect } from "wouter";
+import { Switch, Route, Redirect, useLocation } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AuthProvider, useAuth } from "@/lib/auth";
 import { WebSocketProvider } from "@/contexts/WebSocketContext";
-import AppHeader from "@/components/AppHeader";
+import AppHeader from "@/components/Header";
 import NotFound from "@/pages/not-found";
 import Login from "@/pages/login";
 import AdminDashboard from "@/pages/admin/dashboard";
@@ -60,6 +60,8 @@ import RegistrationCommitteeRegistrationsPage from "@/pages/registration-committ
 import OnSpotRegistrationPage from "@/pages/registration-committee/on-spot-registration";
 import PublicRegistrationFormPage from "@/pages/public/registration-form";
 import EventRegistrationPage from "@/pages/public/event-registration";
+import LandingPage from "@/pages/public/landing";
+import ParticipantRegisterPage from "@/pages/public/register";
 import SuperAdminOverridesPage from "@/pages/admin/super-admin-overrides";
 import EmailLogsPage from "@/pages/admin/email-logs";
 import AdminSettingsPage from "@/pages/admin/settings";
@@ -114,10 +116,11 @@ function Router() {
               user.role === 'registration_committee' ? <Redirect to="/registration-committee/dashboard" /> :
                 <Redirect to="/participant/dashboard" />
         ) : (
-          <Redirect to="/login" />
+          <LandingPage />
         )}
       </Route>
 
+      <Route path="/register" component={ParticipantRegisterPage} />
       <Route path="/register/:slug" component={PublicRegistrationFormPage} />
       <Route path="/register/event/:eventId" component={EventRegistrationPage} />
       <Route path="/admin/tests">
@@ -296,14 +299,19 @@ function Router() {
 }
 
 function App() {
+  const [location] = useLocation();
+  // Phase 1 prep for exam isolation (Phase 3): the global identity bar is
+  // hidden on the active exam route. Exam component internals untouched.
+  const hideChrome = location.startsWith('/participant/test/');
+
   return (
     <QueryClientProvider client={queryClient}>
       <AuthProvider>
         <WebSocketProvider>
           <TooltipProvider>
             <div className="min-h-screen flex flex-col">
-              <AppHeader />
-              <div className="flex-1">
+              {!hideChrome && <AppHeader />}
+              <div className="flex-1 flex flex-col">
                 <Toaster />
                 <Router />
               </div>

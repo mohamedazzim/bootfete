@@ -10,6 +10,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Form, FormControl, FormDescription, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useToast } from '@/hooks/use-toast';
+import { errorToast, successToast } from '@/lib/toast';
 import { apiRequest, queryClient } from '@/lib/queryClient';
 import { insertQuestionSchema } from '@shared/schema';
 import { z } from 'zod';
@@ -94,19 +95,19 @@ export default function QuestionCreatePage() {
       if (questionType === 'mcq') {
         const validOptions = mcqOptions.filter(opt => opt.trim() !== '');
         if (validOptions.length < 2) {
-          toast({
-            title: 'Invalid options',
-            description: 'Please provide at least 2 options for MCQ',
-            variant: 'destructive',
-          });
+                    errorToast(
+            toast,
+            'Invalid options',
+            'Please provide at least 2 options for MCQ',
+          );
           return;
         }
         if (!correctAnswer) {
-          toast({
-            title: 'Missing correct answer',
-            description: 'Please select the correct answer',
-            variant: 'destructive',
-          });
+                    errorToast(
+            toast,
+            'Missing correct answer',
+            'Please select the correct answer',
+          );
           return;
         }
         questionData.options = validOptions;
@@ -115,19 +116,19 @@ export default function QuestionCreatePage() {
         // Handle Image MCQ
         const uploadedImages = imageOptions.filter(opt => opt.file || opt.url);
         if (uploadedImages.length < 2) {
-          toast({
-            title: 'Invalid options',
-            description: 'Please upload at least 2 images for Image MCQ',
-            variant: 'destructive',
-          });
+                    errorToast(
+            toast,
+            'Invalid options',
+            'Please upload at least 2 images for Image MCQ',
+          );
           return;
         }
         if (correctImageIndex === null) {
-          toast({
-            title: 'Missing correct answer',
-            description: 'Please select the correct image option',
-            variant: 'destructive',
-          });
+                    errorToast(
+            toast,
+            'Missing correct answer',
+            'Please select the correct image option',
+          );
           return;
         }
 
@@ -185,19 +186,20 @@ export default function QuestionCreatePage() {
 
       await apiRequest('POST', `/api/rounds/${roundId}/questions`, questionData);
 
-      toast({
-        title: 'Question created',
-        description: 'The question has been added successfully',
-      });
+            successToast(
+        toast,
+        'Question created',
+        'The question has been added successfully',
+      );
 
       queryClient.invalidateQueries({ queryKey: ['/api/rounds', roundId, 'questions'] });
       setLocation(`/event-admin/rounds/${roundId}/questions`);
     } catch (error: any) {
-      toast({
-        title: 'Creation failed',
-        description: error.message,
-        variant: 'destructive',
-      });
+            errorToast(
+        toast,
+        'Creation failed',
+        error.message,
+      );
     }
   }
 

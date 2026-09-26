@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { useToast } from '@/hooks/use-toast';
+import { errorToast, successToast } from '@/lib/toast';
 import { ArrowLeft, Check, X, Loader2, Save, ChevronLeft, ChevronRight } from 'lucide-react';
 import { apiRequest, queryClient } from '@/lib/queryClient';
 
@@ -113,12 +114,20 @@ export default function EvaluateSubmissionPage() {
             return response.json();
         },
         onSuccess: () => {
-            toast({ title: 'Success', description: 'Evaluations saved successfully!' });
+                        successToast(
+              toast,
+              'Success',
+              'Evaluations saved successfully!',
+            );
             queryClient.invalidateQueries({ queryKey: [`/api/attempts/${attemptId}/details`] });
             queryClient.invalidateQueries({ queryKey: [`/api/rounds/${attempt?.roundId}/submissions`] });
         },
         onError: (error: any) => {
-            toast({ title: 'Error', description: error.message, variant: 'destructive' });
+                        errorToast(
+              toast,
+              'Error',
+              error.message,
+            );
         }
     });
 
@@ -255,8 +264,8 @@ export default function EvaluateSubmissionPage() {
                                         <span>Question {qa.questionNumber}</span>
                                         <div className="flex items-center gap-2">
                                             <Badge variant="outline">{qa.points} pts</Badge>
-                                            {state === 'correct' && <Badge className="bg-green-500">✓ Correct</Badge>}
-                                            {state === 'wrong' && <Badge className="bg-red-500">✗ Wrong</Badge>}
+                                            {state === 'correct' && <Badge className="bg-success text-success-foreground border-transparent">✓ Correct</Badge>}
+                                            {state === 'wrong' && <Badge className="bg-destructive text-destructive-foreground border-transparent">✗ Wrong</Badge>}
                                             {state === 'pending' && <Badge variant="secondary">Pending</Badge>}
                                             {state === 'not_answered' && <Badge variant="destructive">No Answer</Badge>}
                                         </div>
@@ -300,7 +309,7 @@ export default function EvaluateSubmissionPage() {
                                         <div className="flex items-center gap-4 pt-4 border-t">
                                             <Button
                                                 variant={state === 'correct' ? 'default' : 'outline'}
-                                                className={state === 'correct' ? 'bg-green-500 hover:bg-green-600' : ''}
+                                                className={state === 'correct' ? 'bg-success hover:bg-success/90' : ''}
                                                 onClick={() => handleMark(qa.answer!.id, true, qa.points)}
                                             >
                                                 <Check className="mr-2 h-4 w-4" />
@@ -308,7 +317,7 @@ export default function EvaluateSubmissionPage() {
                                             </Button>
                                             <Button
                                                 variant={state === 'wrong' ? 'default' : 'outline'}
-                                                className={state === 'wrong' ? 'bg-red-500 hover:bg-red-600' : ''}
+                                                className={state === 'wrong' ? 'bg-destructive hover:bg-destructive/90' : ''}
                                                 onClick={() => handleMark(qa.answer!.id, false, 0)}
                                             >
                                                 <X className="mr-2 h-4 w-4" />

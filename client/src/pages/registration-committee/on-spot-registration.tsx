@@ -16,9 +16,12 @@ import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem } from "
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
+import { errorToast, successToast } from '@/lib/toast';
 import RegistrationCommitteeLayout from "@/components/layouts/RegistrationCommitteeLayout";
+import { formatEventOptionLabel } from "@/lib/event-label";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Event, User, EventCredential } from "@shared/schema";
+import ScrollableTable from '@/components/ScrollableTable';
 
 const teamMemberSchema = z.object({
   name: z.string().min(1, "Member name is required"),
@@ -124,10 +127,11 @@ export default function OnSpotRegistrationPage() {
         teamMembers: [],
       });
       queryClient.invalidateQueries({ queryKey: ['/api/registration-committee/participants'] });
-      toast({
-        title: "Success",
-        description: "Participant registered successfully",
-      });
+      successToast(
+        toast,
+        "Success",
+        "Participant registered successfully",
+      );
     },
     onError: (error: any) => {
       let title = "Error";
@@ -152,12 +156,12 @@ export default function OnSpotRegistrationPage() {
         duration = 10000; // 10 seconds for department limit errors
       }
 
-      toast({
+      errorToast(
+        toast,
         title,
         description,
-        variant: "destructive",
-        duration,
-      });
+        { duration },
+      );
     },
   });
 
@@ -170,17 +174,18 @@ export default function OnSpotRegistrationPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['/api/registration-committee/participants'] });
       setEditingParticipant(null);
-      toast({
-        title: "Success",
-        description: "Participant updated successfully",
-      });
+            successToast(
+        toast,
+        "Success",
+        "Participant updated successfully",
+      );
     },
     onError: (error: Error) => {
-      toast({
-        title: "Error",
-        description: error.message,
-        variant: "destructive",
-      });
+            errorToast(
+        toast,
+        "Error",
+        error.message,
+      );
     },
   });
 
@@ -193,17 +198,18 @@ export default function OnSpotRegistrationPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['/api/registration-committee/participants'] });
       setDeletingParticipant(null);
-      toast({
-        title: "Success",
-        description: "Participant deleted successfully",
-      });
+            successToast(
+        toast,
+        "Success",
+        "Participant deleted successfully",
+      );
     },
     onError: (error: Error) => {
-      toast({
-        title: "Error",
-        description: error.message,
-        variant: "destructive",
-      });
+            errorToast(
+        toast,
+        "Error",
+        error.message,
+      );
     },
   });
 
@@ -261,19 +267,21 @@ export default function OnSpotRegistrationPage() {
       }
 
       navigator.clipboard.writeText(text);
-      toast({
-        title: "Copied",
-        description: "All credentials copied to clipboard",
-      });
+            successToast(
+        toast,
+        "Copied",
+        "All credentials copied to clipboard",
+      );
     }
   };
 
   const copyCredential = (text: string, label: string) => {
     navigator.clipboard.writeText(text);
-    toast({
-      title: "Copied",
-      description: `${label} copied to clipboard`,
-    });
+        successToast(
+      toast,
+      "Copied",
+      `${label} copied to clipboard`,
+    );
   };
 
   const onSubmit = (data: OnSpotFormData) => {
@@ -317,16 +325,17 @@ export default function OnSpotRegistrationPage() {
       a.click();
       window.URL.revokeObjectURL(url);
 
-      toast({
-        title: "Success",
-        description: "CSV exported successfully",
-      });
+            successToast(
+        toast,
+        "Success",
+        "CSV exported successfully",
+      );
     } catch (error) {
-      toast({
-        title: "Error",
-        description: error instanceof Error ? error.message : "Failed to export CSV",
-        variant: "destructive",
-      });
+            errorToast(
+        toast,
+        "Error",
+        error instanceof Error ? error.message : "Failed to export CSV",
+      );
     } finally {
       setExportingCSV(false);
     }
@@ -354,16 +363,17 @@ export default function OnSpotRegistrationPage() {
       a.click();
       window.URL.revokeObjectURL(url);
 
-      toast({
-        title: "Success",
-        description: "PDF exported successfully",
-      });
+            successToast(
+        toast,
+        "Success",
+        "PDF exported successfully",
+      );
     } catch (error) {
-      toast({
-        title: "Error",
-        description: error instanceof Error ? error.message : "Failed to export PDF",
-        variant: "destructive",
-      });
+            errorToast(
+        toast,
+        "Error",
+        error instanceof Error ? error.message : "Failed to export PDF",
+      );
     } finally {
       setExportingPDF(false);
     }
@@ -607,7 +617,7 @@ export default function OnSpotRegistrationPage() {
                                           </FormControl>
                                           <div className="flex flex-col">
                                             <FormLabel className={`font-normal cursor-pointer ${isDisabled && conflict.hasConflict ? 'text-muted-foreground' : ''}`}>
-                                              {event.name}
+                                              {formatEventOptionLabel(event)}
                                             </FormLabel>
                                             {isDisabled && conflict.hasConflict && (
                                               <span className="text-xs text-destructive">
@@ -657,7 +667,7 @@ export default function OnSpotRegistrationPage() {
                                           </FormControl>
                                           <div className="flex flex-col">
                                             <FormLabel className={`font-normal cursor-pointer ${isDisabled && conflict.hasConflict ? 'text-muted-foreground' : ''}`}>
-                                              {event.name}
+                                              {formatEventOptionLabel(event)}
                                             </FormLabel>
                                             {isDisabled && conflict.hasConflict && (
                                               <span className="text-xs text-destructive">
@@ -835,7 +845,8 @@ export default function OnSpotRegistrationPage() {
               {isLoading ? (
                 <div data-testid="loading-participants">Loading participants...</div>
               ) : participants && participants.length > 0 ? (
-                <div className="overflow-x-auto">
+                                <ScrollableTable>
+
                   <Table data-testid="table-participants">
                     <TableHeader>
                       <TableRow>
@@ -899,7 +910,7 @@ export default function OnSpotRegistrationPage() {
                       ))}
                     </TableBody>
                   </Table>
-                </div>
+                                </ScrollableTable>
               ) : (
                 <div className="text-center py-8 text-muted-foreground" data-testid="text-no-participants">
                   No on-spot registered participants yet

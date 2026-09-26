@@ -5,8 +5,7 @@ import ParticipantLayout from '@/components/layouts/ParticipantLayout';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
-import { Label } from '@/components/ui/label';
+import ExamShell from '@/components/ExamShell';
 import { Textarea } from '@/components/ui/textarea';
 import { Input } from '@/components/ui/input';
 import { Progress } from '@/components/ui/progress';
@@ -254,6 +253,40 @@ export default function TakeTestPage() {
     return () => dialog.removeEventListener('keydown', onKeyDown);
   }, [showSubmitConfirm]);
 
+  // Phase 8: same focus trap for the fullscreen-violation alertdialog.
+  // No Escape dismissal — the modal is intentionally blocking; the only
+  // exit is the "Return to Fullscreen" button, which receives focus.
+  const fullscreenDialogRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!showFullscreenModal) return;
+    const dialog = fullscreenDialogRef.current;
+    if (!dialog) return;
+    const focusable = () =>
+      Array.from(
+        dialog.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+        )
+      ).filter((el) => el.offsetParent !== null);
+    const items = focusable();
+    (items[0] || dialog).focus();
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Tab') return;
+      const els = focusable();
+      if (els.length === 0) return;
+      const first = els[0];
+      const last = els[els.length - 1];
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+    dialog.addEventListener('keydown', onKeyDown);
+    return () => dialog.removeEventListener('keydown', onKeyDown);
+  }, [showFullscreenModal]);
+
   // Round-2 C3/H15/M10: every submit path (manual button, timer expiry,
   // round-end, elimination) goes through this one guarded trigger. The guard
   // prevents double-fire; onError resets it so a failed submit is retryable.
@@ -376,7 +409,6 @@ export default function TakeTestPage() {
   const handleBeginTest = async () => {
     // On mobile/iOS devices, skip fullscreen requirement but still start test
     if (!canUseFullscreen) {
-      console.log('Mobile device detected - skipping fullscreen, starting test directly');
       toast({
         title: 'Test Starting',
         description: 'Stay on this screen and don\'t switch apps',
@@ -741,6 +773,43 @@ export default function TakeTestPage() {
     };
   }, [hasStarted, attemptId, logViolation]);
 
+  // Phase 3: clean document title while the exam route is mounted.
+  // Falls back to the round name alone when event data is absent.
+  useEffect(() => {
+    const previous = document.title;
+    const eventName = (attempt as any)?.event?.name;
+    const roundName = attempt?.round?.name;
+    if (roundName) {
+      document.title = eventName
+        ? `${eventName} — ${roundName} | BootFete 2K26`
+        : `${roundName} | BootFete 2K26`;
+    }
+    return () => {
+      document.title = previous;
+    };
+  }, [attempt?.id]);
+
+  // Phase 3: route-transition blocker for in-app back-button navigation.
+  // Wouter has no built-in blocker, so a guard history entry absorbs the
+  // first back press; a strict confirm() then decides whether the second
+  // back press proceeds. The existing beforeunload handler (with its
+  // refresh-violation logging) is left untouched. Self-disarms once the
+  // attempt leaves in_progress (e.g. after submit).
+  useEffect(() => {
+    if (!hasStarted) return;
+    window.history.pushState({ bootfeteExamGuard: true }, '');
+    const onPopState = () => {
+      if (testStatusRef.current !== 'in_progress') return;
+      if (window.confirm('Leaving will forfeit your attempt.')) {
+        window.history.back();
+      } else {
+        window.history.pushState({ bootfeteExamGuard: true }, '');
+      }
+    };
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, [hasStarted]);
+
   // Round-2 M19: setInterval is throttled to ~1/min in backgrounded tabs, so
   // the displayed countdown can drift minutes off. On return, recompute from
   // the cached attempt.startedAt — no network needed. (While paused the
@@ -968,7 +1037,7 @@ export default function TakeTestPage() {
   // Show begin test screen
   if (!hasStarted) {
     return (
-      <ParticipantLayout>
+      <ExamShell>
         <div className="p-4 md:p-8 max-w-3xl mx-auto">
           {/* Mobile device notice */}
           {isMobileDevice && (
@@ -1034,16 +1103,16 @@ export default function TakeTestPage() {
             </CardContent>
           </Card>
         </div>
-      </ParticipantLayout>
+      </ExamShell>
     );
   }
 
   return (
-    <ParticipantLayout>
-      {/* Paused Overlay - Blocking */}
+    <ExamShell>
+      {/* Paused Overlay - Blocking (informational; role="alert" announces it) */}
       {currentRound?.status === 'paused' && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center">
-          <Card className="max-w-md w-full mx-4 shadow-xl border-yellow-200 bg-yellow-50">
+          <Card className="max-w-md w-full mx-4 shadow-xl border-yellow-200 bg-yellow-50" role="alert">
             <CardHeader className="text-center">
               <div className="mx-auto mb-4 h-16 w-16 rounded-full bg-yellow-100 flex items-center justify-center animate-pulse">
                 <Pause className="h-8 w-8 text-yellow-600" />
@@ -1064,16 +1133,26 @@ export default function TakeTestPage() {
         </div>
       )}
 
-      {/* Fullscreen Violation Modal - Blocking */}
+      {/* Fullscreen Violation Modal - Blocking.
+          Phase 8: alertdialog semantics + focus trap so keyboard-only
+          students land on, and cannot Tab out behind, the modal. */}
       {showFullscreenModal && (
         <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center">
-          <Card className="max-w-md">
+          <Card
+            className="max-w-md"
+            ref={fullscreenDialogRef as any}
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="fullscreen-modal-title"
+            aria-describedby="fullscreen-modal-desc"
+            tabIndex={-1}
+          >
             <CardHeader className="text-center">
               <div className="mx-auto mb-4 h-12 w-12 rounded-full bg-red-100 flex items-center justify-center">
                 <AlertTriangle className="h-6 w-6 text-red-600" />
               </div>
-              <CardTitle className="text-xl">Fullscreen Required</CardTitle>
-              <CardDescription>
+              <CardTitle className="text-xl" id="fullscreen-modal-title">Fullscreen Required</CardTitle>
+              <CardDescription id="fullscreen-modal-desc">
                 You must stay in fullscreen mode during the test
               </CardDescription>
             </CardHeader>
@@ -1141,7 +1220,7 @@ export default function TakeTestPage() {
 
       <div className="p-4 md:p-8 max-w-5xl mx-auto">
         {/* Header with timer and progress */}
-        <div className="mb-6 flex justify-between items-center">
+        <div className="mb-6 flex flex-wrap justify-between items-center gap-3">
           <div>
             <h1 className="text-2xl font-bold text-gray-900" data-testid="heading-test-name">
               {attempt.round.name}
@@ -1150,7 +1229,7 @@ export default function TakeTestPage() {
               Question {currentQuestionIndex + 1} of {attempt.questions.length}
             </p>
           </div>
-          <div className="flex items-center gap-4">
+          <div className="flex flex-wrap items-center gap-2 sm:gap-4">
             {/* Round-2 M14: always visible, denominator follows the real
                 elimination threshold (mobile eliminates at 2, desktop at 3).
                 Previously the badge was hidden unless autoSubmitOnViolation
@@ -1228,7 +1307,7 @@ export default function TakeTestPage() {
 
         {/* Progress Bar */}
         <div className="mb-6">
-          <Progress value={progress} className="h-2" />
+          <Progress value={progress} className="h-2 bg-slate-200" data-testid="progress-bar" />
         </div>
 
         {/* Question Card */}
@@ -1279,24 +1358,47 @@ export default function TakeTestPage() {
             </div>
 
 
-            {/* MCQ Handler - inclusive of 'mcq' legacy type */}
+            {/* MCQ Handler - inclusive of 'mcq' legacy type.
+                Phase 3: native radio inputs (grouped per question via the
+                `name` attribute) wrapped in styled labels. The answer-state
+                shape and the value passed to handleAnswerChange are unchanged,
+                so the save/submit payloads are byte-identical. */}
             {(currentQuestion.questionType === 'multiple_choice' || currentQuestion.questionType === 'mcq') && (
               (Array.isArray(currentQuestion.options) && currentQuestion.options.length > 0) ? (
-                <RadioGroup
-                  value={answers[currentQuestion.id] || ''}
-                  onValueChange={(value) => handleAnswerChange(currentQuestion.id, value)}
-                  disabled={inputsDisabled}
+                <div
+                  role="radiogroup"
                   aria-label={`Answer options for question ${currentQuestion.questionNumber}`}
+                  className="space-y-2"
                 >
-                  {(currentQuestion.options as string[]).map((option: string, index: number) => (
-                    <div key={index} className="flex items-center space-x-2 p-3 rounded border hover:bg-gray-50">
-                      <RadioGroupItem value={String(option)} id={`option-${index}`} data-testid={`radio-option-${index}`} />
-                      <Label htmlFor={`option-${index}`} className="flex-1 cursor-pointer">
-                        {String(option)}
-                      </Label>
-                    </div>
-                  ))}
-                </RadioGroup>
+                  {(currentQuestion.options as string[]).map((option: string, index: number) => {
+                    const optionId = `q-${currentQuestion.id}-option-${index}`;
+                    const isChecked = answers[currentQuestion.id] === String(option);
+                    return (
+                      <label
+                        key={index}
+                        htmlFor={optionId}
+                        className={`flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-colors focus-within:ring-2 focus-within:ring-indigo-500 focus-within:ring-offset-2 focus-within:ring-offset-slate-50 ${
+                          isChecked
+                            ? 'border-indigo-500 bg-indigo-50'
+                            : 'border-slate-200 bg-white hover:bg-slate-50'
+                        } ${inputsDisabled ? 'opacity-60 cursor-not-allowed' : ''}`}
+                      >
+                        <input
+                          type="radio"
+                          id={optionId}
+                          name={`answer-${currentQuestion.id}`}
+                          value={String(option)}
+                          checked={isChecked}
+                          onChange={(e) => handleAnswerChange(currentQuestion.id, e.target.value)}
+                          disabled={inputsDisabled}
+                          data-testid={`radio-option-${index}`}
+                          className="h-4 w-4 shrink-0 accent-indigo-600"
+                        />
+                        <span className="flex-1 text-sm text-slate-900">{String(option)}</span>
+                      </label>
+                    );
+                  })}
+                </div>
               ) : (
                 <div className="space-y-4">
                   <div className="p-3 bg-yellow-50 text-yellow-700 text-sm rounded border border-yellow-200">
@@ -1318,23 +1420,42 @@ export default function TakeTestPage() {
               )
             )}
 
-            {/* True/False */}
+            {/* True/False — Phase 3: native radios, same payload contract. */}
             {currentQuestion.questionType === 'true_false' && (
-              <RadioGroup
-                value={answers[currentQuestion.id] || ''}
-                onValueChange={(value) => handleAnswerChange(currentQuestion.id, value)}
-                disabled={inputsDisabled}
+              <div
+                role="radiogroup"
                 aria-label={`True or false answer for question ${currentQuestion.questionNumber}`}
+                className="space-y-2"
               >
-                <div className="flex items-center space-x-2 p-3 rounded border hover:bg-gray-50">
-                  <RadioGroupItem value="true" id="true" data-testid="radio-true" />
-                  <Label htmlFor="true" className="flex-1 cursor-pointer">True</Label>
-                </div>
-                <div className="flex items-center space-x-2 p-3 rounded border hover:bg-gray-50">
-                  <RadioGroupItem value="false" id="false" data-testid="radio-false" />
-                  <Label htmlFor="false" className="flex-1 cursor-pointer">False</Label>
-                </div>
-              </RadioGroup>
+                {(['true', 'false'] as const).map((tfValue) => {
+                  const tfId = `q-${currentQuestion.id}-${tfValue}`;
+                  const isChecked = answers[currentQuestion.id] === tfValue;
+                  return (
+                    <label
+                      key={tfValue}
+                      htmlFor={tfId}
+                      className={`flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-colors focus-within:ring-2 focus-within:ring-indigo-500 focus-within:ring-offset-2 focus-within:ring-offset-slate-50 ${
+                        isChecked
+                          ? 'border-indigo-500 bg-indigo-50'
+                          : 'border-slate-200 bg-white hover:bg-slate-50'
+                      } ${inputsDisabled ? 'opacity-60 cursor-not-allowed' : ''}`}
+                    >
+                      <input
+                        type="radio"
+                        id={tfId}
+                        name={`answer-${currentQuestion.id}`}
+                        value={tfValue}
+                        checked={isChecked}
+                        onChange={(e) => handleAnswerChange(currentQuestion.id, e.target.value)}
+                        disabled={inputsDisabled}
+                        data-testid={`radio-${tfValue}`}
+                        className="h-4 w-4 shrink-0 accent-indigo-600"
+                      />
+                      <span className="flex-1 text-sm capitalize text-slate-900">{tfValue}</span>
+                    </label>
+                  );
+                })}
+              </div>
             )}
 
             {/* Short Answer or Coding */}
@@ -1398,18 +1519,24 @@ export default function TakeTestPage() {
                       {shuffledOptions.map((imageUrl, index) => {
                         const isSelected = answers[currentQuestion.id] === imageUrl;
                         return (
-                          <button
+                          <label
                             key={index}
-                            type="button"
-                            disabled={inputsDisabled}
-                            onClick={() => handleAnswerChange(currentQuestion.id, imageUrl)}
-                            aria-label={`Option ${index + 1} for question ${currentQuestion.questionNumber}${isSelected ? ', selected' : ''}`}
-                            className={`relative p-2 border-2 rounded-lg transition-all ${isSelected
-                              ? 'border-blue-500 bg-blue-50 ring-2 ring-blue-200'
-                              : 'border-gray-200 hover:border-gray-400'
-                              }`}
+                            className={`relative block p-2 border-2 rounded-lg transition-all cursor-pointer focus-within:ring-2 focus-within:ring-indigo-500 focus-within:ring-offset-2 focus-within:ring-offset-slate-50 ${isSelected
+                              ? 'border-indigo-500 bg-indigo-50 ring-2 ring-indigo-200'
+                              : 'border-slate-200 hover:border-slate-400'
+                              } ${inputsDisabled ? 'opacity-60 cursor-not-allowed' : ''}`}
                             data-testid={`image-option-${index}`}
                           >
+                            <input
+                              type="radio"
+                              name={`answer-${currentQuestion.id}`}
+                              value={imageUrl}
+                              checked={isSelected}
+                              onChange={() => handleAnswerChange(currentQuestion.id, imageUrl)}
+                              disabled={inputsDisabled}
+                              aria-label={`Option ${index + 1} for question ${currentQuestion.questionNumber}${isSelected ? ', selected' : ''}`}
+                              className="sr-only"
+                            />
                             <img
                               src={imageUrl.startsWith('/') ? imageUrl : `/${imageUrl}`}
                               alt={`Option ${index + 1}`}
@@ -1419,7 +1546,7 @@ export default function TakeTestPage() {
                               }}
                             />
                             {isSelected && (
-                              <div className="absolute top-2 right-2 bg-blue-500 text-white rounded-full p-1">
+                              <div className="absolute top-2 right-2 bg-indigo-500 text-white rounded-full p-1">
                                 <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 20 20">
                                   <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
                                 </svg>
@@ -1428,7 +1555,7 @@ export default function TakeTestPage() {
                             <div className="mt-2 text-center text-sm font-medium">
                               Option {index + 1}
                             </div>
-                          </button>
+                          </label>
                         );
                       })}
                     </div>
@@ -1554,6 +1681,6 @@ export default function TakeTestPage() {
           </CardContent>
         </Card>
       </div>
-    </ParticipantLayout>
+    </ExamShell>
   );
 }

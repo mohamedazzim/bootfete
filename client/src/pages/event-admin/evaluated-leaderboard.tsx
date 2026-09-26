@@ -14,6 +14,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { useToast } from '@/hooks/use-toast';
 import { ArrowLeft, Trophy, Crown, Loader2, Save, Users, CheckCircle2 } from 'lucide-react';
 import { apiRequest, queryClient } from '@/lib/queryClient';
+import ScrollableTable from '@/components/ScrollableTable';
 
 interface LeaderboardEntry {
     attemptId: string;
@@ -252,76 +253,79 @@ export default function EvaluatedLeaderboardPage() {
                                 No evaluated submissions yet.
                             </div>
                         ) : (
-                            <Table>
-                                <TableHeader>
-                                    <TableRow>
-                                        <TableHead className="w-12">Select</TableHead>
-                                        <TableHead className="w-16">Rank</TableHead>
-                                        <TableHead>Participant</TableHead>
-                                        <TableHead>College</TableHead>
-                                        <TableHead className="text-center">✓ Correct</TableHead>
-                                        <TableHead className="text-center">✗ Wrong</TableHead>
-                                        <TableHead className="text-center">Score</TableHead>
-                                        <TableHead>Submitted</TableHead>
-                                        <TableHead>Status</TableHead>
-                                    </TableRow>
-                                </TableHeader>
-                                <TableBody>
-                                    {leaderboard?.map((entry) => (
-                                        <TableRow
-                                            key={entry.attemptId}
-                                            className={selectedQualifiers.has(entry.attemptId) ? 'bg-green-50 dark:bg-green-950/20' : ''}
-                                        >
-                                            <TableCell>
-                                                <Checkbox
-                                                    checked={selectedQualifiers.has(entry.attemptId)}
-                                                    onCheckedChange={() => toggleQualifier(entry.attemptId)}
-                                                />
-                                            </TableCell>
-                                            <TableCell>
-                                                <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold ${entry.rank === 1 ? 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900 dark:text-yellow-300' :
-                                                    entry.rank === 2 ? 'bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300' :
-                                                        entry.rank === 3 ? 'bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300' :
-                                                            'bg-muted text-muted-foreground'
-                                                    }`}>
-                                                    {entry.rank}
-                                                </div>
-                                            </TableCell>
-                                            <TableCell>
-                                                <div>
-                                                    <p className="font-medium">{entry.name}</p>
-                                                    <p className="text-sm text-muted-foreground">{entry.rollNo}</p>
-                                                </div>
-                                            </TableCell>
-                                            <TableCell>
-                                                <div>
-                                                    <p>{entry.college || '-'}</p>
-                                                    <p className="text-sm text-muted-foreground">{entry.department}</p>
-                                                </div>
-                                            </TableCell>
-                                            <TableCell className="text-center">
-                                                <span className="text-green-600 font-bold text-lg">{entry.correctCount}</span>
-                                            </TableCell>
-                                            <TableCell className="text-center">
-                                                <span className="text-red-600 font-bold text-lg">{entry.wrongCount}</span>
-                                            </TableCell>
-                                            <TableCell className="text-center">
-                                                <span className="font-bold text-lg">{entry.totalScore}</span>
-                                            </TableCell>
-                                            <TableCell className="text-sm">{formatDate(entry.submittedAt)}</TableCell>
-                                            <TableCell>
-                                                {entry.isFullyEvaluated ? (
-                                                    <Badge className="bg-green-500">Evaluated</Badge>
-                                                ) : entry.pendingCount > 0 ? (
-                                                    <Badge variant="secondary">{entry.pendingCount} pending</Badge>
-                                                ) : (
-                                                    <Badge variant="outline">Pending</Badge>
-                                                )}
-                                            </TableCell>
-                                        </TableRow>
-                                    ))}
-                                </TableBody>
-                            </Table>
+                                                        <ScrollableTable>
+
+                              <Table>
+                                                              <TableHeader>
+                                                                  <TableRow>
+                                                                      <TableHead className="w-12">Select</TableHead>
+                                                                      <TableHead className="w-16">Rank</TableHead>
+                                                                      <TableHead>Participant</TableHead>
+                                                                      <TableHead>College</TableHead>
+                                                                      <TableHead className="text-center">✓ Correct</TableHead>
+                                                                      <TableHead className="text-center">✗ Wrong</TableHead>
+                                                                      <TableHead className="text-center">Score</TableHead>
+                                                                      <TableHead>Submitted</TableHead>
+                                                                      <TableHead>Status</TableHead>
+                                                                  </TableRow>
+                                                              </TableHeader>
+                                                              <TableBody>
+                                                                  {leaderboard?.map((entry) => (
+                                                                      <TableRow
+                                                                          key={entry.attemptId}
+                                                                          className={selectedQualifiers.has(entry.attemptId) ? 'bg-green-50 dark:bg-green-950/20' : ''}
+                                                                      >
+                                                                          <TableCell>
+                                                                              <Checkbox
+                                                                                  checked={selectedQualifiers.has(entry.attemptId)}
+                                                                                  onCheckedChange={() => toggleQualifier(entry.attemptId)}
+                                                                              />
+                                                                          </TableCell>
+                                                                          <TableCell>
+                                                                              <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold ${entry.rank === 1 ? 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900 dark:text-yellow-300' :
+                                                                                  entry.rank === 2 ? 'bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300' :
+                                                                                      entry.rank === 3 ? 'bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300' :
+                                                                                          'bg-muted text-muted-foreground'
+                                                                                  }`}>
+                                                                                  {entry.rank}
+                                                                              </div>
+                                                                          </TableCell>
+                                                                          <TableCell>
+                                                                              <div>
+                                                                                  <p className="font-medium">{entry.name}</p>
+                                                                                  <p className="text-sm text-muted-foreground">{entry.rollNo}</p>
+                                                                              </div>
+                                                                          </TableCell>
+                                                                          <TableCell>
+                                                                              <div>
+                                                                                  <p>{entry.college || '-'}</p>
+                                                                                  <p className="text-sm text-muted-foreground">{entry.department}</p>
+                                                                              </div>
+                                                                          </TableCell>
+                                                                          <TableCell className="text-center">
+                                                                              <span className="text-green-600 font-bold text-lg">{entry.correctCount}</span>
+                                                                          </TableCell>
+                                                                          <TableCell className="text-center">
+                                                                              <span className="text-red-600 font-bold text-lg">{entry.wrongCount}</span>
+                                                                          </TableCell>
+                                                                          <TableCell className="text-center">
+                                                                              <span className="font-bold text-lg">{entry.totalScore}</span>
+                                                                          </TableCell>
+                                                                          <TableCell className="text-sm">{formatDate(entry.submittedAt)}</TableCell>
+                                                                          <TableCell>
+                                                                              {entry.isFullyEvaluated ? (
+                                                                                  <Badge className="bg-success text-success-foreground border-transparent">Evaluated</Badge>
+                                                                              ) : entry.pendingCount > 0 ? (
+                                                                                  <Badge variant="secondary">{entry.pendingCount} pending</Badge>
+                                                                              ) : (
+                                                                                  <Badge variant="outline">Pending</Badge>
+                                                                              )}
+                                                                          </TableCell>
+                                                                      </TableRow>
+                                                                  ))}
+                                                              </TableBody>
+                                                          </Table>
+                                                        </ScrollableTable>
                         )}
                     </CardContent>
                 </Card>

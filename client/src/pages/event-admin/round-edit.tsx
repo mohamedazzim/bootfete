@@ -12,6 +12,7 @@ import { Form, FormControl, FormDescription, FormField, FormItem, FormLabel, For
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { useToast } from '@/hooks/use-toast';
+import { errorToast, successToast } from '@/lib/toast';
 import { apiRequest, queryClient } from '@/lib/queryClient';
 import { insertRoundSchema } from '@shared/schema';
 import type { Round } from '@shared/schema';
@@ -78,21 +79,22 @@ export default function RoundEditPage() {
       return apiRequest('PATCH', `/api/rounds/${roundId}`, roundData);
     },
     onSuccess: () => {
-      toast({
-        title: 'Round updated',
-        description: 'The round has been updated successfully',
-      });
+            successToast(
+        toast,
+        'Round updated',
+        'The round has been updated successfully',
+      );
 
       queryClient.invalidateQueries({ queryKey: ['/api/events', eventId, 'rounds'] });
       queryClient.invalidateQueries({ queryKey: ['/api/rounds', roundId] });
       setLocation(`/event-admin/events/${eventId}/rounds`);
     },
     onError: (error: any) => {
-      toast({
-        title: 'Update failed',
-        description: error.message,
-        variant: 'destructive',
-      });
+            errorToast(
+        toast,
+        'Update failed',
+        error.message,
+      );
     },
   });
 
@@ -284,8 +286,8 @@ export default function RoundEditPage() {
                           </SelectTrigger>
                         </FormControl>
                         <SelectContent>
-                          <SelectItem value="not_started">Not Started (Upcoming)</SelectItem>
-                          <SelectItem value="in_progress">In Progress (Active)</SelectItem>
+                          <SelectItem value="not_started">Not Started</SelectItem>
+                          <SelectItem value="in_progress">In progress</SelectItem>
                           <SelectItem value="completed">Completed</SelectItem>
                         </SelectContent>
                       </Select>

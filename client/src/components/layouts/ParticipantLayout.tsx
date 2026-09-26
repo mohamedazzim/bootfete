@@ -27,30 +27,30 @@ export default function ParticipantLayout({ children }: ParticipantLayoutProps) 
   const isActive = (path: string) => location === path;
 
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col">
-      <header className="bg-white border-b border-gray-200 sticky top-0 z-40">
+    <div className="min-h-screen bg-slate-50 flex flex-col">
+      <header className="bg-white border-b border-slate-200 sticky top-0 z-40">
         <div className="px-4 md:px-6 py-3 flex justify-between items-center">
           <div className="flex items-center gap-2 md:gap-4">
             <Link href="/participant/dashboard">
-              <span className="text-lg font-bold text-gray-900 cursor-pointer" data-testid="heading-symposium">
+              <span className="text-lg font-bold text-slate-900 cursor-pointer" data-testid="heading-symposium">
                 BOOTFETE <span className="hidden sm:inline">2K26</span>
               </span>
             </Link>
 
             <div className="hidden lg:flex items-center gap-2">
-              <span className="text-gray-300">|</span>
-              <span className="text-sm font-medium text-gray-700 max-w-[200px] truncate" data-testid="text-event-name" title={eventName}>
+              <span className="text-slate-300">|</span>
+              <span className="text-sm font-medium text-slate-700 max-w-[200px] truncate" data-testid="text-event-name" title={eventName}>
                 {eventName}
               </span>
-              <span className="text-gray-300">|</span>
-              <span className="text-sm text-gray-600 max-w-[150px] truncate" data-testid="text-participant-name" title={participantName}>
+              <span className="text-slate-300">|</span>
+              <span className="text-sm text-slate-600 max-w-[150px] truncate" data-testid="text-participant-name" title={participantName}>
                 {participantName}
               </span>
             </div>
 
             {isConnected && (
-              <Badge variant="outline" className="hidden sm:flex items-center ml-2 border-green-200 bg-green-50 text-green-700" data-testid="badge-websocket-connected">
-                <Circle className="w-2 h-2 mr-1 fill-green-500 text-green-500" />
+              <Badge variant="outline" className="hidden sm:flex items-center ml-2 border-emerald-200 bg-emerald-50 text-emerald-700" data-testid="badge-websocket-connected">
+                <Circle className="w-2 h-2 mr-1 fill-emerald-500 text-emerald-500" />
                 <span>Live</span>
               </Badge>
             )}
@@ -112,7 +112,7 @@ export default function ParticipantLayout({ children }: ParticipantLayoutProps) 
         </div>
       </header>
 
-      <main className="flex-1 p-4 md:p-6">
+      <main className="flex-1 p-4 md:p-8">
         {children}
       </main>
     </div>

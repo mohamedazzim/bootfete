@@ -5,9 +5,10 @@ import EventAdminLayout from '@/components/layouts/EventAdminLayout';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Badge } from '@/components/ui/badge';
+import { StatusBadge } from '@/components/StatusBadge';
 import { Eye, Settings, Users, FileQuestion } from 'lucide-react';
 import type { Event } from '@shared/schema';
+import ScrollableTable from '@/components/ScrollableTable';
 
 export default function EventAdminEventsPage() {
   const [, setLocation] = useLocation();
@@ -19,19 +20,6 @@ export default function EventAdminEventsPage() {
 
   const myEvents = events || [];
 
-  const getStatusBadge = (status: string) => {
-    const variants: Record<string, 'default' | 'secondary' | 'destructive'> = {
-      draft: 'secondary',
-      active: 'default',
-      completed: 'destructive',
-    };
-
-    return (
-      <Badge variant={variants[status] || 'default'}>
-        {status}
-      </Badge>
-    );
-  };
 
   return (
     <EventAdminLayout>
@@ -53,7 +41,8 @@ export default function EventAdminEventsPage() {
                 No events assigned to you yet
               </div>
             ) : (
-              <div className="overflow-x-auto">
+                            <ScrollableTable>
+
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -71,7 +60,7 @@ export default function EventAdminEventsPage() {
                           {event.name}
                         </TableCell>
                         <TableCell className="capitalize">{event.type}</TableCell>
-                        <TableCell>{getStatusBadge(event.status)}</TableCell>
+                        <TableCell><StatusBadge domain="event" status={event.status} /></TableCell>
                         <TableCell>
                           {event.startDate ? new Date(event.startDate).toLocaleDateString() : '-'}
                         </TableCell>
@@ -119,7 +108,7 @@ export default function EventAdminEventsPage() {
                     ))}
                   </TableBody>
                 </Table>
-              </div>
+                            </ScrollableTable>
             )}
           </CardContent>
         </Card>

@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage, FormDescription } from '@/components/ui/form';
 import { useToast } from '@/hooks/use-toast';
+import { errorToast, successToast } from '@/lib/toast';
 import { ArrowLeft, Eye, EyeOff, User, Mail, Lock, UserCircle } from 'lucide-react';
 import { z } from 'zod';
 import { useQuery } from '@tanstack/react-query';
@@ -73,11 +74,11 @@ export default function RegistrationCommitteeEditPage() {
     }
 
     if (Object.keys(updates).length === 0) {
-      toast({
-        title: 'No changes',
-        description: 'Please update at least one field',
-        variant: 'destructive',
-      });
+            errorToast(
+        toast,
+        'No changes',
+        'Please update at least one field',
+      );
       return;
     }
 
@@ -86,18 +87,19 @@ export default function RegistrationCommitteeEditPage() {
       
       queryClient.invalidateQueries({ queryKey: ['/api/users'] });
       
-      toast({
-        title: 'User updated',
-        description: 'Registration committee member details have been updated successfully',
-      });
+            successToast(
+        toast,
+        'User updated',
+        'Registration committee member details have been updated successfully',
+      );
       
       navigate('/admin/registration-committee');
     } catch (error: any) {
-      toast({
-        title: 'Update failed',
-        description: error.message,
-        variant: 'destructive',
-      });
+            errorToast(
+        toast,
+        'Update failed',
+        error.message,
+      );
     }
   }
 

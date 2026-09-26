@@ -10,6 +10,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { useToast } from '@/hooks/use-toast';
+import { errorToast, successToast } from '@/lib/toast';
 import { apiRequest, queryClient } from '@/lib/queryClient';
 import { ArrowLeft, Upload, FileJson, FileText, AlertCircle, CheckCircle } from 'lucide-react';
 
@@ -36,26 +37,27 @@ export default function QuestionsBulkUploadPage() {
       return apiRequest('POST', `/api/rounds/${roundId}/questions/bulk`, { questions });
     },
     onSuccess: (data: any) => {
-      toast({
-        title: 'Questions uploaded',
-        description: data.message || `Successfully created ${data.created} questions`,
-      });
+            successToast(
+        toast,
+        'Questions uploaded',
+        data.message || `Successfully created ${data.created} questions`,
+      );
       if (data.errors && data.errors.length > 0) {
-        toast({
-          title: 'Some questions failed',
-          description: `${data.errors.length} questions had errors`,
-          variant: 'destructive',
-        });
+                errorToast(
+          toast,
+          'Some questions failed',
+          `${data.errors.length} questions had errors`,
+        );
       }
       queryClient.invalidateQueries({ queryKey: ['/api/rounds', roundId, 'questions'] });
       setLocation(`/event-admin/rounds/${roundId}/questions`);
     },
     onError: (error: any) => {
-      toast({
-        title: 'Upload failed',
-        description: error.message,
-        variant: 'destructive',
-      });
+            errorToast(
+        toast,
+        'Upload failed',
+        error.message,
+      );
     },
   });
 
@@ -164,11 +166,11 @@ export default function QuestionsBulkUploadPage() {
 
   const handleUpload = () => {
     if (parsedQuestions.length === 0) {
-      toast({
-        title: 'No questions to upload',
-        description: 'Please select a valid file with questions',
-        variant: 'destructive',
-      });
+            errorToast(
+        toast,
+        'No questions to upload',
+        'Please select a valid file with questions',
+      );
       return;
     }
 
@@ -286,7 +288,7 @@ export default function QuestionsBulkUploadPage() {
                 </div>
               </CardHeader>
               <CardContent>
-                <div className="max-h-96 overflow-y-auto">
+                <div className="max-h-96 overflow-auto">
                   <Table>
                     <TableHeader>
                       <TableRow>

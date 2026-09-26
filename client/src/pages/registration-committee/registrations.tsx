@@ -9,9 +9,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Copy, CheckCircle, Search, Filter, X, Users, AlertCircle, Download } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { errorToast, successToast } from '@/lib/toast';
 import RegistrationCommitteeLayout from "@/components/layouts/RegistrationCommitteeLayout";
+import { formatEventOptionLabel } from "@/lib/event-label";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Registration, Event, TeamMember } from "@shared/schema";
+import ScrollableTable from '@/components/ScrollableTable';
 
 interface RegistrationWithDetails extends Registration {
   event?: Event;
@@ -151,17 +154,18 @@ export default function RegistrationCommitteeRegistrationsPage() {
       }
       setConfirmDialog(prev => ({ ...prev, isOpen: false }));
       queryClient.invalidateQueries({ queryKey: ['/api/registrations'] });
-      toast({
-        title: "Success",
-        description: "Registration confirmed successfully",
-      });
+            successToast(
+        toast,
+        "Success",
+        "Registration confirmed successfully",
+      );
     },
     onError: (error: Error) => {
-      toast({
-        title: "Error",
-        description: error.message,
-        variant: "destructive",
-      });
+            errorToast(
+        toast,
+        "Error",
+        error.message,
+      );
     },
   });
 
@@ -179,17 +183,18 @@ export default function RegistrationCommitteeRegistrationsPage() {
       // We might want to aggregate credentials from results if needed, 
       // but usually bulk confirm emails them. 
       // For now, simple success message is okay, or specialized credential display if critical.
-      toast({
-        title: "Success",
-        description: data.message || `Confirmed ${data.confirmed} registration(s)`,
-      });
+            successToast(
+        toast,
+        "Success",
+        data.message || `Confirmed ${data.confirmed} registration(s)`,
+      );
     },
     onError: (error: Error) => {
-      toast({
-        title: "Error",
-        description: error.message,
-        variant: "destructive",
-      });
+            errorToast(
+        toast,
+        "Error",
+        error.message,
+      );
     },
   });
 
@@ -353,7 +358,11 @@ export default function RegistrationCommitteeRegistrationsPage() {
         text += `\n${event.eventName}:\nTeam ID: ${event.teamId || 'â€”'}\nUsername: ${event.eventUsername}\nPassword: ${event.eventPassword}\n`;
       });
       navigator.clipboard.writeText(text);
-      toast({ title: "Copied", description: "Credentials copied to clipboard" });
+            successToast(
+        toast,
+        "Copied",
+        "Credentials copied to clipboard",
+      );
     }
   };
 
@@ -429,7 +438,7 @@ export default function RegistrationCommitteeRegistrationsPage() {
                 <SelectContent>
                   <SelectItem value="all">All Events</SelectItem>
                   {events?.map(event => (
-                    <SelectItem key={event.id} value={event.id}>{event.name}</SelectItem>
+                    <SelectItem key={event.id} value={event.id}>{formatEventOptionLabel(event)}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
@@ -506,7 +515,8 @@ export default function RegistrationCommitteeRegistrationsPage() {
             </CardHeader>
             <CardContent>
               {groupParticipants.length > 0 ? (
-                <div className="overflow-x-auto">
+                                <ScrollableTable>
+
                   <Table data-testid={`table-registrations-${groupName}`}>
                     <TableHeader>
                       <TableRow>
@@ -572,7 +582,7 @@ export default function RegistrationCommitteeRegistrationsPage() {
                       ))}
                     </TableBody>
                   </Table>
-                </div>
+                                </ScrollableTable>
               ) : (
                 <div className="text-center py-8 text-muted-foreground" data-testid="text-no-registrations">
                   No participants match your filters

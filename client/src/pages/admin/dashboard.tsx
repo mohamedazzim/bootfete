@@ -5,9 +5,9 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiRequest } from '@/lib/queryClient';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Calendar, Users, FileText, Settings, FormInput, Utensils, Mail, RefreshCw, ClipboardCheck } from 'lucide-react';
+import { Calendar, Utensils, Mail, RefreshCw, Salad, Drumstick, Clock, UserCheck, TrendingUp } from 'lucide-react';
 import AdminLayout from '@/components/layouts/AdminLayout';
-import type { Event } from '@shared/schema';
+import type { Event, Registration, Round } from '@shared/schema';
 import { Progress } from '@/components/ui/progress';
 
 type EmailProvider = 'brevo' | 'resend';
@@ -62,6 +62,41 @@ export default function AdminDashboard() {
     refetchInterval: 30000, // Refetch every 30 seconds
   });
 
+  // Phase 5: operational metrics from existing APIs only (no invented backends).
+  const { data: allRounds = [], isLoading: roundsLoading } = useQuery<(Round & { eventName: string })[]>({
+    queryKey: ['/api/super-admin/all-rounds'],
+    enabled: !!user && user.role === 'super_admin',
+    refetchInterval: 30000,
+  });
+
+  // Registrations drive the pending-approvals counter and the 7-day trend.
+  // The list endpoint is paginated (max 200/page); the trend is computed
+  // from the most recent 200 registrations and labelled as such.
+  const { data: recentRegistrations = [], isLoading: registrationsLoading } = useQuery<Registration[]>({
+    queryKey: ['/api/registrations', { page: 1, pageSize: 200 }],
+    queryFn: async () => {
+      const res = await apiRequest('GET', '/api/registrations?page=1&pageSize=200');
+      return res.json();
+    },
+    enabled: !!user && user.role === 'super_admin',
+    refetchInterval: 30000,
+  });
+
+  const activeRounds = allRounds.filter(r => r.status === 'in_progress');
+  const pendingApprovals = recentRegistrations.filter(r => r.status === 'pending').length;
+
+  const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  const last7Days = recentRegistrations.filter(r => new Date(r.createdAt).getTime() >= sevenDaysAgo);
+  // Per-day buckets for the last 7 days (oldest → today)
+  const trendBuckets: { label: string; count: number }[] = Array.from({ length: 7 }, (_, i) => {
+    const d = new Date();
+    d.setDate(d.getDate() - (6 - i));
+    const key = d.toDateString();
+    const count = last7Days.filter(r => new Date(r.createdAt).toDateString() === key).length;
+    return { label: d.toLocaleDateString(undefined, { weekday: 'short' }), count };
+  });
+  const trendMax = Math.max(1, ...trendBuckets.map(b => b.count));
+
   const switchProviderMutation = useMutation({
     mutationFn: async (provider: EmailProvider) => {
       const res = await apiRequest('POST', '/api/email-provider', { provider });
@@ -99,86 +134,88 @@ export default function AdminDashboard() {
           <p className="text-gray-600 mt-2">Welcome back, {user.fullName}</p>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-          <Card className="cursor-pointer hover:shadow-lg transition-shadow" onClick={() => setLocation('/admin/events')} data-testid="card-events">
+        {/* Phase 5: operational metrics first — navigation is secondary. */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+          <Card className="cursor-pointer hover:shadow-lg transition-shadow" onClick={() => setLocation('/admin/events')} data-testid="metric-events">
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Events</CardTitle>
+              <CardTitle className="text-sm font-medium">Total Events</CardTitle>
               <Calendar className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">Manage</div>
-              <p className="text-xs text-muted-foreground">Create and manage symposium events</p>
+              <div className="text-2xl font-bold" role="status" aria-label={`${events.length} total events`}>{events.length}</div>
+              <p className="text-xs text-muted-foreground">{events.filter(e => e.status === 'active').length} active</p>
             </CardContent>
           </Card>
 
-          <Card className="cursor-pointer hover:shadow-lg transition-shadow" onClick={() => setLocation('/admin/event-admins')} data-testid="card-event-admins">
+          <Card className="cursor-pointer hover:shadow-lg transition-shadow" onClick={() => setLocation('/admin/tests')} data-testid="metric-active-rounds">
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Event Admins</CardTitle>
-              <Users className="h-4 w-4 text-muted-foreground" />
+              <CardTitle className="text-sm font-medium">Active Rounds</CardTitle>
+              <Clock className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">Assign</div>
-              <p className="text-xs text-muted-foreground">Manage event admin assignments</p>
+              {roundsLoading ? (
+                <div className="h-8 w-16 animate-pulse rounded-md bg-muted" role="status" aria-label="Loading active rounds" />
+              ) : (
+                <div className="text-2xl font-bold text-active" role="status" aria-label={`${activeRounds.length} rounds currently in progress`}>{activeRounds.length}</div>
+              )}
+              <p className="text-xs text-muted-foreground">rounds in progress now</p>
             </CardContent>
           </Card>
 
-          <Card className="cursor-pointer hover:shadow-lg transition-shadow" onClick={() => setLocation('/admin/reports')} data-testid="card-reports">
+          <Card className="cursor-pointer hover:shadow-lg transition-shadow" onClick={() => setLocation('/admin/registrations')} data-testid="metric-pending-approvals">
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Reports</CardTitle>
-              <FileText className="h-4 w-4 text-muted-foreground" />
+              <CardTitle className="text-sm font-medium">Pending Approvals</CardTitle>
+              <UserCheck className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">View</div>
-              <p className="text-xs text-muted-foreground">Generate and download reports</p>
+              {registrationsLoading ? (
+                <div className="h-8 w-16 animate-pulse rounded-md bg-muted" role="status" aria-label="Loading pending approvals" />
+              ) : (
+                <div className="text-2xl font-bold text-pending" role="status" aria-label={`${pendingApprovals} registrations awaiting approval`}>{pendingApprovals}</div>
+              )}
+              <p className="text-xs text-muted-foreground">registrations awaiting review</p>
             </CardContent>
           </Card>
 
-          <Card className="cursor-pointer hover:shadow-lg transition-shadow" onClick={() => setLocation('/admin/registration-forms')} data-testid="card-registration-forms">
+          <Card className="cursor-pointer hover:shadow-lg transition-shadow" onClick={() => setLocation('/admin/registrations')} data-testid="metric-registrations-7d">
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Registration Forms</CardTitle>
-              <FormInput className="h-4 w-4 text-muted-foreground" />
+              <CardTitle className="text-sm font-medium">Registrations · 7d</CardTitle>
+              <TrendingUp className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">Manage</div>
-              <p className="text-xs text-muted-foreground">Create and manage registration forms</p>
-            </CardContent>
-          </Card>
-
-          <Card className="cursor-pointer hover:shadow-lg transition-shadow" onClick={() => setLocation('/admin/registrations')} data-testid="card-registrations">
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Registrations</CardTitle>
-              <Users className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">View</div>
-              <p className="text-xs text-muted-foreground">View all participant registrations</p>
-            </CardContent>
-          </Card>
-
-          <Card className="cursor-pointer hover:shadow-lg transition-shadow" onClick={() => setLocation('/admin/tests')} data-testid="card-test-manager">
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Test Manager</CardTitle>
-              <ClipboardCheck className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">Manage</div>
-              <p className="text-xs text-muted-foreground">Control rounds and tests across all events</p>
-            </CardContent>
-          </Card>
-
-          <Card className="cursor-pointer hover:shadow-lg transition-shadow" onClick={() => setLocation('/admin/settings')} data-testid="card-settings">
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Settings</CardTitle>
-              <Settings className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">Configure</div>
-              <p className="text-xs text-muted-foreground">System settings and preferences</p>
+              {registrationsLoading ? (
+                <div className="h-8 w-16 animate-pulse rounded-md bg-muted" role="status" aria-label="Loading registration trend" />
+              ) : (
+                <>
+                  <div className="text-2xl font-bold" role="status" aria-label={`${last7Days.length} registrations in the last 7 days`}>{last7Days.length}</div>
+                  <div className="flex items-end gap-1 mt-2 h-8" aria-hidden="true">
+                    {trendBuckets.map((b, i) => (
+                      <div key={i} className="flex-1 bg-indigo-200 rounded-sm" style={{ height: `${Math.max(8, (b.count / trendMax) * 100)}%` }} title={`${b.label}: ${b.count}`} />
+                    ))}
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-1">per-day trend, most recent 200</p>
+                </>
+              )}
             </CardContent>
           </Card>
         </div>
 
-
+        {/* Secondary navigation — compact quick actions, not the hero. */}
+        <nav className="flex flex-wrap gap-2 mb-8" aria-label="Quick actions">
+          {[
+            { label: 'Events', href: '/admin/events', testid: 'action-events' },
+            { label: 'Event Admins', href: '/admin/event-admins', testid: 'action-event-admins' },
+            { label: 'Reports', href: '/admin/reports', testid: 'action-reports' },
+            { label: 'Registration Forms', href: '/admin/registration-forms', testid: 'action-registration-forms' },
+            { label: 'Registrations', href: '/admin/registrations', testid: 'action-registrations' },
+            { label: 'Test Manager', href: '/admin/tests', testid: 'action-test-manager' },
+            { label: 'Settings', href: '/admin/settings', testid: 'action-settings' },
+          ].map(a => (
+            <Button key={a.href} variant="outline" size="sm" onClick={() => setLocation(a.href)} data-testid={a.testid}>
+              {a.label}
+            </Button>
+          ))}
+        </nav>
       </div>
       <div className="mt-8 px-4 md:px-8">
         <h2 className="text-xl font-bold mb-4">Registration Analytics</h2>
@@ -199,11 +236,17 @@ export default function AdminDashboard() {
                 <div className="text-sm text-muted-foreground mt-1">Total Participants</div>
               </div>
               <div className="bg-green-100 dark:bg-green-900/30 rounded-lg p-4 text-center">
-                <div className="text-3xl font-bold text-green-600 dark:text-green-400">🥬 {stats?.vegCount || 0}</div>
+                {/* Phase 5: emoji glyphs (🥬/🍗) rendered as tofu on systems
+                    without an emoji font — use vector lucide icons instead. */}
+                <div className="text-3xl font-bold text-green-600 dark:text-green-400 flex items-center justify-center gap-2" role="status" aria-label={`${stats?.vegCount || 0} vegetarian participants`}>
+                  <Salad className="h-7 w-7" aria-hidden="true" /> {stats?.vegCount || 0}
+                </div>
                 <div className="text-sm text-muted-foreground mt-1">Vegetarian</div>
               </div>
               <div className="bg-orange-100 dark:bg-orange-900/30 rounded-lg p-4 text-center">
-                <div className="text-3xl font-bold text-orange-600 dark:text-orange-400">🍗 {stats?.nonVegCount || 0}</div>
+                <div className="text-3xl font-bold text-orange-600 dark:text-orange-400 flex items-center justify-center gap-2" role="status" aria-label={`${stats?.nonVegCount || 0} non-vegetarian participants`}>
+                  <Drumstick className="h-7 w-7" aria-hidden="true" /> {stats?.nonVegCount || 0}
+                </div>
                 <div className="text-sm text-muted-foreground mt-1">Non-Vegetarian</div>
               </div>
             </div>

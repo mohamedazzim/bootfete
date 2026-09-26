@@ -16,6 +16,7 @@ import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Plus, UserCheck, Pencil } from 'lucide-react';
 import AdminLayout from '@/components/layouts/AdminLayout';
+import ScrollableTable from '@/components/ScrollableTable';
 
 export default function RegistrationCommitteePage() {
   const { user, isLoading: authLoading } = useAuth();
@@ -84,41 +85,44 @@ export default function RegistrationCommitteePage() {
                 </Button>
               </div>
             ) : (
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Name</TableHead>
-                    <TableHead>Email</TableHead>
-                    <TableHead>Username</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead className="text-right">Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {committeeUsers.map((user) => (
-                    <TableRow key={user.id} data-testid={`row-committee-${user.id}`}>
-                      <TableCell className="font-medium">{user.fullName}</TableCell>
-                      <TableCell>{user.email}</TableCell>
-                      <TableCell>{user.username}</TableCell>
-                      <TableCell>
-                        <Badge variant="outline" className="bg-green-50 text-green-700 border-green-200">
-                          Active
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => setLocation(`/admin/registration-committee/${user.id}/edit`)}
-                          data-testid={`button-edit-committee-${user.id}`}
-                        >
-                          <Pencil className="h-4 w-4" />
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+                            <ScrollableTable>
+
+                <Table>
+                                <TableHeader>
+                                  <TableRow>
+                                    <TableHead>Name</TableHead>
+                                    <TableHead>Email</TableHead>
+                                    <TableHead>Username</TableHead>
+                                    <TableHead>Status</TableHead>
+                                    <TableHead className="text-right">Actions</TableHead>
+                                  </TableRow>
+                                </TableHeader>
+                                <TableBody>
+                                  {committeeUsers.map((user) => (
+                                    <TableRow key={user.id} data-testid={`row-committee-${user.id}`}>
+                                      <TableCell className="font-medium">{user.fullName}</TableCell>
+                                      <TableCell>{user.email}</TableCell>
+                                      <TableCell>{user.username}</TableCell>
+                                      <TableCell>
+                                        <Badge variant="outline" className="bg-green-50 text-green-700 border-green-200">
+                                          Active
+                                        </Badge>
+                                      </TableCell>
+                                      <TableCell className="text-right">
+                                        <Button
+                                          variant="ghost"
+                                          size="icon"
+                                          onClick={() => setLocation(`/admin/registration-committee/${user.id}/edit`)}
+                                          data-testid={`button-edit-committee-${user.id}`}
+                                        >
+                                          <Pencil className="h-4 w-4" />
+                                        </Button>
+                                      </TableCell>
+                                    </TableRow>
+                                  ))}
+                                </TableBody>
+                              </Table>
+                            </ScrollableTable>
             )}
           </CardContent>
         </Card>

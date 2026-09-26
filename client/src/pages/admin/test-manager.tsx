@@ -2,7 +2,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
+import { StatusBadge } from "@/components/StatusBadge";
 import { useToast } from "@/hooks/use-toast";
 import { Loader2, Play, Pause, Square, Clock, Eye, Ban } from "lucide-react";
 import { format } from "date-fns";
@@ -31,6 +31,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { MoreHorizontal, BarChart, FileQuestion, Edit, Trash2, Trophy } from "lucide-react";
 import AdminLayout from "@/components/layouts/AdminLayout";
+import ScrollableTable from '@/components/ScrollableTable';
 
 export default function TestManagerPage() {
     const { toast } = useToast();
@@ -143,18 +144,6 @@ export default function TestManagerPage() {
         );
     }
 
-    const getStatusColor = (status: string) => {
-        switch (status) {
-            case "in_progress": return "bg-green-500 hover:bg-green-600";
-            case "active": return "bg-green-500 hover:bg-green-600";
-            case "upcoming": return "bg-gray-500 hover:bg-gray-600";
-            case "paused": return "bg-yellow-500 hover:bg-yellow-600";
-            case "completed": return "bg-blue-500 hover:bg-blue-600";
-            case "not_started": return "bg-gray-500 hover:bg-gray-600";
-            default: return "bg-gray-500 hover:bg-gray-600";
-        }
-    };
-
     const filteredRounds = allRounds?.filter((round: any) => {
         const matchesSearch = round.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
             round.eventName.toLowerCase().includes(searchTerm.toLowerCase());
@@ -205,7 +194,7 @@ export default function TestManagerPage() {
                     <SelectContent>
                         <SelectItem value="all">All Statuses</SelectItem>
                         <SelectItem value="not_started">Not Started / Upcoming</SelectItem>
-                        <SelectItem value="in_progress">In Progress / Active</SelectItem>
+                        <SelectItem value="in_progress">In progress</SelectItem>
                         <SelectItem value="paused">Paused</SelectItem>
                         <SelectItem value="completed">Completed</SelectItem>
                     </SelectContent>
@@ -217,188 +206,189 @@ export default function TestManagerPage() {
                     <CardTitle>All Rounds ({filteredRounds.length})</CardTitle>
                 </CardHeader>
                 <CardContent>
-                    <Table>
-                        <TableHeader>
-                            <TableRow>
-                                <TableHead>Event</TableHead>
-                                <TableHead>Round</TableHead>
-                                <TableHead>Schedule</TableHead>
-                                <TableHead>Duration</TableHead>
-                                <TableHead>Status</TableHead>
-                                <TableHead className="text-right w-[200px]">Actions</TableHead>
-                            </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                            {filteredRounds.length === 0 ? (
-                                <TableRow>
-                                    <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
-                                        No rounds found.
-                                    </TableCell>
-                                </TableRow>
-                            ) : (
-                                filteredRounds.map((round: any) => (
-                                    <TableRow key={round.id}>
-                                        <TableCell className="font-medium">{round.eventName}</TableCell>
-                                        <TableCell>{round.name}</TableCell>
-                                        <TableCell>
-                                            <div className="flex flex-col text-sm">
-                                                <span className="text-muted-foreground">Start:</span>
-                                                <span>{round.startTime ? format(new Date(round.startTime), "PP p") : "Not set"}</span>
-                                                <span className="text-muted-foreground mt-1">End:</span>
-                                                <span>{round.endTime ? format(new Date(round.endTime), "PP p") : "Not set"}</span>
-                                            </div>
-                                        </TableCell>
-                                        <TableCell>{round.duration} mins</TableCell>
-                                        <TableCell>
-                                            <Badge className={getStatusColor(round.status)}>
-                                                {round.status.replace("_", " ").toUpperCase()}
-                                            </Badge>
-                                        </TableCell>
-                                        <TableCell className="text-right">
-                                            <div className="flex items-center justify-end gap-2">
-                                                {/* 1. Primary Action Button */}
-                                                {(round.status === 'not_started' || round.status === 'upcoming') && (
-                                                    <Dialog>
-                                                        <DialogTrigger asChild>
-                                                            <Button size="sm" className="w-24 bg-green-600 hover:bg-green-700">
-                                                                <Play className="w-4 h-4 mr-1" /> Start
-                                                            </Button>
-                                                        </DialogTrigger>
-                                                        <DialogContent>
-                                                            <DialogHeader>
-                                                                <DialogTitle>Start Round</DialogTitle>
-                                                            </DialogHeader>
-                                                            <StartRoundForm
-                                                                round={round}
-                                                                onStart={(duration) => updateStatusMutation.mutate({ roundId: round.id, action: 'start', duration })}
-                                                                isPending={updateStatusMutation.isPending}
-                                                            />
-                                                        </DialogContent>
-                                                    </Dialog>
-                                                )}
+                                        <ScrollableTable>
 
-                                                {(round.status === 'in_progress' || round.status === 'active') && (
-                                                    <Button
-                                                        size="sm"
-                                                        variant="outline"
-                                                        className="w-24 border-yellow-500 text-yellow-600 hover:bg-yellow-50"
-                                                        onClick={() => updateStatusMutation.mutate({ roundId: round.id, action: 'pause' })}
-                                                        disabled={updateStatusMutation.isPending}
-                                                    >
-                                                        <Pause className="w-4 h-4 mr-1" /> Pause
-                                                    </Button>
-                                                )}
+                      <Table>
+                                              <TableHeader>
+                                                  <TableRow>
+                                                      <TableHead>Event</TableHead>
+                                                      <TableHead>Round</TableHead>
+                                                      <TableHead>Schedule</TableHead>
+                                                      <TableHead>Duration</TableHead>
+                                                      <TableHead>Status</TableHead>
+                                                      <TableHead className="text-right w-[200px]">Actions</TableHead>
+                                                  </TableRow>
+                                              </TableHeader>
+                                              <TableBody>
+                                                  {filteredRounds.length === 0 ? (
+                                                      <TableRow>
+                                                          <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
+                                                              No rounds found.
+                                                          </TableCell>
+                                                      </TableRow>
+                                                  ) : (
+                                                      filteredRounds.map((round: any) => (
+                                                          <TableRow key={round.id}>
+                                                              <TableCell className="font-medium">{round.eventName}</TableCell>
+                                                              <TableCell>{round.name}</TableCell>
+                                                              <TableCell>
+                                                                  <div className="flex flex-col text-sm">
+                                                                      <span className="text-muted-foreground">Start:</span>
+                                                                      <span>{round.startTime ? format(new Date(round.startTime), "PP p") : "Not set"}</span>
+                                                                      <span className="text-muted-foreground mt-1">End:</span>
+                                                                      <span>{round.endTime ? format(new Date(round.endTime), "PP p") : "Not set"}</span>
+                                                                  </div>
+                                                              </TableCell>
+                                                              <TableCell>{round.duration} mins</TableCell>
+                                                              <TableCell>
+                                                                  <StatusBadge domain="round" status={round.status} />
+                                                              </TableCell>
+                                                              <TableCell className="text-right">
+                                                                  <div className="flex items-center justify-end gap-2">
+                                                                      {/* 1. Primary Action Button */}
+                                                                      {(round.status === 'not_started' || round.status === 'upcoming') && (
+                                                                          <Dialog>
+                                                                              <DialogTrigger asChild>
+                                                                                  <Button size="sm" className="w-24 bg-green-600 hover:bg-green-700">
+                                                                                      <Play className="w-4 h-4 mr-1" /> Start
+                                                                                  </Button>
+                                                                              </DialogTrigger>
+                                                                              <DialogContent>
+                                                                                  <DialogHeader>
+                                                                                      <DialogTitle>Start Round</DialogTitle>
+                                                                                  </DialogHeader>
+                                                                                  <StartRoundForm
+                                                                                      round={round}
+                                                                                      onStart={(duration) => updateStatusMutation.mutate({ roundId: round.id, action: 'start', duration })}
+                                                                                      isPending={updateStatusMutation.isPending}
+                                                                                  />
+                                                                              </DialogContent>
+                                                                          </Dialog>
+                                                                      )}
 
-                                                {round.status === 'paused' && (
-                                                    <Button
-                                                        size="sm"
-                                                        className="w-24 bg-blue-600 hover:bg-blue-700"
-                                                        onClick={() => updateStatusMutation.mutate({ roundId: round.id, action: 'resume' })}
-                                                        disabled={updateStatusMutation.isPending}
-                                                    >
-                                                        <Play className="w-4 h-4 mr-1" /> Resume
-                                                    </Button>
-                                                )}
+                                                                      {(round.status === 'in_progress' || round.status === 'active') && (
+                                                                          <Button
+                                                                              size="sm"
+                                                                              variant="outline"
+                                                                              className="w-24 border-yellow-500 text-yellow-600 hover:bg-yellow-50"
+                                                                              onClick={() => updateStatusMutation.mutate({ roundId: round.id, action: 'pause' })}
+                                                                              disabled={updateStatusMutation.isPending}
+                                                                          >
+                                                                              <Pause className="w-4 h-4 mr-1" /> Pause
+                                                                          </Button>
+                                                                      )}
 
-                                                {round.status === 'completed' && (
-                                                    <Button size="sm" variant="secondary" className="w-24" disabled>
-                                                        Completed
-                                                    </Button>
-                                                )}
+                                                                      {round.status === 'paused' && (
+                                                                          <Button
+                                                                              size="sm"
+                                                                              className="w-24 bg-blue-600 hover:bg-blue-700"
+                                                                              onClick={() => updateStatusMutation.mutate({ roundId: round.id, action: 'resume' })}
+                                                                              disabled={updateStatusMutation.isPending}
+                                                                          >
+                                                                              <Play className="w-4 h-4 mr-1" /> Resume
+                                                                          </Button>
+                                                                      )}
 
-                                                {/* 2. Monitor / Results Button (Always visible if relevant) */}
-                                                <Button size="sm" variant="ghost" asChild title="Monitor">
-                                                    <Link href={`/event-admin/rounds/${round.id}/monitor`}>
-                                                        <BarChart className="w-4 h-4 text-gray-600" />
-                                                    </Link>
-                                                </Button>
+                                                                      {round.status === 'completed' && (
+                                                                          <Button size="sm" variant="secondary" className="w-24" disabled>
+                                                                              Completed
+                                                                          </Button>
+                                                                      )}
 
-                                                <Button size="sm" variant="ghost" asChild title="View Results">
-                                                    <Link href={`/event-admin/events/${round.eventId}/results`}>
-                                                        <Trophy className="w-4 h-4 text-yellow-600" />
-                                                    </Link>
-                                                </Button>
+                                                                      {/* 2. Monitor / Results Button (Always visible if relevant) */}
+                                                                      <Button size="sm" variant="ghost" asChild title="Monitor">
+                                                                          <Link href={`/event-admin/rounds/${round.id}/monitor`}>
+                                                                              <BarChart className="w-4 h-4 text-gray-600" />
+                                                                          </Link>
+                                                                      </Button>
 
-                                                {/* 3. More Actions Dropdown */}
-                                                <Dialog>
-                                                    <DropdownMenu>
-                                                        <DropdownMenuTrigger asChild>
-                                                            <Button variant="ghost" className="h-8 w-8 p-0">
-                                                                <span className="sr-only">Open menu</span>
-                                                                <MoreHorizontal className="h-4 w-4" />
-                                                            </Button>
-                                                        </DropdownMenuTrigger>
-                                                        <DropdownMenuContent align="end">
-                                                            <DropdownMenuLabel>Actions</DropdownMenuLabel>
+                                                                      <Button size="sm" variant="ghost" asChild title="View Results">
+                                                                          <Link href={`/event-admin/events/${round.eventId}/results`}>
+                                                                              <Trophy className="w-4 h-4 text-yellow-600" />
+                                                                          </Link>
+                                                                      </Button>
 
-                                                            <DropdownMenuItem asChild>
-                                                                <Link href={`/event-admin/rounds/${round.id}/questions`} className="cursor-pointer">
-                                                                    <FileQuestion className="mr-2 h-4 w-4" />
-                                                                    Manage Questions
-                                                                </Link>
-                                                            </DropdownMenuItem>
+                                                                      {/* 3. More Actions Dropdown */}
+                                                                      <Dialog>
+                                                                          <DropdownMenu>
+                                                                              <DropdownMenuTrigger asChild>
+                                                                                  <Button variant="ghost" className="h-8 w-8 p-0">
+                                                                                      <span className="sr-only">Open menu</span>
+                                                                                      <MoreHorizontal className="h-4 w-4" />
+                                                                                  </Button>
+                                                                              </DropdownMenuTrigger>
+                                                                              <DropdownMenuContent align="end">
+                                                                                  <DropdownMenuLabel>Actions</DropdownMenuLabel>
 
-                                                            <DialogTrigger asChild>
-                                                                <DropdownMenuItem>
-                                                                    <Clock className="mr-2 h-4 w-4" />
-                                                                    Edit Schedule
-                                                                </DropdownMenuItem>
-                                                            </DialogTrigger>
+                                                                                  <DropdownMenuItem asChild>
+                                                                                      <Link href={`/event-admin/rounds/${round.id}/questions`} className="cursor-pointer">
+                                                                                          <FileQuestion className="mr-2 h-4 w-4" />
+                                                                                          Manage Questions
+                                                                                      </Link>
+                                                                                  </DropdownMenuItem>
 
-                                                            {((round.status === 'in_progress' || round.status === 'active') || round.status === 'paused') && (
-                                                                <>
-                                                                    <DropdownMenuSeparator />
-                                                                    <DropdownMenuItem
-                                                                        className="text-red-600 focus:text-red-600"
-                                                                        onClick={() => updateStatusMutation.mutate({ roundId: round.id, action: 'end' })}
-                                                                    >
-                                                                        <Square className="mr-2 h-4 w-4" />
-                                                                        End Round
-                                                                    </DropdownMenuItem>
-                                                                </>
-                                                            )}
+                                                                                  <DialogTrigger asChild>
+                                                                                      <DropdownMenuItem>
+                                                                                          <Clock className="mr-2 h-4 w-4" />
+                                                                                          Edit Schedule
+                                                                                      </DropdownMenuItem>
+                                                                                  </DialogTrigger>
 
-                                                            <DropdownMenuSeparator />
-                                                            <DropdownMenuItem
-                                                                className="text-red-600 focus:text-red-600"
-                                                                onClick={() => {
-                                                                    if (window.confirm(`Are you sure you want to delete ALL test data for "${round.name}"? This will remove all attempts and answers. This action cannot be undone.`)) {
-                                                                        deleteTestDataMutation.mutate(round.id);
-                                                                    }
-                                                                }}
-                                                            >
-                                                                <Trash2 className="mr-2 h-4 w-4" />
-                                                                Delete Test Data
-                                                            </DropdownMenuItem>
-                                                            <DropdownMenuItem
-                                                                className="text-red-600 focus:text-red-600 font-semibold"
-                                                                onClick={() => {
-                                                                    if (window.confirm(`⚠️ DANGER: Are you sure you want to PERMANENTLY DELETE the round "${round.name}"?\n\nThis will delete:\n• The round itself\n• All questions\n• All test attempts\n• All answers\n\nThis action CANNOT be undone!`)) {
-                                                                        deleteRoundMutation.mutate(round.id);
-                                                                    }
-                                                                }}
-                                                            >
-                                                                <Trash2 className="mr-2 h-4 w-4" />
-                                                                Delete Round
-                                                            </DropdownMenuItem>
-                                                        </DropdownMenuContent>
-                                                    </DropdownMenu>
+                                                                                  {((round.status === 'in_progress' || round.status === 'active') || round.status === 'paused') && (
+                                                                                      <>
+                                                                                          <DropdownMenuSeparator />
+                                                                                          <DropdownMenuItem
+                                                                                              className="text-red-600 focus:text-red-600"
+                                                                                              onClick={() => updateStatusMutation.mutate({ roundId: round.id, action: 'end' })}
+                                                                                          >
+                                                                                              <Square className="mr-2 h-4 w-4" />
+                                                                                              End Round
+                                                                                          </DropdownMenuItem>
+                                                                                      </>
+                                                                                  )}
 
-                                                    {/* Dialog Content for Edit Schedule (Nested logic) */}
-                                                    <DialogContent>
-                                                        <DialogHeader>
-                                                            <DialogTitle>Edit Schedule</DialogTitle>
-                                                        </DialogHeader>
-                                                        <EditScheduleForm round={round} />
-                                                    </DialogContent>
-                                                </Dialog>
-                                            </div>
-                                        </TableCell>
-                                    </TableRow>
-                                ))
-                            )}
-                        </TableBody>
-                    </Table>
+                                                                                  <DropdownMenuSeparator />
+                                                                                  <DropdownMenuItem
+                                                                                      className="text-red-600 focus:text-red-600"
+                                                                                      onClick={() => {
+                                                                                          if (window.confirm(`Are you sure you want to delete ALL test data for "${round.name}"? This will remove all attempts and answers. This action cannot be undone.`)) {
+                                                                                              deleteTestDataMutation.mutate(round.id);
+                                                                                          }
+                                                                                      }}
+                                                                                  >
+                                                                                      <Trash2 className="mr-2 h-4 w-4" />
+                                                                                      Delete Test Data
+                                                                                  </DropdownMenuItem>
+                                                                                  <DropdownMenuItem
+                                                                                      className="text-red-600 focus:text-red-600 font-semibold"
+                                                                                      onClick={() => {
+                                                                                          if (window.confirm(`⚠️ DANGER: Are you sure you want to PERMANENTLY DELETE the round "${round.name}"?\n\nThis will delete:\n• The round itself\n• All questions\n• All test attempts\n• All answers\n\nThis action CANNOT be undone!`)) {
+                                                                                              deleteRoundMutation.mutate(round.id);
+                                                                                          }
+                                                                                      }}
+                                                                                  >
+                                                                                      <Trash2 className="mr-2 h-4 w-4" />
+                                                                                      Delete Round
+                                                                                  </DropdownMenuItem>
+                                                                              </DropdownMenuContent>
+                                                                          </DropdownMenu>
+
+                                                                          {/* Dialog Content for Edit Schedule (Nested logic) */}
+                                                                          <DialogContent>
+                                                                              <DialogHeader>
+                                                                                  <DialogTitle>Edit Schedule</DialogTitle>
+                                                                              </DialogHeader>
+                                                                              <EditScheduleForm round={round} />
+                                                                          </DialogContent>
+                                                                      </Dialog>
+                                                                  </div>
+                                                              </TableCell>
+                                                          </TableRow>
+                                                      ))
+                                                  )}
+                                              </TableBody>
+                                          </Table>
+                                        </ScrollableTable>
                  </CardContent>
              </Card>
         </div>

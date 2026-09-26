@@ -7,11 +7,13 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
+import { StatusBadge } from '@/components/StatusBadge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { Download, Printer, ArrowLeft, FileDown, PlayCircle, StopCircle, Users, UserCheck, Clock, Building, GraduationCap, Eye } from 'lucide-react';
 import EventAdminLayout from '@/components/layouts/EventAdminLayout';
 import type { Event } from '@shared/schema';
+import ScrollableTable from '@/components/ScrollableTable';
 
 interface EventCredentialWithDetails {
   id: string;
@@ -153,23 +155,6 @@ export default function EventParticipantsPage() {
     }
   };
 
-  const getStatusBadge = (status: string) => {
-    const variants: Record<string, { color: string; icon: any }> = {
-      confirmed: { color: 'bg-green-100 text-green-800', icon: UserCheck },
-      pending: { color: 'bg-yellow-100 text-yellow-800', icon: Clock },
-      cancelled: { color: 'bg-red-100 text-red-800', icon: null },
-    };
-
-    const badgeInfo = variants[status] || variants.pending;
-    const Icon = badgeInfo.icon;
-
-    return (
-      <Badge className={badgeInfo.color}>
-        {Icon && <Icon className="h-3 w-3 mr-1" />}
-        {status.toUpperCase()}
-      </Badge>
-    );
-  };
 
   const escapeCsvValue = (value: any) => {
     if (value === null || value === undefined) return '';
@@ -337,7 +322,8 @@ export default function EventParticipantsPage() {
                     <p className="text-sm">Registrations will appear once participants submit the form</p>
                   </div>
                 ) : (
-                  <div className="overflow-x-auto">
+                                    <ScrollableTable>
+
                     <Table>
                       <TableHeader>
                         <TableRow>
@@ -367,7 +353,7 @@ export default function EventParticipantsPage() {
                       <TableBody>
                         {registrations.map((reg) => (
                           <TableRow key={reg.id}>
-                            <TableCell>{getStatusBadge(reg.status)}</TableCell>
+                            <TableCell><StatusBadge domain="registration" status={reg.status} /></TableCell>
                             <TableCell className="font-medium">
                               {reg.organizerName}
                               {reg.teamMembers && reg.teamMembers.length > 0 && (
@@ -410,7 +396,7 @@ export default function EventParticipantsPage() {
                         ))}
                       </TableBody>
                     </Table>
-                  </div>
+                                    </ScrollableTable>
                 )}
               </CardContent>
             </Card>
@@ -461,7 +447,8 @@ export default function EventParticipantsPage() {
                     <p className="text-sm">Credentials are generated when registrations are approved</p>
                   </div>
                 ) : (
-                  <div className="overflow-x-auto">
+                                    <ScrollableTable>
+
                     <Table>
                       <TableHeader>
                         <TableRow>
@@ -499,7 +486,7 @@ export default function EventParticipantsPage() {
                         ))}
                       </TableBody>
                     </Table>
-                  </div>
+                                    </ScrollableTable>
                 )}
               </CardContent>
             </Card>

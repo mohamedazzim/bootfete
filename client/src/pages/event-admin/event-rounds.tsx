@@ -6,7 +6,7 @@ import EventAdminLayout from '@/components/layouts/EventAdminLayout';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Badge } from '@/components/ui/badge';
+import { StatusBadge } from '@/components/StatusBadge';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -21,6 +21,7 @@ import { ArrowLeft, Plus, Edit, FileQuestion, Clock, Play, Square, RotateCcw, Tr
 import { useToast } from '@/hooks/use-toast';
 import { apiRequest, queryClient } from '@/lib/queryClient';
 import type { Round, Event } from '@shared/schema';
+import ScrollableTable from '@/components/ScrollableTable';
 
 function CountdownTimer({ round }: { round: Round }) {
   const [timeRemaining, setTimeRemaining] = useState<number | null>(null);
@@ -186,25 +187,6 @@ export default function EventRoundsPage() {
     }
   });
 
-  const getStatusBadge = (status: string) => {
-    const variants: Record<string, 'default' | 'secondary' | 'destructive'> = {
-      not_started: 'secondary',
-      in_progress: 'default',
-      completed: 'destructive',
-    };
-
-    const labels: Record<string, string> = {
-      not_started: 'Not Started',
-      in_progress: 'In Progress',
-      completed: 'Completed',
-    };
-
-    return (
-      <Badge variant={variants[status] || 'default'}>
-        {labels[status] || status}
-      </Badge>
-    );
-  };
 
   if (eventLoading || roundsLoading) {
     return (
@@ -268,7 +250,8 @@ export default function EventRoundsPage() {
                 </Button>
               </div>
             ) : (
-              <div className="overflow-x-auto">
+                            <ScrollableTable>
+
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -288,7 +271,7 @@ export default function EventRoundsPage() {
                         </TableCell>
                         <TableCell>{round.name}</TableCell>
                         <TableCell>{round.duration} minutes</TableCell>
-                        <TableCell>{getStatusBadge(round.status)}</TableCell>
+                        <TableCell><StatusBadge domain="round" status={round.status} /></TableCell>
                         <TableCell>
                           <CountdownTimer round={round} />
                         </TableCell>
@@ -369,7 +352,7 @@ export default function EventRoundsPage() {
                     ))}
                   </TableBody>
                 </Table>
-              </div>
+                            </ScrollableTable>
             )}
           </CardContent>
         </Card>

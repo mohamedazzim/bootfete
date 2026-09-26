@@ -9,6 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useToast } from '@/hooks/use-toast';
+import { errorToast, successToast } from '@/lib/toast';
 import { ArrowLeft, Eye, EyeOff } from 'lucide-react';
 import { z } from 'zod';
 import { useQuery } from '@tanstack/react-query';
@@ -68,18 +69,19 @@ export default function EventAdminCreatePage() {
       queryClient.invalidateQueries({ queryKey: ['/api/users'] });
       queryClient.invalidateQueries({ queryKey: ['/api/events'] });
 
-      toast({
-        title: 'Event Admin created',
-        description: 'The event admin account has been created and assigned to the event successfully',
-      });
+            successToast(
+        toast,
+        'Event Admin created',
+        'The event admin account has been created and assigned to the event successfully',
+      );
 
       setLocation('/admin/event-admins');
     } catch (error: any) {
-      toast({
-        title: 'Creation failed',
-        description: error.message,
-        variant: 'destructive',
-      });
+            errorToast(
+        toast,
+        'Creation failed',
+        error.message,
+      );
     }
   }
 

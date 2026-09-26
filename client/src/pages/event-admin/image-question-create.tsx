@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/hooks/use-toast';
+import { errorToast, successToast } from '@/lib/toast';
 import { ArrowLeft, Upload, Image, Loader2, Save } from 'lucide-react';
 import { queryClient } from '@/lib/queryClient';
 
@@ -126,19 +127,31 @@ export default function ImageQuestionCreatePage() {
             return response.json();
         },
         onSuccess: () => {
-            toast({ title: 'Success', description: 'Image question created successfully!' });
+                        successToast(
+              toast,
+              'Success',
+              'Image question created successfully!',
+            );
             queryClient.invalidateQueries({ queryKey: [`/api/rounds/${roundId}/questions`] });
             setLocation(`/event-admin/rounds/${roundId}/questions`);
         },
         onError: (error: any) => {
-            toast({ title: 'Error', description: error.message, variant: 'destructive' });
+                        errorToast(
+              toast,
+              'Error',
+              error.message,
+            );
         }
     });
 
     // Handle form submit
     const handleSubmit = async () => {
         if (!imageFile && !uploadedImageUrl) {
-            toast({ title: 'Error', description: 'Please upload an image first', variant: 'destructive' });
+                        errorToast(
+              toast,
+              'Error',
+              'Please upload an image first',
+            );
             return;
         }
 
@@ -158,7 +171,11 @@ export default function ImageQuestionCreatePage() {
                 createQuestionMutation.mutate(imageUrl);
             }
         } catch (error: any) {
-            toast({ title: 'Error', description: error.message || 'Failed to upload image', variant: 'destructive' });
+                        errorToast(
+              toast,
+              'Error',
+              error.message || 'Failed to upload image',
+            );
         } finally {
             setIsUploading(false);
         }

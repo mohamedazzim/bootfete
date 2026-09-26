@@ -12,6 +12,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Switch } from '@/components/ui/switch';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { useToast } from '@/hooks/use-toast';
+import { errorToast, successToast } from '@/lib/toast';
 import { apiRequest, queryClient } from '@/lib/queryClient';
 import { insertRoundSchema, ROUND_TYPES } from '@shared/schema';
 import { z } from 'zod';
@@ -87,19 +88,20 @@ export default function RoundCreatePage() {
 
       await apiRequest('POST', `/api/events/${eventId}/rounds`, roundData);
 
-      toast({
-        title: 'Round created',
-        description: 'The round has been created successfully',
-      });
+            successToast(
+        toast,
+        'Round created',
+        'The round has been created successfully',
+      );
 
       queryClient.invalidateQueries({ queryKey: ['/api/events', eventId, 'rounds'] });
       setLocation(`/event-admin/events/${eventId}/rounds`);
     } catch (error: any) {
-      toast({
-        title: 'Creation failed',
-        description: error.message,
-        variant: 'destructive',
-      });
+            errorToast(
+        toast,
+        'Creation failed',
+        error.message,
+      );
     }
   }
 
@@ -323,8 +325,8 @@ export default function RoundCreatePage() {
                           </SelectTrigger>
                         </FormControl>
                         <SelectContent>
-                          <SelectItem value="not_started">Not Started (Upcoming)</SelectItem>
-                          <SelectItem value="in_progress">In Progress (Active)</SelectItem>
+                          <SelectItem value="not_started">Not Started</SelectItem>
+                          <SelectItem value="in_progress">In progress</SelectItem>
                           <SelectItem value="completed">Completed</SelectItem>
                         </SelectContent>
                       </Select>

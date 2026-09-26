@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Badge } from '@/components/ui/badge';
+import { StatusBadge } from '@/components/StatusBadge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
@@ -19,6 +19,7 @@ import { format } from 'date-fns';
 import type { EmailLog } from '@shared/schema';
 import type { DateRange } from 'react-day-picker';
 import { apiRequest, queryClient } from '@/lib/queryClient';
+import ScrollableTable from '@/components/ScrollableTable';
 
 export default function EmailLogsPage() {
   const { toast } = useToast();
@@ -111,18 +112,7 @@ export default function EmailLogsPage() {
 
   const paginatedLogs = filteredLogs;
 
-  const getStatusBadgeVariant = (status: string) => {
-    switch (status) {
-      case 'sent':
-        return 'default';
-      case 'failed':
-        return 'destructive';
-      case 'pending':
-        return 'secondary';
-      default:
-        return 'outline';
-    }
-  };
+
 
   const exportToCSV = () => {
     if (!filteredLogs || filteredLogs.length === 0) {
@@ -473,7 +463,8 @@ export default function EmailLogsPage() {
               </div>
             ) : (
               <>
-                <div className="overflow-x-auto">
+                                <ScrollableTable>
+
                   <Table>
                     <TableHeader>
                       <TableRow>
@@ -507,9 +498,7 @@ export default function EmailLogsPage() {
                             </span>
                           </TableCell>
                           <TableCell data-testid={`badge-status-${log.id}`}>
-                            <Badge variant={getStatusBadgeVariant(log.status)}>
-                              {log.status.toUpperCase()}
-                            </Badge>
+                            <StatusBadge domain="email" status={log.status} />
                           </TableCell>
                           <TableCell className="text-right">
                             <Dialog>
@@ -555,9 +544,7 @@ export default function EmailLogsPage() {
                                       <div>
                                         <label className="text-sm font-medium text-gray-500">Status</label>
                                         <div className="mt-1">
-                                          <Badge variant={getStatusBadgeVariant(selectedLog.status)} data-testid="dialog-badge-status">
-                                            {selectedLog.status.toUpperCase()}
-                                          </Badge>
+                                          <StatusBadge domain="email" status={selectedLog.status} testId="dialog-badge-status" />
                                         </div>
                                       </div>
                                       <div>
@@ -615,7 +602,7 @@ export default function EmailLogsPage() {
                       ))}
                     </TableBody>
                   </Table>
-                </div>
+                                </ScrollableTable>
 
                 {paginatedLogs && paginatedLogs.length > 0 && (
                   <div className="flex items-center justify-between mt-4">

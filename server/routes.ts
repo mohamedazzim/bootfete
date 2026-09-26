@@ -3323,15 +3323,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const totalParticipants = participants.length;
 
         const attempts = await storage.getTestAttemptsByRound(roundId);
-        const completedParticipants = new Set(
-          attempts.filter(a => a.submittedAt !== null).map(a => a.userId)
+        // STATE SEPARATION: an attempt is "finished" only when terminal.
+        // submittedAt is set by the proctoring path on disqualification, so
+        // it cannot be used as a "submitted" signal here — disqualified
+        // attempts are finished (they cannot be mutated) but are not
+        // "submitted".
+        const finishedUserIds = new Set(
+          attempts
+            .filter(a => a.status === 'completed' || a.status === 'disqualified')
+            .map(a => a.userId)
         );
 
-        if (totalParticipants === 0 || completedParticipants.size !== totalParticipants) {
+        if (totalParticipants === 0 || finishedUserIds.size !== totalParticipants) {
           return res.status(400).json({
             message: "Cannot show answers until all participants have submitted",
             totalParticipants,
-            completedParticipants: completedParticipants.size,
+            completedParticipants: finishedUserIds.size,
           });
         }
       }
@@ -7612,6 +7619,150 @@ export async function registerRoutes(app: Express): Promise<Server> {
   })
 
   // Get round statistics for live monitoring
+  // ADMIN ATTEMPT RESET WORKFLOW: clears a (false-positive) disqualification
+  // so the participant can resume. Admin-only; the attempt must currently be
+  // disqualified. Violation logs are archived into the audit entry (not
+  // silently dropped) and the counters are zeroed so the participant gets a
+  // clean slate on resume. Answers already saved are kept — this is a
+  // resume, not a fresh attempt.
+  app.post(
+    "/api/event-admin/attempts/:attemptId/reset",
+    requireAuth,
+    requireEventAdminOrSuperAdmin,
+    async (req: AuthRequest, res: Response) => {
+      try {
+        const { attemptId } = req.params;
+        const { reason } = req.body || {};
+
+        const attempt = await storage.getTestAttempt(attemptId);
+        if (!attempt) {
+          return res.status(404).json({ message: "Test attempt not found" });
+        }
+
+        if (attempt.status !== "disqualified") {
+          return res.status(400).json({
+            message: "Only disqualified attempts can be reset",
+            code: "ATTEMPT_NOT_DISQUALIFIED",
+          });
+        }
+
+        const round = await storage.getRound(attempt.roundId);
+        if (!round) {
+          return res.status(404).json({ message: "Round not found" });
+        }
+
+        // Event admins are event-scoped: they may only reset attempts in
+        // events they are assigned to.
+        if (req.user!.role === "event_admin") {
+          const myEvents = await storage.getEventsByAdmin(req.user!.id);
+          if (!myEvents.some((e: any) => e.id === round.eventId)) {
+            return res.status(403).json({ message: "Access denied" });
+          }
+        }
+
+        const archivedViolations = (attempt.violationLogs as any[]) || [];
+        const resetUser = await storage.getUser(attempt.userId);
+
+        const updated = await storage.updateTestAttempt(attemptId, {
+          status: "in_progress",
+          submittedAt: null,
+          completedAt: null,
+          totalScore: null,
+          violationLogs: [],
+          tabSwitchCount: 0,
+          refreshAttemptCount: 0,
+        } as any);
+
+        // The disqualification also marked the participant disqualified for
+        // the event; revert it so proctoring gates (save/submit) pass again.
+        const participant = await storage.getParticipantByUserAndEvent(
+          attempt.userId,
+          round.eventId
+        );
+        if (participant && participant.status === "disqualified") {
+          await storage.updateParticipantStatus(participant.id, "registered");
+        }
+
+        await cacheService.deletePattern("leaderboard:*");
+
+        await logSuperAdminAction(
+          req.user!.id,
+          req.user!.username,
+          "attempt_disqualification_reset",
+          "test_attempt",
+          attemptId,
+          resetUser?.fullName || resetUser?.username || attempt.userId,
+          {
+            previousStatus: "disqualified",
+            newStatus: "in_progress",
+            archivedViolationCount: archivedViolations.length,
+            archivedViolations,
+            previousTabSwitchCount: (attempt as any).tabSwitchCount || 0,
+            previousRefreshAttemptCount: (attempt as any).refreshAttemptCount || 0,
+            participantStatusReverted: participant?.status === "disqualified",
+          },
+          typeof reason === "string" && reason.trim() ? reason.trim() : null,
+          getClientIp(req)
+        );
+
+        res.json({
+          message: "Disqualification cleared. The participant can now resume the test.",
+          attempt: updated,
+        });
+      } catch (error) {
+        console.error("Reset disqualified attempt error:", error);
+        res.status(500).json({ message: "Internal server error" });
+      }
+    }
+  );
+
+  // List all attempts for a round (event-admin view for the Round Monitor
+  // participant table, including disqualified attempts that the leaderboard
+  // and submissions endpoints intentionally exclude).
+  app.get(
+    "/api/event-admin/rounds/:roundId/attempts",
+    requireAuth,
+    requireEventAdminOrSuperAdmin,
+    async (req: AuthRequest, res: Response) => {
+      try {
+        const { roundId } = req.params;
+        const round = await storage.getRound(roundId);
+        if (!round) {
+          return res.status(404).json({ message: "Round not found" });
+        }
+
+        if (req.user!.role === "event_admin") {
+          const myEvents = await storage.getEventsByAdmin(req.user!.id);
+          if (!myEvents.some((e: any) => e.id === round.eventId)) {
+            return res.status(403).json({ message: "Access denied" });
+          }
+        }
+
+        const attempts = await storage.getTestAttemptsByRound(roundId);
+        const rows = await Promise.all(
+          attempts.map(async (attempt) => {
+            const user = await storage.getUser(attempt.userId);
+            return {
+              id: attempt.id,
+              userId: attempt.userId,
+              userName: user?.fullName || user?.username || "Unknown",
+              status: attempt.status,
+              totalScore: attempt.totalScore,
+              startedAt: attempt.startedAt,
+              submittedAt: attempt.submittedAt,
+              violationCount: ((attempt.violationLogs as any[]) || []).length,
+            };
+          })
+        );
+        res.json(rows);
+      } catch (error) {
+        console.error("Get round attempts error:", error);
+        res.status(500).json({ message: "Internal server error" });
+      }
+    }
+  );
+
+  // Get round statistics for live monitoring
   app.get("/api/rounds/:roundId/statistics", requireAuth, requireRoundAccess, async (req: AuthRequest, res: Response) => {
     try {
       const { roundId } = req.params;
@@ -7629,13 +7780,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Get all test attempts for this round
       const attempts = await storage.getTestAttemptsByRound(roundId);
 
-      // Calculate statistics
-      const completedParticipants = attempts.filter(a => a.submittedAt !== null).length;
-      const activeParticipants = attempts.filter(a => a.startedAt !== null && a.submittedAt === null).length;
-      const pendingParticipants = totalParticipants - (completedParticipants + activeParticipants);
+      // Calculate statistics.
+      // STATE SEPARATION: 'disqualified' is a distinct terminal bucket.
+      // It is never counted inside completed/submitted, and it never
+      // contaminates averages. submittedAt is NOT a reliable "finished"
+      // signal because the proctoring path sets submittedAt when it
+      // disqualifies an attempt.
+      const completedParticipants = attempts.filter(a => a.status === 'completed').length;
+      const disqualifiedParticipants = attempts.filter(a => a.status === 'disqualified').length;
+      const activeParticipants = attempts.filter(a => a.startedAt !== null && a.submittedAt === null && a.status === 'in_progress').length;
+      const pendingParticipants = totalParticipants - (completedParticipants + activeParticipants + disqualifiedParticipants);
 
-      // Check if round is complete (strict: all participants submitted)
-      const canShareResults = totalParticipants > 0 && completedParticipants === totalParticipants;
+      // Check if round is complete (strict: every participant is in a
+      // terminal state). Disqualified attempts are terminal — they cannot
+      // be resumed by the participant — so they do not block result
+      // publication, but they are not counted as "submitted".
+      const terminalParticipants = completedParticipants + disqualifiedParticipants;
+      const canShareResults = totalParticipants > 0 && terminalParticipants === totalParticipants;
 
       res.json({
         roundId: round.id,
@@ -7644,6 +7805,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         totalParticipants,
         activeParticipants,
         completedParticipants,
+        disqualifiedParticipants,
         pendingParticipants,
         testDuration: round.duration || 60,
         startedAt: round.startedAt,

@@ -9,6 +9,7 @@ import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
+import { errorToast, successToast } from '@/lib/toast';
 import AdminLayout from "@/components/layouts/AdminLayout";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Eye, EyeOff } from "lucide-react";
@@ -49,18 +50,19 @@ export default function RegistrationCommitteeCreatePage() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['/api/users'] });
-      toast({
-        title: "Success",
-        description: "Registration Committee user created successfully",
-      });
+            successToast(
+        toast,
+        "Success",
+        "Registration Committee user created successfully",
+      );
       setLocation("/admin/registration-committee");
     },
     onError: (error: Error) => {
-      toast({
-        title: "Error",
-        description: error.message,
-        variant: "destructive",
-      });
+            errorToast(
+        toast,
+        "Error",
+        error.message,
+      );
     },
   });
 

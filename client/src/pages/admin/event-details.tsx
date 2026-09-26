@@ -4,10 +4,11 @@ import AdminLayout from '@/components/layouts/AdminLayout';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Badge } from '@/components/ui/badge';
+import { StatusBadge } from '@/components/StatusBadge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { ArrowLeft, Edit, Plus } from 'lucide-react';
 import type { Event, User, Round, Participant } from '@shared/schema';
+import ScrollableTable from '@/components/ScrollableTable';
 
 export default function EventDetailsPage() {
   const [, setLocation] = useLocation();
@@ -54,19 +55,6 @@ export default function EventDetailsPage() {
     );
   }
 
-  const getStatusBadge = (status: string) => {
-    const variants: Record<string, 'default' | 'secondary' | 'destructive'> = {
-      draft: 'secondary',
-      active: 'default',
-      completed: 'destructive',
-    };
-
-    return (
-      <Badge variant={variants[status] || 'default'}>
-        {status}
-      </Badge>
-    );
-  };
 
   return (
     <AdminLayout>
@@ -87,7 +75,7 @@ export default function EventDetailsPage() {
               <p className="text-gray-600 mt-1">{event.description}</p>
             </div>
             <div className="flex gap-2">
-              {getStatusBadge(event.status)}
+              <StatusBadge domain="event" status={event.status} />
               <Button onClick={() => setLocation(`/admin/events/${eventId}/edit`)} data-testid="button-edit-event">
                 <Edit className="mr-2 h-4 w-4" />
                 Edit Event
@@ -196,41 +184,42 @@ export default function EventDetailsPage() {
                     No rounds created yet
                   </div>
                 ) : (
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Round</TableHead>
-                        <TableHead>Name</TableHead>
-                        <TableHead>Duration</TableHead>
-                        <TableHead>Status</TableHead>
-                        <TableHead className="text-right">Actions</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {rounds.map((round) => (
-                        <TableRow key={round.id} data-testid={`row-round-${round.id}`}>
-                          <TableCell>{round.roundNumber}</TableCell>
-                          <TableCell>{round.name}</TableCell>
-                          <TableCell>{round.duration} min</TableCell>
-                          <TableCell>
-                            <Badge variant={round.status === 'in_progress' ? 'default' : 'secondary'}>
-                              {round.status}
-                            </Badge>
-                          </TableCell>
-                          <TableCell className="text-right">
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => setLocation('/admin/tests')}
-                              data-testid={`button-view-round-${round.id}`}
-                            >
-                              View
-                            </Button>
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
+                                    <ScrollableTable>
+
+                    <Table>
+                                        <TableHeader>
+                                          <TableRow>
+                                            <TableHead>Round</TableHead>
+                                            <TableHead>Name</TableHead>
+                                            <TableHead>Duration</TableHead>
+                                            <TableHead>Status</TableHead>
+                                            <TableHead className="text-right">Actions</TableHead>
+                                          </TableRow>
+                                        </TableHeader>
+                                        <TableBody>
+                                          {rounds.map((round) => (
+                                            <TableRow key={round.id} data-testid={`row-round-${round.id}`}>
+                                              <TableCell>{round.roundNumber}</TableCell>
+                                              <TableCell>{round.name}</TableCell>
+                                              <TableCell>{round.duration} min</TableCell>
+                                              <TableCell>
+                                                <StatusBadge domain="round" status={round.status} />
+                                              </TableCell>
+                                              <TableCell className="text-right">
+                                                <Button
+                                                  variant="ghost"
+                                                  size="sm"
+                                                  onClick={() => setLocation('/admin/tests')}
+                                                  data-testid={`button-view-round-${round.id}`}
+                                                >
+                                                  View
+                                                </Button>
+                                              </TableCell>
+                                            </TableRow>
+                                          ))}
+                                        </TableBody>
+                                      </Table>
+                                    </ScrollableTable>
                 )}
               </CardContent>
             </Card>
@@ -250,24 +239,27 @@ export default function EventDetailsPage() {
                     No event admins assigned yet
                   </div>
                 ) : (
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Name</TableHead>
-                        <TableHead>Email</TableHead>
-                        <TableHead>Username</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {eventAdmins.map((admin) => (
-                        <TableRow key={admin.id} data-testid={`row-admin-${admin.id}`}>
-                          <TableCell>{admin.fullName}</TableCell>
-                          <TableCell>{admin.email}</TableCell>
-                          <TableCell>{admin.username}</TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
+                                    <ScrollableTable>
+
+                    <Table>
+                                        <TableHeader>
+                                          <TableRow>
+                                            <TableHead>Name</TableHead>
+                                            <TableHead>Email</TableHead>
+                                            <TableHead>Username</TableHead>
+                                          </TableRow>
+                                        </TableHeader>
+                                        <TableBody>
+                                          {eventAdmins.map((admin) => (
+                                            <TableRow key={admin.id} data-testid={`row-admin-${admin.id}`}>
+                                              <TableCell>{admin.fullName}</TableCell>
+                                              <TableCell>{admin.email}</TableCell>
+                                              <TableCell>{admin.username}</TableCell>
+                                            </TableRow>
+                                          ))}
+                                        </TableBody>
+                                      </Table>
+                                    </ScrollableTable>
                 )}
               </CardContent>
             </Card>
@@ -288,26 +280,27 @@ export default function EventDetailsPage() {
                     <p className="text-sm text-gray-600">
                       Total Participants: <span className="font-semibold">{participants.length}</span>
                     </p>
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead>Registered At</TableHead>
-                          <TableHead>Status</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {participants.map((participant) => (
-                          <TableRow key={participant.id} data-testid={`row-participant-${participant.id}`}>
-                            <TableCell>{new Date(participant.registeredAt).toLocaleString()}</TableCell>
-                            <TableCell>
-                              <Badge variant={participant.status === 'completed' ? 'default' : 'secondary'}>
-                                {participant.status}
-                              </Badge>
-                            </TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
+                                        <ScrollableTable>
+
+                      <Table>
+                                            <TableHeader>
+                                              <TableRow>
+                                                <TableHead>Registered At</TableHead>
+                                                <TableHead>Status</TableHead>
+                                              </TableRow>
+                                            </TableHeader>
+                                            <TableBody>
+                                              {participants.map((participant) => (
+                                                <TableRow key={participant.id} data-testid={`row-participant-${participant.id}`}>
+                                                  <TableCell>{new Date(participant.registeredAt).toLocaleString()}</TableCell>
+                                                  <TableCell>
+                                                    <StatusBadge domain="participant" status={participant.status} />
+                                                  </TableCell>
+                                                </TableRow>
+                                              ))}
+                                            </TableBody>
+                                          </Table>
+                                        </ScrollableTable>
                   </div>
                 )}
               </CardContent>

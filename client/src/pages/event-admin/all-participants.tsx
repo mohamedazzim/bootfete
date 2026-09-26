@@ -4,6 +4,7 @@ import EventAdminLayout from '@/components/layouts/EventAdminLayout';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
+import { StatusBadge } from '@/components/StatusBadge';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Button } from '@/components/ui/button';
@@ -12,6 +13,7 @@ import { Users, Search, Filter, Eye, Download } from 'lucide-react';
 import { queryClient, apiRequest } from '@/lib/queryClient';
 import { useToast } from '@/hooks/use-toast';
 import type { Participant, Event, User } from '@shared/schema';
+import ScrollableTable from '@/components/ScrollableTable';
 
 interface TeamGroupedParticipant {
   id: string;
@@ -132,19 +134,6 @@ export default function AllParticipantsPage() {
     return Array.from(eventStats.values()).sort((a, b) => b.count - a.count);
   }, [participants]);
 
-  const getStatusBadge = (status: string) => {
-    const variants: Record<string, 'default' | 'secondary' | 'destructive'> = {
-      registered: 'secondary',
-      participated: 'default',
-      disqualified: 'destructive',
-    };
-
-    return (
-      <Badge variant={variants[status] || 'default'} data-testid={`badge-status-${status}`}>
-        {status}
-      </Badge>
-    );
-  };
 
   if (isLoading) {
     return (
@@ -245,7 +234,8 @@ export default function AllParticipantsPage() {
                   </p>
                 </div>
               ) : (
-                <div className="overflow-x-auto">
+                                <ScrollableTable>
+
                   <Table>
                     <TableHeader>
                       <TableRow>
@@ -316,7 +306,7 @@ export default function AllParticipantsPage() {
                                 <span className="text-gray-400 italic text-xs">No Creds</span>
                               )}
                             </TableCell>
-                            <TableCell>{getStatusBadge(participant.status)}</TableCell>
+                            <TableCell><StatusBadge domain="participant" status={participant.status} testId={`badge-status-${participant.status}`} /></TableCell>
                             <TableCell className="text-right">
                               {participant.registrationType === 'team' && (
                                 <Button
@@ -334,7 +324,7 @@ export default function AllParticipantsPage() {
                       })}
                     </TableBody>
                   </Table>
-                </div>
+                                </ScrollableTable>
               )}
             </CardContent>
           </Card>

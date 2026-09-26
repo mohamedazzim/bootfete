@@ -7,6 +7,7 @@ import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { ArrowLeft, Users, CheckCircle, XCircle, Clock, BarChart3, Loader2 } from 'lucide-react';
 import { apiRequest } from '@/lib/queryClient';
+import ScrollableTable from '@/components/ScrollableTable';
 
 interface Submission {
     attemptId: string;
@@ -56,13 +57,15 @@ export default function RoundSubmissionsPage() {
     };
 
     const getStatusBadge = (submission: Submission) => {
+        // Phase 8: canonical vocabulary ("Evaluated") on semantic tokens —
+        // no hardcoded palette colors.
         if (submission.isFullyEvaluated) {
-            return <Badge variant="default" className="bg-green-500">Evaluated</Badge>;
+            return <Badge className="bg-success text-success-foreground border-transparent">Evaluated</Badge>;
         }
         if (submission.evaluatedQuestions > 0) {
-            return <Badge variant="secondary">Partial ({submission.evaluatedQuestions}/{submission.totalQuestions})</Badge>;
+            return <Badge className="bg-active text-active-foreground border-transparent">Partial ({submission.evaluatedQuestions}/{submission.totalQuestions})</Badge>;
         }
-        return <Badge variant="outline">Pending</Badge>;
+        return <Badge className="bg-pending text-pending-foreground border-transparent">Pending</Badge>;
     };
 
     return (
@@ -157,56 +160,59 @@ export default function RoundSubmissionsPage() {
                                 No submissions yet. Participants will appear here once they submit their tests.
                             </div>
                         ) : (
-                            <Table>
-                                <TableHeader>
-                                    <TableRow>
-                                        <TableHead>Participant</TableHead>
-                                        <TableHead>College</TableHead>
-                                        <TableHead>Submitted At</TableHead>
-                                        <TableHead className="text-center">✓ / ✗</TableHead>
-                                        <TableHead className="text-center">Score</TableHead>
-                                        <TableHead>Status</TableHead>
-                                        <TableHead></TableHead>
-                                    </TableRow>
-                                </TableHeader>
-                                <TableBody>
-                                    {submissions?.map((submission) => (
-                                        <TableRow
-                                            key={submission.attemptId}
-                                            className="cursor-pointer hover:bg-muted/50"
-                                            onClick={() => setLocation(`/event-admin/attempts/${submission.attemptId}/evaluate`)}
-                                        >
-                                            <TableCell>
-                                                <div>
-                                                    <p className="font-medium">{submission.userName}</p>
-                                                    <p className="text-sm text-muted-foreground">{submission.rollNo}</p>
-                                                </div>
-                                            </TableCell>
-                                            <TableCell>
-                                                <div>
-                                                    <p>{submission.college || '-'}</p>
-                                                    <p className="text-sm text-muted-foreground">{submission.department}</p>
-                                                </div>
-                                            </TableCell>
-                                            <TableCell>{formatDate(submission.submittedAt)}</TableCell>
-                                            <TableCell className="text-center">
-                                                <span className="text-green-600 font-medium">{submission.correctCount}</span>
-                                                {' / '}
-                                                <span className="text-red-600 font-medium">{submission.wrongCount}</span>
-                                            </TableCell>
-                                            <TableCell className="text-center font-bold">
-                                                {submission.totalScore}
-                                            </TableCell>
-                                            <TableCell>{getStatusBadge(submission)}</TableCell>
-                                            <TableCell>
-                                                <Button variant="ghost" size="sm">
-                                                    Evaluate →
-                                                </Button>
-                                            </TableCell>
-                                        </TableRow>
-                                    ))}
-                                </TableBody>
-                            </Table>
+                                                        <ScrollableTable>
+
+                              <Table>
+                                                              <TableHeader>
+                                                                  <TableRow>
+                                                                      <TableHead>Participant</TableHead>
+                                                                      <TableHead>College</TableHead>
+                                                                      <TableHead>Submitted At</TableHead>
+                                                                      <TableHead className="text-center">✓ / ✗</TableHead>
+                                                                      <TableHead className="text-center">Score</TableHead>
+                                                                      <TableHead>Status</TableHead>
+                                                                      <TableHead></TableHead>
+                                                                  </TableRow>
+                                                              </TableHeader>
+                                                              <TableBody>
+                                                                  {submissions?.map((submission) => (
+                                                                      <TableRow
+                                                                          key={submission.attemptId}
+                                                                          className="cursor-pointer hover:bg-muted/50"
+                                                                          onClick={() => setLocation(`/event-admin/attempts/${submission.attemptId}/evaluate`)}
+                                                                      >
+                                                                          <TableCell>
+                                                                              <div>
+                                                                                  <p className="font-medium">{submission.userName}</p>
+                                                                                  <p className="text-sm text-muted-foreground">{submission.rollNo}</p>
+                                                                              </div>
+                                                                          </TableCell>
+                                                                          <TableCell>
+                                                                              <div>
+                                                                                  <p>{submission.college || '-'}</p>
+                                                                                  <p className="text-sm text-muted-foreground">{submission.department}</p>
+                                                                              </div>
+                                                                          </TableCell>
+                                                                          <TableCell>{formatDate(submission.submittedAt)}</TableCell>
+                                                                          <TableCell className="text-center">
+                                                                              <span className="text-green-600 font-medium">{submission.correctCount}</span>
+                                                                              {' / '}
+                                                                              <span className="text-red-600 font-medium">{submission.wrongCount}</span>
+                                                                          </TableCell>
+                                                                          <TableCell className="text-center font-bold">
+                                                                              {submission.totalScore}
+                                                                          </TableCell>
+                                                                          <TableCell>{getStatusBadge(submission)}</TableCell>
+                                                                          <TableCell>
+                                                                              <Button variant="ghost" size="sm">
+                                                                                  Evaluate →
+                                                                              </Button>
+                                                                          </TableCell>
+                                                                      </TableRow>
+                                                                  ))}
+                                                              </TableBody>
+                                                          </Table>
+                                                        </ScrollableTable>
                         )}
                     </CardContent>
                 </Card>

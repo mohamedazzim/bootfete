@@ -3,7 +3,7 @@ import { useQuery, useMutation } from '@tanstack/react-query';
 import ParticipantLayout from '@/components/layouts/ParticipantLayout';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
+import { StatusBadge } from '@/components/StatusBadge';
 import { useToast } from '@/hooks/use-toast';
 import { apiRequest, queryClient } from '@/lib/queryClient';
 import { useAuth } from '@/lib/auth';
@@ -50,7 +50,7 @@ function RoundItem({ round, eventId }: { round: Round; eventId: string }) {
             <div className="text-xs text-gray-500">Duration</div>
             <div className="text-sm font-medium">{round.duration} mins</div>
           </div>
-          <Badge variant="outline">{round.status}</Badge>
+          <StatusBadge domain="round" status={round.status} />
         </div>
       </div>
       <div className="flex-shrink-0 w-full md:w-auto">
@@ -168,9 +168,7 @@ export default function ParticipantEventDetailsPage() {
               <h1 className="text-3xl font-bold text-gray-900" data-testid="heading-event-name">{event.name}</h1>
               <p className="text-gray-600 mt-1">Event Details and Registration</p>
             </div>
-            <Badge variant="default" className="text-base px-4 py-2">
-              {event.status}
-            </Badge>
+<StatusBadge domain="event" status={event.status} className="text-base px-4 py-2" />
           </div>
         </div>
 

@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import RegistrationCommitteeLayout from "@/components/layouts/RegistrationCommitteeLayout";
 import type { Registration, Event, User, EventCredential, TeamMember } from "@shared/schema";
+import ScrollableTable from '@/components/ScrollableTable';
 
 type OnSpotParticipant = User & {
   eventCredentials: Array<EventCredential & { event: Event }>;
@@ -181,7 +182,8 @@ export default function RegistrationCommitteeDashboard() {
               <CardDescription>All confirmed and registered participants</CardDescription>
             </CardHeader>
             <CardContent>
-              <div className="overflow-x-auto">
+                            <ScrollableTable>
+
                 <Table data-testid="table-confirmed">
                   <TableHeader>
                     <TableRow>
@@ -229,7 +231,7 @@ export default function RegistrationCommitteeDashboard() {
                     ))}
                   </TableBody>
                 </Table>
-              </div>
+                            </ScrollableTable>
             </CardContent>
           </Card>
         )}

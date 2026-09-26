@@ -3,38 +3,33 @@ import { useLocation } from 'wouter';
 import ParticipantLayout from '@/components/layouts/ParticipantLayout';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
+import { StatusBadge } from '@/components/StatusBadge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { FileText, Trophy, Clock, AlertCircle, CheckCircle, XCircle } from 'lucide-react';
+import { FileText, Trophy, PlayCircle } from 'lucide-react';
 import type { TestAttempt } from '@shared/schema';
+import ScrollableTable from '@/components/ScrollableTable';
 
 export default function MyTestsPage() {
   const [, setLocation] = useLocation();
 
-  const { data: attempts, isLoading } = useQuery<(TestAttempt & {
+  const { data: attempts, isLoading, isError, refetch } = useQuery<(TestAttempt & {
     round: { name: string; event: { name: string } };
     canViewResults?: boolean;
   })[]>({
     queryKey: ['/api/participants/my-attempts'],
   });
 
-  const getStatusBadge = (status: string) => {
-    const config = {
-      in_progress: { variant: 'secondary' as const, icon: Clock, label: 'In Progress' },
-      completed: { variant: 'default' as const, icon: CheckCircle, label: 'Completed' },
-      auto_submitted: { variant: 'destructive' as const, icon: AlertCircle, label: 'Auto-Submitted' },
-      disqualified: { variant: 'destructive' as const, icon: XCircle, label: 'Disqualified' },
-    };
 
-    const { variant, icon: Icon, label } = config[status as keyof typeof config] || config.completed;
-
-    return (
-      <Badge variant={variant}>
-        <Icon className="h-3 w-3 mr-1" />
-        {label}
-      </Badge>
-    );
-  };
+  // In-progress attempts sort first so a live test is never buried
+  // under history; the rest keep the API order.
+  const sortedAttempts = (attempts ?? []).slice().sort((a, b) =>
+    (a.status === 'in_progress' ? 0 : 1) - (b.status === 'in_progress' ? 0 : 1)
+  );
+  const activeAttempt = sortedAttempts.find((a) => a.status === 'in_progress');
+  // Phase 8: the empty state renders ONLY on a successful fetch that
+  // returned zero attempts. A failed fetch must never masquerade as
+  // "no tests" — that contradiction hid real in-progress attempts.
+  const showEmptyState = !isLoading && !isError && (attempts?.length ?? 0) === 0;
 
   return (
     <ParticipantLayout>
@@ -46,11 +41,49 @@ export default function MyTestsPage() {
           <p className="text-gray-600 mt-1">View your test history and results</p>
         </div>
 
+        {/* In-progress precedence: surface the live test above the history.
+            role="status" announces the live test to screen readers on arrival. */}
+        {activeAttempt && (
+          <Card className="mb-6 border-active/40 bg-indigo-50" data-testid="banner-active-test" role="status">
+            <CardContent className="pt-6 flex flex-col sm:flex-row sm:items-center gap-4">
+              <PlayCircle className="h-10 w-10 text-active shrink-0" aria-hidden="true" />
+              <div className="flex-1 min-w-0">
+                <p className="font-semibold text-slate-900">Test in progress</p>
+                <p className="text-sm text-slate-600 truncate">
+                  {activeAttempt.round?.event?.name || 'N/A'} — {activeAttempt.round?.name || 'N/A'}
+                </p>
+              </div>
+              <Button
+                onClick={() => setLocation(`/participant/test/${activeAttempt.id}`)}
+                data-testid="button-resume-banner"
+              >
+                Resume Test
+              </Button>
+            </CardContent>
+          </Card>
+        )}
+
         {isLoading ? (
-          <div className="text-center py-12" data-testid="loading-tests">
+          <div className="text-center py-12" data-testid="loading-tests" role="status">
             Loading test history...
           </div>
-        ) : !attempts || attempts.length === 0 ? (
+        ) : isError ? (
+          <Card>
+            <CardContent className="pt-6">
+              <div className="text-center py-12">
+                <p className="text-lg font-medium text-slate-700" data-testid="tests-error" role="alert">
+                  Couldn't load your tests
+                </p>
+                <p className="text-sm text-slate-500 mt-2">
+                  Check your connection and try again — your attempts are safe.
+                </p>
+                <Button className="mt-4" variant="outline" onClick={() => refetch()} data-testid="button-retry-tests">
+                  Retry
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        ) : showEmptyState ? (
           <Card>
             <CardContent className="pt-6">
               <div className="text-center py-12">
@@ -70,7 +103,8 @@ export default function MyTestsPage() {
               <CardTitle>Test History</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="overflow-x-auto">
+                            <ScrollableTable>
+
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -83,7 +117,7 @@ export default function MyTestsPage() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {attempts.map((attempt) => (
+                    {sortedAttempts.map((attempt) => (
                       <TableRow key={attempt.id} data-testid={`row-attempt-${attempt.id}`}>
                         <TableCell className="font-medium" data-testid={`text-event-${attempt.id}`}>
                           {attempt.round?.event?.name || 'N/A'}
@@ -102,12 +136,12 @@ export default function MyTestsPage() {
                             <span className="text-gray-400">Pending</span>
                           )}
                         </TableCell>
-                        <TableCell>{getStatusBadge(attempt.status)}</TableCell>
+                        <TableCell><StatusBadge domain="attempt" status={attempt.status} /></TableCell>
                         <TableCell data-testid={`text-completed-${attempt.id}`}>
                           {attempt.completedAt
                             ? new Date(attempt.completedAt).toLocaleString()
                             : attempt.status === 'in_progress'
-                              ? 'In Progress'
+                              ? 'In progress'
                               : 'N/A'}
                         </TableCell>
                         <TableCell className="text-right">
@@ -141,7 +175,7 @@ export default function MyTestsPage() {
                     ))}
                   </TableBody>
                 </Table>
-              </div>
+                            </ScrollableTable>
             </CardContent>
           </Card>
         )}

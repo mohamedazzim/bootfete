@@ -9,6 +9,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { useLocation } from "wouter";
 import { Plus, Trash2, Check, Copy, Upload, X, Image, QrCode } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { errorToast, successToast } from '@/lib/toast';
 import AdminLayout from "@/components/layouts/AdminLayout";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { nanoid } from "nanoid";
@@ -49,11 +50,11 @@ export default function RegistrationFormCreatePage() {
     const file = event.target.files?.[0];
     if (file) {
       if (file.size > 5 * 1024 * 1024) {
-        toast({
-          title: "Error",
-          description: "Image size must be less than 5MB",
-          variant: "destructive",
-        });
+                errorToast(
+          toast,
+          "Error",
+          "Image size must be less than 5MB",
+        );
         return;
       }
 
@@ -86,17 +87,18 @@ export default function RegistrationFormCreatePage() {
     onSuccess: (data) => {
       setCreatedForm(data);
       queryClient.invalidateQueries({ queryKey: ['/api/registration-forms/all'] });
-      toast({
-        title: "Success",
-        description: "Registration form created successfully",
-      });
+            successToast(
+        toast,
+        "Success",
+        "Registration form created successfully",
+      );
     },
     onError: (error: Error) => {
-      toast({
-        title: "Error",
-        description: error.message,
-        variant: "destructive",
-      });
+            errorToast(
+        toast,
+        "Error",
+        error.message,
+      );
     },
   });
 
@@ -122,30 +124,30 @@ export default function RegistrationFormCreatePage() {
 
   const handleCreate = () => {
     if (!title.trim()) {
-      toast({
-        title: "Error",
-        description: "Please enter a form title",
-        variant: "destructive",
-      });
+            errorToast(
+        toast,
+        "Error",
+        "Please enter a form title",
+      );
       return;
     }
 
     if (formFields.length === 0) {
-      toast({
-        title: "Error",
-        description: "Please add at least one field",
-        variant: "destructive",
-      });
+            errorToast(
+        toast,
+        "Error",
+        "Please add at least one field",
+      );
       return;
     }
 
     const hasEmptyLabels = formFields.some(f => !f.label.trim());
     if (hasEmptyLabels) {
-      toast({
-        title: "Error",
-        description: "All fields must have a label",
-        variant: "destructive",
-      });
+            errorToast(
+        toast,
+        "Error",
+        "All fields must have a label",
+      );
       return;
     }
 
@@ -156,10 +158,11 @@ export default function RegistrationFormCreatePage() {
     if (createdForm) {
       const link = `${window.location.origin}/register/${createdForm.formSlug}`;
       navigator.clipboard.writeText(link);
-      toast({
-        title: "Link copied",
-        description: "Registration form link copied to clipboard",
-      });
+            successToast(
+        toast,
+        "Link copied",
+        "Registration form link copied to clipboard",
+      );
     }
   };
 
@@ -190,16 +193,17 @@ export default function RegistrationFormCreatePage() {
         // Clean up blob URL
         URL.revokeObjectURL(blobUrl);
 
-        toast({
-          title: "QR Code downloaded",
-          description: "QR code saved successfully as PNG",
-        });
+                successToast(
+          toast,
+          "QR Code downloaded",
+          "QR code saved successfully as PNG",
+        );
       } catch (error) {
-        toast({
-          title: "Error",
-          description: "Failed to generate QR code",
-          variant: "destructive",
-        });
+                errorToast(
+          toast,
+          "Error",
+          "Failed to generate QR code",
+        );
       }
     }
   };

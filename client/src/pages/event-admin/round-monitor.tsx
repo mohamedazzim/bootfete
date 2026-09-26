@@ -1,15 +1,29 @@
 import { useParams, useLocation } from 'wouter';
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import EventAdminLayout from '@/components/layouts/EventAdminLayout';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { StatusBadge } from '@/components/StatusBadge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { ArrowLeft, Trophy, Medal, Award, Clock, Users, CheckCircle, PlayCircle, AlertCircle, Printer } from 'lucide-react';
+import {
+    AlertDialog,
+    AlertDialogAction,
+    AlertDialogCancel,
+    AlertDialogContent,
+    AlertDialogDescription,
+    AlertDialogFooter,
+    AlertDialogHeader,
+    AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
+import { ArrowLeft, Trophy, Medal, Award, Clock, Users, CheckCircle, PlayCircle, AlertCircle, Printer, ShieldX, RotateCcw } from 'lucide-react';
 import { useWebSocket } from '@/contexts/WebSocketContext';
-import { useEffect } from 'react';
 import { queryClient, apiRequest } from '@/lib/queryClient';
+import { useToast } from '@/hooks/use-toast';
+import { successToast, errorToast } from '@/lib/toast';
 import type { Round } from '@shared/schema';
+import ScrollableTable from '@/components/ScrollableTable';
 
 interface LeaderboardEntry {
     rank: number;
@@ -38,6 +52,7 @@ interface RoundStatistics {
     totalParticipants: number;
     activeParticipants: number;
     completedParticipants: number;
+    disqualifiedParticipants: number;
     pendingParticipants: number;
     canShareResults: boolean;
     testDuration: number;
@@ -46,23 +61,47 @@ interface RoundStatistics {
     showAnswers: boolean;
 }
 
+interface RoundAttempt {
+    id: string;
+    userId: string;
+    userName: string;
+    status: string;
+    totalScore: number | null;
+    startedAt: string | null;
+    submittedAt: string | null;
+    violationCount: number;
+}
+
 export default function RoundMonitorPage() {
     const { roundId } = useParams();
     const [, setLocation] = useLocation();
     const { isConnected } = useWebSocket();
+    const { toast } = useToast();
+    const [resetTarget, setResetTarget] = useState<RoundAttempt | null>(null);
+    const [resetting, setResetting] = useState(false);
 
     // Fetch round statistics
-    const { data: stats, isLoading: statsLoading, error: statsError } = useQuery<RoundStatistics>({
+    // Phase 5 (data trust): the Active/Pending/Completed counters are the
+    // canonical backend derivation (GET /api/rounds/:id/statistics:
+    // active = attempts with startedAt set and submittedAt null,
+    // pending = totalParticipants - completed - active). The frontend never
+    // recomputes them. The "Active 0 / Pending 1 during a live attempt"
+    // contradiction was a STALE SNAPSHOT: with the socket connected this
+    // query relied solely on socket events to refresh, so any missed event
+    // (reconnect gap, async room-join race) froze the counters. Polling
+    // unconditionally guarantees convergence to the backend numbers;
+    // socket events still provide instant updates on top.
+    const { data: stats, isLoading: statsLoading, error: statsError, dataUpdatedAt: statsUpdatedAt } = useQuery<RoundStatistics>({
         queryKey: [`/api/rounds/${roundId}/statistics`],
         enabled: !!roundId,
-        refetchInterval: isConnected ? false : 5000,
+        refetchInterval: 5000,
     });
 
     // Fetch leaderboard
     const { data: leaderboardResponse, isLoading: leaderboardLoading } = useQuery<LeaderboardApiResponse>({
         queryKey: [`/api/rounds/${roundId}/leaderboard`],
         enabled: !!roundId,
-        refetchInterval: isConnected ? false : 5000,
+        refetchInterval: 5000,
     });
 
     const leaderboard: LeaderboardEntry[] | undefined = Array.isArray(leaderboardResponse)
@@ -75,17 +114,35 @@ export default function RoundMonitorPage() {
         enabled: !!roundId,
     });
 
-    // When WebSocket is disconnected, keep the monitor fresh with polling.
-    useEffect(() => {
-        if (isConnected) return;
+    // Fetch per-participant attempt statuses (includes disqualified attempts
+    // that the leaderboard intentionally excludes). Powers the participant
+    // table and the Clear Disqualification action.
+    const { data: attempts } = useQuery<RoundAttempt[]>({
+        queryKey: [`/api/event-admin/rounds/${roundId}/attempts`],
+        enabled: !!roundId,
+        refetchInterval: 5000,
+    });
 
-        const interval = setInterval(() => {
+    const handleClearDisqualification = async () => {
+        if (!resetTarget) return;
+        setResetting(true);
+        try {
+            await apiRequest('POST', `/api/event-admin/attempts/${resetTarget.id}/reset`, {});
+            successToast(toast, 'Disqualification cleared', `${resetTarget.userName} can now resume the test.`);
             queryClient.invalidateQueries({ queryKey: [`/api/rounds/${roundId}/statistics`] });
             queryClient.invalidateQueries({ queryKey: [`/api/rounds/${roundId}/leaderboard`] });
-        }, 10000);
+            queryClient.invalidateQueries({ queryKey: [`/api/event-admin/rounds/${roundId}/attempts`] });
+        } catch (error) {
+            errorToast(toast, 'Failed to clear disqualification', (error as Error)?.message || 'Please try again.');
+        } finally {
+            setResetting(false);
+            setResetTarget(null);
+        }
+    };
 
-        return () => clearInterval(interval);
-    }, [roundId, isConnected]);
+    // Phase 5: unconditional polling above already keeps the monitor fresh
+    // with or without the socket, so the manual disconnect-only invalidation
+    // loop is no longer needed (it would double-fetch alongside polling).
 
     const handlePrint = () => {
         window.print();
@@ -197,22 +254,14 @@ export default function RoundMonitorPage() {
                         <div>
                             <h1 className="text-3xl font-bold text-gray-900">{stats.roundName || 'Round Monitor'}</h1>
                             <div className="flex items-center gap-4 mt-1">
-                                <Badge variant="outline" className={
-                                    stats.status === 'in_progress' ? 'bg-green-50 text-green-700 border-green-300' :
-                                        stats.status === 'completed' ? 'bg-blue-50 text-blue-700 border-blue-300' :
-                                            'bg-gray-50 text-gray-700 border-gray-300'
-                                }>
-                                    {stats.status === 'in_progress' ? 'In Progress' :
-                                        stats.status === 'completed' ? 'Completed' :
-                                            'Not Started'}
-                                </Badge>
+                                <StatusBadge domain="round" status={stats.status} />
                                 <span className="text-sm text-gray-600">
                                     <Clock className="inline h-4 w-4 mr-1" />
                                     Duration: {stats.testDuration} min
                                 </span>
                                 {!isConnected && (
-                                    <Badge variant="outline" className="bg-red-50 text-red-700 border-red-300">
-                                        Offline Mode (Auto-refresh every 5s)
+                                    <Badge variant="outline" className="bg-red-50 text-red-700 border-red-300" role="status">
+                                        Reconnecting — auto-refresh every 5s
                                     </Badge>
                                 )}
                             </div>
@@ -220,56 +269,79 @@ export default function RoundMonitorPage() {
                     </div>
                 </div>
 
-                {/* Participant Statistics Cards */}
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+                {/* Participant Statistics Cards — semantic status tokens (Phase 1).
+                    Counters render the canonical backend snapshot verbatim;
+                    each is a live region so screen readers announce changes.
+                    Disqualified is a distinct terminal bucket — it is never
+                    folded into Submitted. */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
                     <Card>
                         <CardHeader className="pb-2">
-                            <CardTitle className="text-sm font-medium text-gray-600 flex items-center gap-2">
+                            <CardTitle className="text-sm font-medium text-slate-600 flex items-center gap-2">
                                 <Users className="h-4 w-4" />
                                 Total Participants
                             </CardTitle>
                         </CardHeader>
                         <CardContent>
-                            <p className="text-3xl font-bold text-gray-900">{stats.totalParticipants}</p>
+                            <p className="text-3xl font-bold text-slate-900" role="status" aria-label={`${stats.totalParticipants} total participants`}>{stats.totalParticipants}</p>
                         </CardContent>
                     </Card>
 
-                    <Card className="border-orange-200 bg-orange-50">
+                    <Card className="border-active/40 bg-indigo-50">
                         <CardHeader className="pb-2">
-                            <CardTitle className="text-sm font-medium text-orange-700 flex items-center gap-2">
+                            <CardTitle className="text-sm font-medium text-active flex items-center gap-2">
                                 <PlayCircle className="h-4 w-4" />
-                                Active (Taking Test)
+                                In progress
                             </CardTitle>
                         </CardHeader>
                         <CardContent>
-                            <p className="text-3xl font-bold text-orange-600">{stats.activeParticipants}</p>
+                            <p className="text-3xl font-bold text-active" role="status" aria-label={`${stats.activeParticipants} participants in progress`}>{stats.activeParticipants}</p>
                         </CardContent>
                     </Card>
 
-                    <Card className="border-green-200 bg-green-50">
+                    <Card className="border-success/40 bg-emerald-50">
                         <CardHeader className="pb-2">
-                            <CardTitle className="text-sm font-medium text-green-700 flex items-center gap-2">
+                            <CardTitle className="text-sm font-medium text-success flex items-center gap-2">
                                 <CheckCircle className="h-4 w-4" />
-                                Completed
+                                Submitted
                             </CardTitle>
                         </CardHeader>
                         <CardContent>
-                            <p className="text-3xl font-bold text-green-600">{stats.completedParticipants}</p>
+                            <p className="text-3xl font-bold text-success" role="status" aria-label={`${stats.completedParticipants} participants submitted`}>{stats.completedParticipants}</p>
                         </CardContent>
                     </Card>
 
-                    <Card className="border-gray-200 bg-gray-50">
+                    <Card className="border-destructive/40 bg-red-50">
                         <CardHeader className="pb-2">
-                            <CardTitle className="text-sm font-medium text-gray-700 flex items-center gap-2">
+                            <CardTitle className="text-sm font-medium text-destructive flex items-center gap-2">
+                                <ShieldX className="h-4 w-4" />
+                                Disqualified
+                            </CardTitle>
+                        </CardHeader>
+                        <CardContent>
+                            <p className="text-3xl font-bold text-destructive" role="status" aria-label={`${stats.disqualifiedParticipants ?? 0} participants disqualified`}>{stats.disqualifiedParticipants ?? 0}</p>
+                        </CardContent>
+                    </Card>
+
+                    <Card className="border-pending/40 bg-amber-50">
+                        <CardHeader className="pb-2">
+                            <CardTitle className="text-sm font-medium text-pending flex items-center gap-2">
                                 <AlertCircle className="h-4 w-4" />
                                 Pending
                             </CardTitle>
                         </CardHeader>
                         <CardContent>
-                            <p className="text-3xl font-bold text-gray-600">{stats.pendingParticipants}</p>
+                            <p className="text-3xl font-bold text-pending" role="status" aria-label={`${stats.pendingParticipants} participants pending`}>{stats.pendingParticipants}</p>
                         </CardContent>
                     </Card>
                 </div>
+
+                {/* Freshness indicator — the counters are only as trustworthy
+                    as their last successful fetch. */}
+                <p className="text-xs text-slate-500 mb-6" data-testid="monitor-last-updated" aria-live="off">
+                    Last updated {statsUpdatedAt ? new Date(statsUpdatedAt).toLocaleTimeString() : 'not yet updated'}
+                    {isConnected ? ' • Live' : ' • Reconnecting'}
+                </p>
 
                 {/* Live Leaderboard */}
                 <Card>
@@ -297,7 +369,8 @@ export default function RoundMonitorPage() {
                                 </p>
                             </div>
                         ) : (
-                            <div className="overflow-x-auto">
+                                                        <ScrollableTable>
+
                                 <Table>
                                     <TableHeader>
                                         <TableRow>
@@ -333,31 +406,98 @@ export default function RoundMonitorPage() {
                                                 <TableCell className="text-right text-sm text-gray-600">
                                                     <div className="flex items-center justify-end gap-1">
                                                         <Clock className="h-3 w-3" />
-                                                        {entry.submittedAt ? new Date(entry.submittedAt).toLocaleTimeString() : '—'}
+                                                        {entry.submittedAt ? new Date(entry.submittedAt).toLocaleTimeString() : <span className="text-slate-500">Not submitted</span>}
                                                     </div>
                                                 </TableCell>
                                             </TableRow>
                                         ))}
                                     </TableBody>
                                 </Table>
-                            </div>
+                                                        </ScrollableTable>
+                        )}
+                    </CardContent>
+                </Card>
+
+                {/* Participant Status — per-participant attempt states, including
+                    disqualified attempts that the leaderboard intentionally
+                    excludes. Disqualified rows offer the "Clear
+                    Disqualification" recovery action. */}
+                <Card className="mt-6">
+                    <CardHeader>
+                        <CardTitle className="flex items-center gap-2">
+                            <Users className="h-5 w-5 text-slate-500" />
+                            Participant Status
+                        </CardTitle>
+                        <CardDescription>
+                            Live attempt state for every participant in this round
+                        </CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                        {!attempts || attempts.length === 0 ? (
+                            <p className="text-center text-slate-500 py-8">No attempts yet</p>
+                        ) : (
+                            <ScrollableTable>
+                                <Table>
+                                    <TableHeader>
+                                        <TableRow>
+                                            <TableHead>Participant</TableHead>
+                                            <TableHead>Status</TableHead>
+                                            <TableHead className="text-right">Violations</TableHead>
+                                            <TableHead className="text-right">Started</TableHead>
+                                            <TableHead className="text-right">Actions</TableHead>
+                                        </TableRow>
+                                    </TableHeader>
+                                    <TableBody>
+                                        {attempts.map((attempt) => (
+                                            <TableRow key={attempt.id}>
+                                                <TableCell className="font-medium">{attempt.userName}</TableCell>
+                                                <TableCell>
+                                                    <StatusBadge domain="attempt" status={attempt.status} />
+                                                </TableCell>
+                                                <TableCell className="text-right">{attempt.violationCount}</TableCell>
+                                                <TableCell className="text-right text-sm text-slate-600">
+                                                    {attempt.startedAt ? new Date(attempt.startedAt).toLocaleTimeString() : '—'}
+                                                </TableCell>
+                                                <TableCell className="text-right">
+                                                    {attempt.status === 'disqualified' ? (
+                                                        <Button
+                                                            variant="outline"
+                                                            size="sm"
+                                                            data-testid={`button-clear-disqualification-${attempt.id}`}
+                                                            onClick={() => setResetTarget(attempt)}
+                                                        >
+                                                            <RotateCcw className="mr-2 h-4 w-4" />
+                                                            Clear Disqualification
+                                                        </Button>
+                                                    ) : (
+                                                        <span className="text-slate-400 text-sm">—</span>
+                                                    )}
+                                                </TableCell>
+                                            </TableRow>
+                                        ))}
+                                    </TableBody>
+                                </Table>
+                            </ScrollableTable>
                         )}
                     </CardContent>
                 </Card>
 
                 {/* Progress Info */}
                 {stats.status === 'in_progress' && (
-                    <Card className="mt-6 border-blue-200 bg-blue-50">
+                    <Card className="mt-6 border-active/40 bg-indigo-50">
                         <CardContent className="py-4">
                             <div className="flex items-center justify-between">
-                                <div className="flex items-center gap-2 text-blue-800">
+                                <div className="flex items-center gap-2 text-active">
                                     <PlayCircle className="h-5 w-5" />
-                                    <span className="font-medium">
-                                        Test in progress • {stats.completedParticipants} of {stats.totalParticipants} completed
+                                    <span className="font-medium" role="status">
+                                        Test in progress • {stats.completedParticipants} of {stats.totalParticipants} submitted
+                                        {(stats.disqualifiedParticipants ?? 0) > 0 && (
+                                            <span className="text-destructive"> • {stats.disqualifiedParticipants} disqualified</span>
+                                        )}
                                     </span>
                                 </div>
-                                <div className="text-sm text-blue-600">
-                                    {Math.round((stats.completedParticipants / stats.totalParticipants) * 100)}% Complete
+                                <div className="text-sm text-active">
+                                    {stats.totalParticipants > 0 ? Math.round((stats.completedParticipants / stats.totalParticipants) * 100) : 0}% Complete
                                 </div>
                             </div>
                         </CardContent>
@@ -366,10 +506,10 @@ export default function RoundMonitorPage() {
 
                 {/* Completion Message */}
                 {stats.status === 'completed' && (
-                    <Card className="mt-6 border-green-200 bg-green-50">
+                    <Card className="mt-6 border-success/40 bg-emerald-50">
                         <CardContent className="py-4">
                             <div className="flex items-center justify-between">
-                                <div className="flex items-center gap-2 text-green-800">
+                                <div className="flex items-center gap-2 text-success">
                                     <CheckCircle className="h-5 w-5" />
                                     <span className="font-medium">
                                         Round completed! All participants have finished.
@@ -405,6 +545,36 @@ export default function RoundMonitorPage() {
             }
           }
         `}</style>
+
+                {/* Clear Disqualification confirmation */}
+                <AlertDialog open={!!resetTarget} onOpenChange={(open) => { if (!open) setResetTarget(null); }}>
+                    <AlertDialogContent>
+                        <AlertDialogHeader>
+                            <AlertDialogTitle>Clear disqualification?</AlertDialogTitle>
+                            <AlertDialogDescription>
+                                Are you sure you want to clear this disqualification and allow the participant to resume?
+                                {resetTarget && (
+                                    <>
+                                        {' '}<strong>{resetTarget.userName}</strong> will be moved back to
+                                        "In progress" with {resetTarget.violationCount} archived violation
+                                        {resetTarget.violationCount === 1 ? '' : 's'} cleared. This action is
+                                        recorded in the audit log.
+                                    </>
+                                )}
+                            </AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                            <AlertDialogCancel disabled={resetting}>Cancel</AlertDialogCancel>
+                            <AlertDialogAction
+                                onClick={handleClearDisqualification}
+                                disabled={resetting}
+                                data-testid="button-confirm-clear-disqualification"
+                            >
+                                {resetting ? 'Clearing…' : 'Clear Disqualification'}
+                            </AlertDialogAction>
+                        </AlertDialogFooter>
+                    </AlertDialogContent>
+                </AlertDialog>
             </div>
         </EventAdminLayout>
     );

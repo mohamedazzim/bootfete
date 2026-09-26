@@ -9,6 +9,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { useLocation, useRoute } from "wouter";
 import { Plus, Trash2, ArrowLeft, Upload, X, Image } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { errorToast, successToast } from '@/lib/toast';
 import AdminLayout from "@/components/layouts/AdminLayout";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { nanoid } from "nanoid";
@@ -62,18 +63,19 @@ export default function RegistrationFormEditPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['/api/registration-forms/all'] });
       queryClient.invalidateQueries({ queryKey: ['/api/registration-forms', formId, 'details'] });
-      toast({
-        title: "Success",
-        description: "Registration form updated successfully",
-      });
+            successToast(
+        toast,
+        "Success",
+        "Registration form updated successfully",
+      );
       setLocation('/admin/registration-forms');
     },
     onError: (error: Error) => {
-      toast({
-        title: "Error",
-        description: error.message,
-        variant: "destructive",
-      });
+            errorToast(
+        toast,
+        "Error",
+        error.message,
+      );
     },
   });
 
@@ -81,11 +83,11 @@ export default function RegistrationFormEditPage() {
     const file = event.target.files?.[0];
     if (file) {
       if (file.size > 5 * 1024 * 1024) {
-        toast({
-          title: "Error",
-          description: "Image size must be less than 5MB",
-          variant: "destructive",
-        });
+                errorToast(
+          toast,
+          "Error",
+          "Image size must be less than 5MB",
+        );
         return;
       }
 
@@ -126,30 +128,30 @@ export default function RegistrationFormEditPage() {
 
   const handleUpdate = () => {
     if (!title.trim()) {
-      toast({
-        title: "Error",
-        description: "Please enter a form title",
-        variant: "destructive",
-      });
+            errorToast(
+        toast,
+        "Error",
+        "Please enter a form title",
+      );
       return;
     }
 
     if (formFields.length === 0) {
-      toast({
-        title: "Error",
-        description: "Please add at least one field",
-        variant: "destructive",
-      });
+            errorToast(
+        toast,
+        "Error",
+        "Please add at least one field",
+      );
       return;
     }
 
     const hasEmptyLabels = formFields.some(f => !f.label.trim());
     if (hasEmptyLabels) {
-      toast({
-        title: "Error",
-        description: "All fields must have a label",
-        variant: "destructive",
-      });
+            errorToast(
+        toast,
+        "Error",
+        "All fields must have a label",
+      );
       return;
     }
 

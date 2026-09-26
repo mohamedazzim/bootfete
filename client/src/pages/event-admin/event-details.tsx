@@ -5,11 +5,13 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
+import { StatusBadge } from '@/components/StatusBadge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { ArrowLeft, Edit, FileQuestion, CheckCircle, XCircle, PlayCircle, StopCircle } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { apiRequest, queryClient } from '@/lib/queryClient';
 import type { Event, Round } from '@shared/schema';
+import ScrollableTable from '@/components/ScrollableTable';
 
 interface EventCredentialWithDetails {
   id: string;
@@ -151,20 +153,6 @@ export default function EventDetailsPage() {
     );
   }
 
-  const getStatusBadge = (status: string) => {
-    const variants: Record<string, 'default' | 'secondary' | 'destructive'> = {
-      draft: 'secondary',
-      upcoming: 'secondary',
-      active: 'default',
-      completed: 'destructive',
-    };
-
-    return (
-      <Badge variant={variants[status] || 'default'}>
-        {status}
-      </Badge>
-    );
-  };
 
   return (
     <EventAdminLayout>
@@ -185,7 +173,7 @@ export default function EventDetailsPage() {
               <p className="text-gray-600 mt-1" data-testid="text-event-description">{event.description}</p>
             </div>
             <div className="flex gap-2">
-              {getStatusBadge(event.status)}
+              <StatusBadge domain="event" status={event.status} />
             </div>
           </div>
         </div>
@@ -251,7 +239,7 @@ export default function EventDetailsPage() {
                 <div>
                   <p className="text-sm font-medium text-gray-600">Status</p>
                   <div className="mt-1" data-testid="text-status">
-                    {getStatusBadge(event.status)}
+                    <StatusBadge domain="event" status={event.status} />
                   </div>
                 </div>
               </CardContent>
@@ -269,7 +257,8 @@ export default function EventDetailsPage() {
                     No rounds created yet
                   </div>
                 ) : (
-                  <div className="overflow-x-auto">
+                                    <ScrollableTable>
+
                     <Table>
                       <TableHeader>
                         <TableRow>
@@ -288,7 +277,7 @@ export default function EventDetailsPage() {
                             <TableCell>{round.name}</TableCell>
                             <TableCell>{round.duration} min</TableCell>
                             <TableCell>
-                              {getStatusBadge(round.status)}
+                              <StatusBadge domain="round" status={round.status} />
                             </TableCell>
                             <TableCell>
                               {round.startTime ? new Date(round.startTime).toLocaleString() : 'Not scheduled'}
@@ -319,7 +308,7 @@ export default function EventDetailsPage() {
                         ))}
                       </TableBody>
                     </Table>
-                  </div>
+                                    </ScrollableTable>
                 )}
               </CardContent>
             </Card>
@@ -358,7 +347,8 @@ export default function EventDetailsPage() {
                     No participants registered yet
                   </div>
                 ) : (
-                  <div className="overflow-x-auto">
+                                    <ScrollableTable>
+
                     <Table>
                       <TableHeader>
                         <TableRow>
@@ -423,7 +413,7 @@ export default function EventDetailsPage() {
                         ))}
                       </TableBody>
                     </Table>
-                  </div>
+                                    </ScrollableTable>
                 )}
               </CardContent>
             </Card>

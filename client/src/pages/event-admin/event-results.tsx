@@ -26,6 +26,7 @@ import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem } from '
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { cn } from '@/lib/utils';
 import type { Round } from '@shared/schema';
+import ScrollableTable from '@/components/ScrollableTable';
 
 // Helper to determine if a round is "completed" or capable of having results
 // For this UI, we assume any round can have results processed.
@@ -377,7 +378,8 @@ export default function EventResultsPage() {
                                     ) : !selectionPool || selectionPool.length === 0 ? (
                                         <div className="text-center py-10 text-muted-foreground">No participants found in the pool for this round.</div>
                                     ) : (
-                                        <div className="overflow-x-auto border rounded-md">
+                                                                                <ScrollableTable>
+
                                             <Table>
                                                 <TableHeader>
                                                     <TableRow>
@@ -416,7 +418,7 @@ export default function EventResultsPage() {
                                                     ))}
                                                 </TableBody>
                                             </Table>
-                                        </div>
+                                                                                </ScrollableTable>
                                     )}
                                 </CardContent>
                             </Card>

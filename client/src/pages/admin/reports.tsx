@@ -9,9 +9,11 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { useToast } from '@/hooks/use-toast';
+import { errorToast, successToast } from '@/lib/toast';
 import { FileText, Download, Plus, Loader2 } from 'lucide-react';
 import type { Report } from '@shared/schema';
 import { formatIST } from '@/lib/utils';
+import ScrollableTable from '@/components/ScrollableTable';
 
 export default function ReportsPage() {
   const [, setLocation] = useLocation();
@@ -40,16 +42,17 @@ export default function ReportsPage() {
       window.URL.revokeObjectURL(url);
       document.body.removeChild(a);
 
-      toast({
-        title: 'Download Complete',
-        description: 'Report has been downloaded successfully',
-      });
+            successToast(
+        toast,
+        'Download Complete',
+        'Report has been downloaded successfully',
+      );
     } catch (error) {
-      toast({
-        title: 'Download Failed',
-        description: error instanceof Error ? error.message : 'Failed to download report',
-        variant: 'destructive',
-      });
+            errorToast(
+        toast,
+        'Download Failed',
+        error instanceof Error ? error.message : 'Failed to download report',
+      );
     } finally {
       setDownloadingId(null);
     }
@@ -90,7 +93,8 @@ export default function ReportsPage() {
                 <p className="mt-2">Click the buttons above to generate your first report</p>
               </div>
             ) : (
-              <div className="overflow-x-auto">
+                            <ScrollableTable>
+
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -139,46 +143,11 @@ export default function ReportsPage() {
                     ))}
                   </TableBody>
                 </Table>
-              </div>
+                            </ScrollableTable>
             )}
           </CardContent>
         </Card>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-6">
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <FileText className="h-5 w-5" />
-                Event-wise Reports
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <p className="text-sm text-gray-600 mb-4">
-                Generate detailed reports for individual events including participant scores, question analysis, violation logs, and more.
-              </p>
-              <Button className="w-full" onClick={() => setLocation('/admin/reports/generate/event')} data-testid="button-event-report">
-                Generate Event Report
-              </Button>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <FileText className="h-5 w-5" />
-                Symposium-wide Reports
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <p className="text-sm text-gray-600 mb-4">
-                Generate comprehensive reports aggregating data from all events, including overall statistics and cross-event analytics.
-              </p>
-              <Button className="w-full" onClick={() => setLocation('/admin/reports/generate/symposium')} data-testid="button-symposium-report">
-                Generate Symposium Report
-              </Button>
-            </CardContent>
-          </Card>
-        </div>
       </div>
     </AdminLayout>
   );

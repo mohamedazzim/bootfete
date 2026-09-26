@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { ArrowLeft, Clock } from 'lucide-react';
+import ScrollableTable from '@/components/ScrollableTable';
 
 interface ParticipantAnswer {
   id: string;
@@ -135,12 +136,12 @@ export default function LeaderboardPage() {
               <div>
                 <p className="text-sm text-gray-500">Submitted</p>
                 <p className="text-sm text-gray-700">
-                  {participantResult.submittedAt ? new Date(participantResult.submittedAt).toLocaleString() : '—'}
+                  {participantResult.submittedAt ? new Date(participantResult.submittedAt).toLocaleString() : <span className="text-slate-500">Not submitted</span>}
                 </p>
               </div>
               <div>
                 <p className="text-sm text-gray-500">Rank</p>
-                <p className="text-sm text-gray-700">{participantResult.rank ?? '—'}</p>
+                <p className="text-sm text-gray-700">{participantResult.rank ?? <span className="text-slate-500">Unranked</span>}</p>
               </div>
             </div>
           </CardContent>
@@ -154,7 +155,8 @@ export default function LeaderboardPage() {
               <CardDescription>Only your submitted responses are visible</CardDescription>
             </CardHeader>
             <CardContent>
-              <div className="overflow-x-auto">
+                            <ScrollableTable>
+
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -180,7 +182,7 @@ export default function LeaderboardPage() {
                     ))}
                   </TableBody>
                 </Table>
-              </div>
+                            </ScrollableTable>
             </CardContent>
           </Card>
         )}
@@ -192,7 +194,8 @@ export default function LeaderboardPage() {
               <CardDescription>Your performance per round</CardDescription>
             </CardHeader>
             <CardContent>
-              <div className="overflow-x-auto">
+                            <ScrollableTable>
+
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -210,13 +213,13 @@ export default function LeaderboardPage() {
                           {roundResult.maxScore ? <span className="text-sm text-gray-500"> / {roundResult.maxScore}</span> : null}
                         </TableCell>
                         <TableCell className="text-right text-sm text-gray-600">
-                          {roundResult.submittedAt ? new Date(roundResult.submittedAt).toLocaleString() : '—'}
+                          {roundResult.submittedAt ? new Date(roundResult.submittedAt).toLocaleString() : <span className="text-slate-500">Not submitted</span>}
                         </TableCell>
                       </TableRow>
                     ))}
                   </TableBody>
                 </Table>
-              </div>
+                            </ScrollableTable>
             </CardContent>
           </Card>
         )}

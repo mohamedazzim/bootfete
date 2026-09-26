@@ -10,6 +10,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useToast } from '@/hooks/use-toast';
+import { errorToast, successToast } from '@/lib/toast';
 import { apiRequest, queryClient } from '@/lib/queryClient';
 import { insertEventSchema, type Event } from '@shared/schema';
 import { z } from 'zod';
@@ -82,20 +83,21 @@ export default function EventEditPage() {
         maxMembers: data.maxMembers || 1,
       });
 
-      toast({
-        title: 'Event updated',
-        description: 'The event has been updated successfully',
-      });
+            successToast(
+        toast,
+        'Event updated',
+        'The event has been updated successfully',
+      );
 
       queryClient.invalidateQueries({ queryKey: ['/api/events'] });
       queryClient.invalidateQueries({ queryKey: ['/api/events', eventId] });
       setLocation('/admin/events');
     } catch (error: any) {
-      toast({
-        title: 'Update failed',
-        description: error.message,
-        variant: 'destructive',
-      });
+            errorToast(
+        toast,
+        'Update failed',
+        error.message,
+      );
     }
   }
 

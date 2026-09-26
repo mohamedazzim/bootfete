@@ -8,6 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
+import { StatusBadge } from '@/components/StatusBadge';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
   Dialog,
@@ -40,6 +41,7 @@ import { apiRequest, queryClient } from '@/lib/queryClient';
 import { Edit, Trash2, Eye, Download } from 'lucide-react';
 import type { Event, Question, Round, AuditLog, User } from '@shared/schema';
 import { format } from 'date-fns';
+import ScrollableTable from '@/components/ScrollableTable';
 
 export default function SuperAdminOverridesPage() {
   const { toast } = useToast();
@@ -201,7 +203,8 @@ function EventsTab() {
             No events available
           </div>
         ) : (
-          <div className="overflow-x-auto">
+                    <ScrollableTable>
+
             <Table>
               <TableHeader>
                 <TableRow>
@@ -220,7 +223,7 @@ function EventsTab() {
                     </TableCell>
                     <TableCell>{event.type}</TableCell>
                     <TableCell>
-                      <Badge data-testid={`badge-status-${event.id}`}>{event.status}</Badge>
+                      <StatusBadge domain="event" status={event.status} testId={`badge-status-${event.id}`} />
                     </TableCell>
                     <TableCell>{getUserName(event.createdBy)}</TableCell>
                     <TableCell className="text-right">
@@ -247,7 +250,7 @@ function EventsTab() {
                 ))}
               </TableBody>
             </Table>
-          </div>
+                    </ScrollableTable>
         )}
       </CardContent>
 
@@ -544,7 +547,8 @@ function QuestionsTab() {
             No questions available for this round
           </div>
         ) : (
-          <div className="overflow-x-auto">
+                    <ScrollableTable>
+
             <Table>
               <TableHeader>
                 <TableRow>
@@ -586,7 +590,7 @@ function QuestionsTab() {
                 ))}
               </TableBody>
             </Table>
-          </div>
+                    </ScrollableTable>
         )}
       </CardContent>
 
@@ -873,7 +877,8 @@ function AuditLogsTab() {
           </div>
         ) : (
           <>
-            <div className="overflow-x-auto">
+                        <ScrollableTable>
+
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -911,7 +916,7 @@ function AuditLogsTab() {
                   ))}
                 </TableBody>
               </Table>
-            </div>
+                        </ScrollableTable>
 
             {totalPages > 1 && (
               <div className="flex justify-center items-center gap-2 mt-6" data-testid="pagination">

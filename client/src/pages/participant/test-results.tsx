@@ -4,6 +4,7 @@ import ParticipantLayout from '@/components/layouts/ParticipantLayout';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { StatusBadge } from '@/components/StatusBadge';
 import { Progress } from '@/components/ui/progress';
 import { ArrowLeft, CheckCircle, XCircle, Clock, AlertTriangle, Trophy } from 'lucide-react';
 import type { TestAttempt, Question, Answer, Round, Event } from '@shared/schema';
@@ -204,9 +205,7 @@ export default function TestResultsPage() {
           <CardContent className="space-y-3">
             <div className="flex justify-between items-center">
               <span className="text-gray-600">Status</span>
-              <Badge variant={attempt.status === 'completed' ? 'default' : 'destructive'}>
-                {attempt.status}
-              </Badge>
+              <StatusBadge domain="attempt" status={attempt.status} />
             </div>
             <div className="flex justify-between items-center">
               <span className="text-gray-600">Started At</span>

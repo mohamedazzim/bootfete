@@ -6,13 +6,17 @@ const Table = React.forwardRef<
   HTMLTableElement,
   React.HTMLAttributes<HTMLTableElement>
 >(({ className, ...props }, ref) => (
-  <div className="relative w-full overflow-auto">
-    <table
-      ref={ref}
-      className={cn("w-full caption-bottom text-sm", className)}
-      {...props}
-    />
-  </div>
+  // No wrapper div: horizontal scrolling is owned by the parent
+  // <ScrollableTable> (or the page's own overflow container), which provides
+  // the keyboard-focusable region and edge-shadow scroll affordances.
+  // (shadcn's default inner `relative w-full overflow-auto` div was removed
+  // in Phase 7 — it nested a second scroll container inside ScrollableTable
+  // and swallowed the shadow/keyboard behavior.)
+  <table
+    ref={ref}
+    className={cn("w-full caption-bottom text-sm", className)}
+    {...props}
+  />
 ))
 Table.displayName = "Table"
 

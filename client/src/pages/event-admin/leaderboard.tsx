@@ -10,6 +10,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { ArrowLeft, Trophy, Medal, Award, Clock, Printer, Send, Users } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { queryClient, apiRequest } from '@/lib/queryClient';
+import ScrollableTable from '@/components/ScrollableTable';
 
 interface LeaderboardEntry {
     rank: number;
@@ -267,7 +268,8 @@ export default function EventAdminLeaderboardPage() {
                         </div>
                     </CardHeader>
                     <CardContent>
-                        <div className="overflow-x-auto">
+                                                <ScrollableTable>
+
                             <Table>
                                 <TableHeader>
                                     <TableRow>
@@ -319,7 +321,7 @@ export default function EventAdminLeaderboardPage() {
                                     ))}
                                 </TableBody>
                             </Table>
-                        </div>
+                                                </ScrollableTable>
                     </CardContent>
                 </Card>
 

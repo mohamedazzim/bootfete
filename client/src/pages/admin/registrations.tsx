@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
+import { errorToast, successToast } from '@/lib/toast';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -10,6 +11,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Di
 import AdminLayout from "@/components/layouts/AdminLayout";
 import { CheckCircle, Clock, Users, AlertCircle, TrendingUp, Download } from "lucide-react";
 import type { Registration, Event, TeamMember } from "@shared/schema";
+import ScrollableTable from '@/components/ScrollableTable';
 
 interface GroupedParticipant {
   rollNo: string;
@@ -176,17 +178,18 @@ export default function AdminRegistrationsPage() {
     onSuccess: (data) => {
       setConfirmDialog(prev => ({ ...prev, isOpen: false }));
       queryClient.invalidateQueries({ queryKey: ['/api/registrations'] });
-      toast({
-        title: "Success",
-        description: data.message || "Registrations confirmed successfully",
-      });
+            successToast(
+        toast,
+        "Success",
+        data.message || "Registrations confirmed successfully",
+      );
     },
     onError: (error: any) => {
-      toast({
-        title: "Error",
-        description: error.message || "Failed to confirm registrations",
-        variant: "destructive",
-      });
+            errorToast(
+        toast,
+        "Error",
+        error.message || "Failed to confirm registrations",
+      );
     },
   });
 
@@ -199,17 +202,18 @@ export default function AdminRegistrationsPage() {
     onSuccess: () => {
       setConfirmDialog(prev => ({ ...prev, isOpen: false }));
       queryClient.invalidateQueries({ queryKey: ['/api/registrations'] });
-      toast({
-        title: "Success",
-        description: "Registration confirmed and credentials generated",
-      });
+            successToast(
+        toast,
+        "Success",
+        "Registration confirmed and credentials generated",
+      );
     },
     onError: (error: any) => {
-      toast({
-        title: "Error",
-        description: error.message || "Failed to confirm registration",
-        variant: "destructive",
-      });
+            errorToast(
+        toast,
+        "Error",
+        error.message || "Failed to confirm registration",
+      );
     },
   });
 
@@ -293,7 +297,8 @@ export default function AdminRegistrationsPage() {
             {isLoading ? (
               <div data-testid="loading-registrations">Loading registrations...</div>
             ) : groupedParticipants.length > 0 ? (
-              <div className="overflow-x-auto">
+                            <ScrollableTable>
+
                 <Table data-testid="table-registrations">
                   <TableHeader>
                     <TableRow>
@@ -370,7 +375,7 @@ export default function AdminRegistrationsPage() {
                     ))}
                   </TableBody>
                 </Table>
-              </div>
+                            </ScrollableTable>
             ) : (
               <div className="text-center py-8 text-muted-foreground" data-testid="text-no-registrations">
                 No registrations yet

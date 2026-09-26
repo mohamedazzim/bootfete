@@ -8,12 +8,14 @@ import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage, FormDescription } from '@/components/ui/form';
 import { useToast } from '@/hooks/use-toast';
+import { errorToast, successToast } from '@/lib/toast';
 import { ArrowLeft, Eye, EyeOff } from 'lucide-react';
 import { z } from 'zod';
 import { useQuery } from '@tanstack/react-query';
 import type { User, Event as SchemaEvent } from '@shared/schema';
 import { apiRequest, queryClient } from '@/lib/queryClient';
-import { Plus, Trash2 } from 'lucide-react';
+import { Plus, Trash2 } from 'lucide-react';import ScrollableTable from '@/components/ScrollableTable';
+
 import {
   AlertDialog,
   AlertDialogAction,
@@ -98,11 +100,11 @@ export default function EventAdminEditPage() {
     if (data.password?.trim()) updates.password = data.password.trim();
 
     if (Object.keys(updates).length === 0) {
-      toast({
-        title: 'No changes',
-        description: 'Please update at least one field',
-        variant: 'destructive',
-      });
+            errorToast(
+        toast,
+        'No changes',
+        'Please update at least one field',
+      );
       return;
     }
 
@@ -111,18 +113,19 @@ export default function EventAdminEditPage() {
 
       queryClient.invalidateQueries({ queryKey: ['/api/users'] });
 
-      toast({
-        title: 'Admin updated',
-        description: 'Admin credentials have been updated successfully',
-      });
+            successToast(
+        toast,
+        'Admin updated',
+        'Admin credentials have been updated successfully',
+      );
 
       navigate('/admin/event-admins');
     } catch (error: any) {
-      toast({
-        title: 'Update failed',
-        description: error.message,
-        variant: 'destructive',
-      });
+            errorToast(
+        toast,
+        'Update failed',
+        error.message,
+      );
     }
   }
 
@@ -130,16 +133,17 @@ export default function EventAdminEditPage() {
     try {
       await apiRequest('DELETE', `/api/events/${eventId}/admins/${adminId}`);
       queryClient.invalidateQueries({ queryKey: [`/api/users/${adminId}/assigned-events`] });
-      toast({
-        title: 'Assignment removed',
-        description: `Removed assignment from ${eventName}`,
-      });
+            successToast(
+        toast,
+        'Assignment removed',
+        `Removed assignment from ${eventName}`,
+      );
     } catch (error: any) {
-      toast({
-        title: 'Removal failed',
-        description: error.message,
-        variant: 'destructive',
-      });
+            errorToast(
+        toast,
+        'Removal failed',
+        error.message,
+      );
     }
   }
 
@@ -148,16 +152,17 @@ export default function EventAdminEditPage() {
     try {
       await apiRequest('POST', `/api/events/${eventId}/admins`, { adminId });
       queryClient.invalidateQueries({ queryKey: [`/api/users/${adminId}/assigned-events`] });
-      toast({
-        title: 'Assignment added',
-        description: 'Successfully assigned to event',
-      });
+            successToast(
+        toast,
+        'Assignment added',
+        'Successfully assigned to event',
+      );
     } catch (error: any) {
-      toast({
-        title: 'Assignment failed',
-        description: error.message,
-        variant: 'destructive',
-      });
+            errorToast(
+        toast,
+        'Assignment failed',
+        error.message,
+      );
     }
   }
 
@@ -353,46 +358,49 @@ export default function EventAdminEditPage() {
             ) : !assignedEvents || assignedEvents.length === 0 ? (
               <div className="text-center py-4 text-gray-500">No events assigned</div>
             ) : (
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Event Name</TableHead>
-                    <TableHead>Category</TableHead>
-                    <TableHead className="text-right">Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {assignedEvents.map((event) => (
-                    <TableRow key={event.id}>
-                      <TableCell className="font-medium">{event.name}</TableCell>
-                      <TableCell className="capitalize">{event.category.replace('_', ' ')}</TableCell>
-                      <TableCell className="text-right">
-                        <AlertDialog>
-                          <AlertDialogTrigger asChild>
-                            <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive/90">
-                              <Trash2 className="h-4 w-4" />
-                            </Button>
-                          </AlertDialogTrigger>
-                          <AlertDialogContent>
-                            <AlertDialogHeader>
-                              <AlertDialogTitle>Remove Assignment?</AlertDialogTitle>
-                              <AlertDialogDescription>
-                                Are you sure you want to remove {admin.fullName} from {event.name}? They will no longer have access to manage this event.
-                              </AlertDialogDescription>
-                            </AlertDialogHeader>
-                            <AlertDialogFooter>
-                              <AlertDialogCancel>Cancel</AlertDialogCancel>
-                              <AlertDialogAction onClick={() => handleRemoveAssignment(event.id, event.name)} className="bg-destructive text-destructive-foreground">
-                                Remove
-                              </AlertDialogAction>
-                            </AlertDialogFooter>
-                          </AlertDialogContent>
-                        </AlertDialog>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+                            <ScrollableTable>
+
+                <Table>
+                                <TableHeader>
+                                  <TableRow>
+                                    <TableHead>Event Name</TableHead>
+                                    <TableHead>Category</TableHead>
+                                    <TableHead className="text-right">Actions</TableHead>
+                                  </TableRow>
+                                </TableHeader>
+                                <TableBody>
+                                  {assignedEvents.map((event) => (
+                                    <TableRow key={event.id}>
+                                      <TableCell className="font-medium">{event.name}</TableCell>
+                                      <TableCell className="capitalize">{event.category.replace('_', ' ')}</TableCell>
+                                      <TableCell className="text-right">
+                                        <AlertDialog>
+                                          <AlertDialogTrigger asChild>
+                                            <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive/90">
+                                              <Trash2 className="h-4 w-4" />
+                                            </Button>
+                                          </AlertDialogTrigger>
+                                          <AlertDialogContent>
+                                            <AlertDialogHeader>
+                                              <AlertDialogTitle>Remove Assignment?</AlertDialogTitle>
+                                              <AlertDialogDescription>
+                                                Are you sure you want to remove {admin.fullName} from {event.name}? They will no longer have access to manage this event.
+                                              </AlertDialogDescription>
+                                            </AlertDialogHeader>
+                                            <AlertDialogFooter>
+                                              <AlertDialogCancel>Cancel</AlertDialogCancel>
+                                              <AlertDialogAction onClick={() => handleRemoveAssignment(event.id, event.name)} className="bg-destructive text-destructive-foreground">
+                                                Remove
+                                              </AlertDialogAction>
+                                            </AlertDialogFooter>
+                                          </AlertDialogContent>
+                                        </AlertDialog>
+                                      </TableCell>
+                                    </TableRow>
+                                  ))}
+                                </TableBody>
+                              </Table>
+                            </ScrollableTable>
             )}
           </CardContent>
         </Card>

@@ -7,11 +7,13 @@ import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
+import { StatusBadge } from '@/components/StatusBadge';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Plus, Search, Edit, Trash2, Eye } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { apiRequest, queryClient } from '@/lib/queryClient';
-import type { Event } from '@shared/schema';
+import type { Event } from '@shared/schema';import ScrollableTable from '@/components/ScrollableTable';
+
 import {
   AlertDialog,
   AlertDialogAction,
@@ -79,18 +81,6 @@ export default function EventsPage() {
     event.type.toLowerCase().includes(searchTerm.toLowerCase())
   ) || [];
 
-  const getStatusBadge = (status: string) => {
-    const variants: Record<string, 'default' | 'secondary' | 'destructive'> = {
-      active: 'default',
-      completed: 'secondary',
-    };
-
-    return (
-      <Badge variant={variants[status] || 'default'} data-testid={`badge-${status}`}>
-        {status}
-      </Badge>
-    );
-  };
 
   const getTypeBadge = (type: string) => {
     return (
@@ -137,7 +127,8 @@ export default function EventsPage() {
                 {searchTerm ? 'No events found matching your search' : 'No events created yet'}
               </div>
             ) : (
-              <div className="overflow-x-auto">
+                            <ScrollableTable>
+
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -156,7 +147,7 @@ export default function EventsPage() {
                           {event.name}
                         </TableCell>
                         <TableCell>{getTypeBadge(event.type)}</TableCell>
-                        <TableCell>{getStatusBadge(event.status)}</TableCell>
+                        <TableCell><StatusBadge domain="event" status={event.status} testId={`badge-${event.status}`} /></TableCell>
                         <TableCell>
                           {event.startDate ? new Date(event.startDate).toLocaleDateString() : '-'}
                         </TableCell>
@@ -195,7 +186,7 @@ export default function EventsPage() {
                     ))}
                   </TableBody>
                 </Table>
-              </div>
+                            </ScrollableTable>
             )}
           </CardContent>
         </Card>

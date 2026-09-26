@@ -63,7 +63,6 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
 
     socket.on('connect', () => {
       setIsConnected(true);
-      console.log('WebSocket connected');
       // Round-2 H12: resync on every (re)connect. While the socket was down
       // the client missed roundStatus events — an attempt whose startedAt
       // was shifted by pause/resume (or a round whose status flipped) would
@@ -74,7 +73,6 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
 
     socket.on('disconnect', () => {
       setIsConnected(false);
-      console.log('WebSocket disconnected');
     });
 
     socket.on('connect_error', (error) => {

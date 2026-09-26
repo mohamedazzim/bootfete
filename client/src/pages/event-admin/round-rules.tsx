@@ -11,6 +11,7 @@ import { Switch } from '@/components/ui/switch';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/hooks/use-toast';
+import { errorToast, successToast } from '@/lib/toast';
 import { apiRequest, queryClient } from '@/lib/queryClient';
 import { ArrowLeft, Shield, AlertTriangle } from 'lucide-react';
 import type { RoundRules, Round } from '@shared/schema';
@@ -69,18 +70,19 @@ export default function RoundRulesPage() {
       return apiRequest('PATCH', `/api/rounds/${roundId}/rules`, data);
     },
     onSuccess: () => {
-      toast({
-        title: 'Rules updated',
-        description: 'Round proctoring rules have been updated successfully',
-      });
+            successToast(
+        toast,
+        'Rules updated',
+        'Round proctoring rules have been updated successfully',
+      );
       queryClient.invalidateQueries({ queryKey: ['/api/rounds', roundId, 'rules'] });
     },
     onError: (error: any) => {
-      toast({
-        title: 'Update failed',
-        description: error.message,
-        variant: 'destructive',
-      });
+            errorToast(
+        toast,
+        'Update failed',
+        error.message,
+      );
     },
   });
 

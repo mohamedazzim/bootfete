@@ -11,6 +11,7 @@ import { Switch } from '@/components/ui/switch';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/hooks/use-toast';
+import { errorToast, successToast } from '@/lib/toast';
 import { apiRequest, queryClient } from '@/lib/queryClient';
 import { ArrowLeft, Shield, AlertTriangle } from 'lucide-react';
 import type { EventRules, Event } from '@shared/schema';
@@ -69,18 +70,19 @@ export default function EventRulesPage() {
       return apiRequest('PATCH', `/api/events/${eventId}/rules`, data);
     },
     onSuccess: () => {
-      toast({
-        title: 'Rules updated',
-        description: 'Event proctoring rules have been updated successfully',
-      });
+            successToast(
+        toast,
+        'Rules updated',
+        'Event proctoring rules have been updated successfully',
+      );
       queryClient.invalidateQueries({ queryKey: ['/api/events', eventId, 'rules'] });
     },
     onError: (error: any) => {
-      toast({
-        title: 'Update failed',
-        description: error.message,
-        variant: 'destructive',
-      });
+            errorToast(
+        toast,
+        'Update failed',
+        error.message,
+      );
     },
   });
 
