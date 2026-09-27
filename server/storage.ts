@@ -1653,7 +1653,11 @@ export class DatabaseStorage implements IStorage {
     const attempts = await query
       .where(and(...whereConditions))
       .groupBy(testAttempts.userId, users.fullName)
-      .orderBy(desc(sql`SUM(${testAttempts.totalScore})`), asc(sql`MAX(${testAttempts.submittedAt})`));
+      // Deterministic final tie-breaker: burst submits can share the same
+      // millisecond submittedAt (JS Date precision), so (score, submittedAt)
+      // ties are common — without userId the row order (and hence displayed
+      // ranks) is nondeterministic across queries.
+      .orderBy(desc(sql`SUM(${testAttempts.totalScore})`), asc(sql`MAX(${testAttempts.submittedAt})`), asc(testAttempts.userId));
 
     return attempts.map((attempt, index) => ({
       ...attempt,

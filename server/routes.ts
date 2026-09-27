@@ -1534,23 +1534,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (!checkTenantAccess(req, res, event.symposiumId)) return
       }
 
-      const participant = await storage.updateParticipantStatus(participantId, "disqualified")
-
-      if (!participant) {
-        return res.status(404).json({ message: "Participant not found" })
-      }
-
-      // Mark all test attempts for this participant in this event as disqualified
+      // Manual DQ rides the same transactional CAS as auto-DQ
+      // (storage.disqualifyAttempt): each in_progress attempt flips to
+      // disqualified atomically with the participant row in one transaction.
+      // A concurrent submit that already CAS-won in_progress -> completed is
+      // never clobbered — the CAS loses, the attempt keeps its completed
+      // state, and the participant flip stands down with it (same semantics
+      // as the auto-DQ path on CAS loss). Completed attempts are left alone.
       const eventRounds = await storage.getRoundsByEvent(existing.eventId);
-      const roundIds = eventRounds.map(r => r.id);
-      if (roundIds.length > 0) {
-        await db.update(testAttempts)
-          .set({ status: "disqualified", totalScore: 0 })
-          .where(and(
-            eq(testAttempts.userId, existing.userId),
-            inArray(testAttempts.roundId, roundIds)
-          ));
+      let disqualifiedAttempts = 0;
+      for (const round of eventRounds) {
+        const attempt = await storage.getTestAttemptByUserAndRound(existing.userId, round.id);
+        if (attempt && attempt.status === "in_progress") {
+          const won = await storage.disqualifyAttempt(attempt.id, participantId);
+          if (won) disqualifiedAttempts++;
+        }
       }
+      const participant = await storage.getParticipant(participantId);
+
       await cacheService.deletePattern('leaderboard:*');
       // Track-1: drop cached participant rows so the stale status is never
       // served after a disqualification (participant:{id} is 600s TTL).
@@ -1558,8 +1559,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       await cacheService.deletePattern('participant:credential:*');
 
       res.json({
-        message: "Participant disqualified successfully",
+        message: disqualifiedAttempts > 0
+          ? "Participant disqualified successfully"
+          : "No in-progress attempts to disqualify",
         participant,
+        disqualifiedAttempts,
       })
     } catch (error) {
       console.error("Disqualify participant error:", error)
@@ -9449,6 +9453,124 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       } catch (error) {
         console.error("Reset disqualified attempt error:", error);
+        res.status(500).json({ message: "Internal server error" });
+      }
+    }
+  );
+
+  // ADMIN POST-HOC DISQUALIFICATION: disqualify an already-COMPLETED attempt
+  // after the fact (e.g. cheating discovered in review). This is deliberately
+  // NOT the CAS path: there is no in_progress -> terminal race to guard once
+  // the attempt is terminal, so no CAS is needed or wanted here.
+  //   - Only attempts with status 'completed' are eligible. In-progress
+  //     attempts are rejected (use the live disqualification path while the
+  //     test is running); already-disqualified attempts are rejected.
+  //   - The earned totalScore is PRESERVED, not zeroed: the score is audit
+  //     evidence (visible to a later reset/appeal review), and the
+  //     leaderboard excludes non-completed attempts regardless of score, so
+  //     keeping it cannot leak onto the board. This matches the auto-DQ path,
+  //     which also leaves totalScore untouched.
+  //   - The post-hoc nature is recorded in audit_logs with the distinct
+  //     action 'attempt_disqualified_posthoc' (vs the auto-DQ and
+  //     participant-DQ paths): test_attempts.status is CHECK-constrained
+  //     (migration 001) to the five existing values, so it cannot carry a
+  //     separate 'disqualified_posthoc' value without a migration.
+  //   - The participant row is intentionally untouched: this action is
+  //     attempt-scoped. Participant-level DQ remains the job of
+  //     PATCH /api/participants/:participantId/disqualify.
+  app.post(
+    "/api/event-admin/attempts/:attemptId/disqualify-posthoc",
+    requireAuth,
+    requireEventAdminOrSuperAdmin,
+    async (req: AuthRequest, res: Response) => {
+      try {
+        const { attemptId } = req.params;
+        const { reason } = req.body || {};
+
+        const attempt = await storage.getTestAttempt(attemptId);
+        if (!attempt) {
+          return res.status(404).json({ message: "Test attempt not found" });
+        }
+
+        // In-progress attempts belong to the real-time CAS path — a post-hoc
+        // action must never touch a live attempt.
+        if (attempt.status === "in_progress") {
+          return res.status(409).json({
+            message: "Attempt is still in progress; use the live disqualification path while the test is running",
+            code: "ATTEMPT_STILL_IN_PROGRESS",
+          });
+        }
+        if (attempt.status === "disqualified") {
+          return res.status(409).json({
+            message: "Attempt is already disqualified",
+            code: "ATTEMPT_ALREADY_DISQUALIFIED",
+          });
+        }
+        if (attempt.status !== "completed") {
+          return res.status(400).json({
+            message: `Only completed attempts can be disqualified post-hoc (status: ${attempt.status})`,
+            code: "ATTEMPT_NOT_ELIGIBLE",
+          });
+        }
+
+        const round = await storage.getRound(attempt.roundId);
+        if (!round) {
+          return res.status(404).json({ message: "Round not found" });
+        }
+
+        // Event admins are event-scoped: they may only disqualify attempts in
+        // events they are assigned to (mirrors the reset workflow).
+        if (req.user!.role === "event_admin") {
+          const myEvents = await storage.getEventsByAdmin(req.user!.id);
+          if (!myEvents.some((e: any) => e.id === round.eventId)) {
+            return res.status(403).json({ message: "Access denied" });
+          }
+        }
+
+        // Phase 1 multi-tenancy: a super_admin may only act on their own
+        // symposium's events (mirrors the manual participant-DQ route).
+        if (hasSuperAdminAccess(req.user!) && req.user!.role !== "ultimate_admin") {
+          const event = await storage.getEvent(round.eventId);
+          if (!event) {
+            return res.status(404).json({ message: "Event not found" });
+          }
+          if (!checkTenantAccess(req, res, event.symposiumId)) return;
+        }
+
+        const previousScore = (attempt as any).totalScore ?? null;
+        const updated = await storage.updateTestAttempt(attemptId, {
+          status: "disqualified",
+        } as any);
+
+        await cacheService.deletePattern("leaderboard:*");
+
+        const dqUser = await storage.getUser(attempt.userId);
+        await logSuperAdminAction(
+          req.user!.id,
+          req.user!.username,
+          "attempt_disqualified_posthoc",
+          "test_attempt",
+          attemptId,
+          dqUser?.fullName || dqUser?.username || attempt.userId,
+          {
+            previousStatus: "completed",
+            newStatus: "disqualified",
+            previousScore,
+            scorePreserved: true,
+            roundId: attempt.roundId,
+            eventId: round.eventId,
+          },
+          typeof reason === "string" && reason.trim() ? reason.trim() : null,
+          getClientIp(req)
+        );
+
+        res.json({
+          message: "Attempt disqualified post-hoc. Original score preserved for audit.",
+          attempt: updated,
+          disqualifiedPosthoc: true,
+        });
+      } catch (error) {
+        console.error("Post-hoc disqualify attempt error:", error);
         res.status(500).json({ message: "Internal server error" });
       }
     }
