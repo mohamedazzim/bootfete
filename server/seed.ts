@@ -48,7 +48,11 @@ async function seed() {
   // One-time random superadmin password — same 16-char crypto.randomBytes
   // scheme as provisioned temp passwords (server/routes.ts). Printed once
   // below; never hardcode a real/memorable password in source.
-  const superadminPassword = crypto.randomBytes(12).toString('base64').slice(0, 16);
+  // SEED_ADMIN_PASSWORD overrides it for automated environments (CI),
+  // where the test harness must know the credential ahead of time.
+  const passwordFromEnv = process.env.SEED_ADMIN_PASSWORD !== undefined;
+  const superadminPassword =
+    process.env.SEED_ADMIN_PASSWORD ?? crypto.randomBytes(12).toString('base64').slice(0, 16);
   const hashedPassword = await bcrypt.hash(superadminPassword, 10);
 
   // Phase 1 multi-tenancy: a super_admin is a scoped role and MUST belong
@@ -80,7 +84,7 @@ async function seed() {
   console.log('  SUPERADMIN LOGIN CREDENTIALS');
   console.log('═══════════════════════════════════════');
   console.log('  Username: superadmin');
-  console.log('  Password: ' + superadminPassword + '   (shown once — save it now)');
+  console.log('  Password: ' + (passwordFromEnv ? '(provided via SEED_ADMIN_PASSWORD)' : superadminPassword + '   (shown once — save it now)'));
   console.log('  Email: azzimandabdullah1@gmail.com');
   console.log('═══════════════════════════════════════');
   console.log('');

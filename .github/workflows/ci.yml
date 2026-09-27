@@ -59,6 +59,12 @@ jobs:
       REDIS_HOST: localhost
       REDIS_PORT: 6379
       JWT_SECRET: ci-pipeline-test-secret
+      # The e2e suite logs in as superadmin / Azzi@03 (tests/e2e defaults);
+      # the seed must create the bootstrap account with the same credential.
+      # Ephemeral CI database only — the password is worthless outside it.
+      SEED_ADMIN_PASSWORD: Azzi@03
+      E2E_ADMIN_USER: superadmin
+      E2E_ADMIN_PASS: Azzi@03
 
     steps:
       - name: Checkout code
