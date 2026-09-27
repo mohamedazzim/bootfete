@@ -58,10 +58,12 @@ async function apiRequest(
 // Bootstrap strategy (mirrors production):
 // 1. Login with a bootstrap Super Admin (from env, defaults to the account
 //    created by `server/seed.ts`).
-// 2. Create the Event Admin through POST /api/auth/register using the super
-//    admin token — privileged accounts can ONLY be created this way.
-// 3. Create the event, assign the admin, add rounds/rules/questions and start
-//    the round. Participant provisioning happens per test in `beforeEach`.
+// 2. Create the event.
+// 3. Create AND assign the Event Admin via POST /api/events/:eventId/admins
+//    (provisions the account with a temp password and assigns it in one
+//    call), then log in as the new admin for an event-scoped token.
+// 4. Add rounds/rules/questions and start the round. Participant provisioning
+//    happens per test in `beforeEach`.
 test.beforeAll(async () => {
   test.setTimeout(180000);
   const adminUser = process.env.E2E_ADMIN_USER || 'superadmin';
@@ -100,21 +102,7 @@ test.beforeAll(async () => {
   const superAdminData = await loginRes.json();
   const superAdminToken = superAdminData.token;
 
-  // 2. Create event admin via the secured register endpoint (requires super admin)
-  const eventAdminRes = await apiRequest('POST', '/api/auth/register', superAdminToken, {
-    username: `eventadmin_${Date.now()}`,
-    password: 'eventadmin123',
-    email: `eventadmin_${Date.now()}@test.com`,
-    fullName: 'Event Admin Test',
-    role: 'event_admin'
-  });
-  if (!eventAdminRes?.token) {
-    throw new Error('Event admin registration did not return a token');
-  }
-  const eventAdminToken = eventAdminRes.token;
-  const eventAdminUserId = eventAdminRes.user.id;
-
-  // 3. Create event
+  // 2. Create event
   const eventRes = await apiRequest('POST', '/api/events', superAdminToken, {
     name: `Proctored Test Event ${Date.now()}`,
     description: 'E2E Test Event',
@@ -124,10 +112,27 @@ test.beforeAll(async () => {
   });
   const eventId = eventRes.id;
 
-  // Assign event admin to event
-  await apiRequest('POST', `/api/events/${eventId}/admins`, superAdminToken, {
-    adminId: eventAdminUserId
+  // 3. Create AND assign the event admin in one call. POST
+  //    /api/events/:eventId/admins provisions the account (random temp
+  //    password, must-change flag) and assigns it to the event; the temp
+  //    password is returned once so we can log in as the new admin.
+  //    (The old { adminId } assign-existing-admin shape was removed from this
+  //    endpoint — calling it that way 400s, which apiRequest swallows.)
+  const adminUsername = `eventadmin_${Date.now()}`;
+  const createAdminRes = await apiRequest('POST', `/api/events/${eventId}/admins`, superAdminToken, {
+    username: adminUsername,
+    email: `${adminUsername}@test.com`,
+    fullName: 'Event Admin Test'
   });
+  const adminLoginRes = await fetch(`${BASE_URL}/api/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: adminUsername, password: createAdminRes.tempPassword })
+  });
+  if (!adminLoginRes.ok) {
+    throw new Error(`Event admin login failed (${adminLoginRes.status})`);
+  }
+  const eventAdminToken = (await adminLoginRes.json()).token;
 
   // Create round with proctoring rules
   const roundRes = await apiRequest('POST', `/api/events/${eventId}/rounds`, eventAdminToken, {
