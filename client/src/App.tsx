@@ -289,10 +289,10 @@ function Router() {
         <ProtectedRoute component={AllParticipantsPage} allowedRoles={['event_admin']} />
       </Route>
       <Route path="/event-admin/rounds/:roundId/leaderboard">
-        <ProtectedRoute component={EventAdminLeaderboardPage} allowedRoles={['event_admin']} />
+        <ProtectedRoute component={EventAdminLeaderboardPage} allowedRoles={['event_admin', 'super_admin']} />
       </Route>
       <Route path="/event-admin/events/:eventId/leaderboard">
-        <ProtectedRoute component={EventAdminLeaderboardPage} allowedRoles={['event_admin']} />
+        <ProtectedRoute component={EventAdminLeaderboardPage} allowedRoles={['event_admin', 'super_admin']} />
       </Route>
       <Route path="/event-admin/events/:eventId/results">
         <ProtectedRoute component={EventResultsPage} allowedRoles={['event_admin', 'super_admin']} />
