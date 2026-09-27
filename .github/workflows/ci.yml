@@ -65,6 +65,16 @@ jobs:
       SEED_ADMIN_PASSWORD: Azzi@03
       E2E_ADMIN_USER: superadmin
       E2E_ADMIN_PASS: Azzi@03
+      # The e2e suite signs participants in at /s/<slug>/login; the seed
+      # creates the default symposium with this slug.
+      E2E_SYMPOSIUM_SLUG: bootfete-2k26
+      # The whole e2e suite runs from one IP (localhost), so its ~100+
+      # public-endpoint hits (registrations, branding, symposium lookups)
+      # trip the per-IP publicApiLimiter (default 100 / 15 min) and the
+      # tail of the suite 429s. This knob exists for exactly this shape
+      # (high-density NATs, loadtest harness); CI-only, production keeps
+      # the default 100.
+      PUBLIC_API_RATE_LIMIT_MAX: "1000"
 
     steps:
       - name: Checkout code

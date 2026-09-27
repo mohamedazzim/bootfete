@@ -8,6 +8,10 @@ import path from 'node:path';
 test.setTimeout(180000);
 
 const BASE_URL = 'http://localhost:5000';
+// The symposium whose login page participants use. Matches the seeded
+// default symposium (server/seed.ts); override when the suite runs against
+// a database seeded with a different slug.
+const SYMPOSIUM_SLUG = process.env.E2E_SYMPOSIUM_SLUG || 'bootfete-2k26';
 
 // Shared fixtures created once for the whole suite.
 let shared: {
@@ -238,8 +242,10 @@ test.beforeEach(async () => {
 
 // Helper functions
 async function loginAsParticipant(page: Page) {
-  // The login form lives at /login; / is the public landing page (no form).
-  await page.goto(`${BASE_URL}/login`);
+  // Participants sign in at their symposium's login page. The bare /login
+  // redirects to the platform (ultimate-admin-only) login at /, where
+  // participant credentials are rejected with 403 — never use it here.
+  await page.goto(`${BASE_URL}/s/${SYMPOSIUM_SLUG}/login`);
   await page.waitForSelector('[data-testid="input-username"]', { timeout: 30000 });
   await page.fill('[data-testid="input-username"]', testContext.participantCredentials.username);
   await page.fill('[data-testid="input-password"]', testContext.participantCredentials.password);
