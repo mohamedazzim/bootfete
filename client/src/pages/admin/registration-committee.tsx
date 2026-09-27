@@ -24,7 +24,7 @@ export default function RegistrationCommitteePage() {
 
   useEffect(() => {
     if (!authLoading && (!user || !hasSuperAdminAccess(user.role))) {
-      setLocation('/login');
+      setLocation('/');
     }
   }, [user, authLoading, setLocation]);
 

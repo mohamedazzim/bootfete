@@ -36,7 +36,6 @@ interface SymposiumOverview {
 interface CreatedResult {
   symposium: { id: string; name: string; slug: string };
   superAdmin: { id: string; username: string; email: string; fullName: string };
-  tempPassword: string;
 }
 
 export default function UltimateAdminDashboard() {
@@ -58,6 +57,7 @@ export default function UltimateAdminDashboard() {
   const [superAdminUsername, setSuperAdminUsername] = useState('');
   const [superAdminEmail, setSuperAdminEmail] = useState('');
   const [superAdminFullName, setSuperAdminFullName] = useState('');
+  const [superAdminPassword, setSuperAdminPassword] = useState('');
 
   const { data: symposiums = [], isLoading: loadingSyms } = useQuery<SymposiumOverview[]>({
     queryKey: ['/api/ultimate-admin/symposiums/overview'],
@@ -79,6 +79,7 @@ export default function UltimateAdminDashboard() {
         superAdminUsername,
         superAdminEmail,
         superAdminFullName,
+        superAdminPassword,
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
@@ -109,8 +110,8 @@ export default function UltimateAdminDashboard() {
     onError: (err: any) => errorToast(toast, 'Operation failed', err.message),
   });
 
-  function copyPassword(pw: string) {
-    navigator.clipboard.writeText(pw).then(() => {
+  function copyToClipboard(text: string) {
+    navigator.clipboard.writeText(text).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     });
@@ -118,7 +119,7 @@ export default function UltimateAdminDashboard() {
 
   function resetForm() {
     setName(''); setOrganizerName(''); setPrimaryColor('#4F46E5'); setSupportEmail('');
-    setSuperAdminUsername(''); setSuperAdminEmail(''); setSuperAdminFullName('');
+    setSuperAdminUsername(''); setSuperAdminEmail(''); setSuperAdminFullName(''); setSuperAdminPassword('');
     setCreated(null);
   }
 
@@ -126,7 +127,7 @@ export default function UltimateAdminDashboard() {
     return <AdminLayout><div className="p-8">Loading…</div></AdminLayout>;
   }
   if (user?.role !== 'ultimate_admin') {
-    setLocation('/login');
+    setLocation('/');
     return null;
   }
 
@@ -157,32 +158,30 @@ export default function UltimateAdminDashboard() {
 
               {created ? (
                 <div className="space-y-4">
-                  <Alert className="border-amber-500 bg-amber-50">
-                    <AlertTriangle className="h-4 w-4 text-amber-600" />
-                    <AlertTitle className="text-amber-800">One-time password — save it now</AlertTitle>
-                    <AlertDescription className="text-amber-700">
-                      This password will <strong>never be shown again</strong>. Copy it and
-                      share it securely with {created.superAdmin.fullName}. They will be
-                      forced to change it on first login.
+                  <Alert className="border-emerald-500 bg-emerald-50">
+                    <Check className="h-4 w-4 text-emerald-600" />
+                    <AlertTitle className="text-emerald-800">Symposium created</AlertTitle>
+                    <AlertDescription className="text-emerald-700">
+                      Share the login link below with {created.superAdmin.fullName} along
+                      with their username and password. They will be forced to change
+                      the password on first login.
                     </AlertDescription>
                   </Alert>
                   <div className="rounded-lg border p-4 space-y-2 bg-slate-50">
                     <div className="text-sm text-muted-foreground">Symposium</div>
                     <div className="font-medium">{created.symposium.name}</div>
-                    <div className="text-sm text-muted-foreground">Public URL</div>
-                    <div className="font-mono text-sm">/s/{created.symposium.slug}</div>
-                    <div className="text-sm text-muted-foreground">Super admin username</div>
-                    <div className="font-mono text-sm">{created.superAdmin.username}</div>
-                    <div className="text-sm text-muted-foreground">Temporary password</div>
+                    <div className="text-sm text-muted-foreground">Login link</div>
                     <div className="flex items-center gap-2">
-                      <code className="flex-1 rounded bg-white border px-3 py-2 font-mono text-base select-all">
-                        {created.tempPassword}
+                      <code className="flex-1 rounded bg-white border px-3 py-2 font-mono text-sm select-all break-all">
+                        /s/{created.symposium.slug}/login
                       </code>
-                      <Button variant="outline" size="sm" onClick={() => copyPassword(created.tempPassword)}>
+                      <Button variant="outline" size="sm" onClick={() => copyToClipboard(`/s/${created.symposium.slug}/login`)}>
                         {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
                         {copied ? 'Copied' : 'Copy'}
                       </Button>
                     </div>
+                    <div className="text-sm text-muted-foreground">Super admin username</div>
+                    <div className="font-mono text-sm">{created.superAdmin.username}</div>
                   </div>
                   <Button className="w-full" onClick={() => { setDialogOpen(false); resetForm(); }}>
                     Done
@@ -228,7 +227,11 @@ export default function UltimateAdminDashboard() {
                         <Input id="sa-email" type="email" value={superAdminEmail} onChange={(e) => setSuperAdminEmail(e.target.value)} required />
                       </div>
                     </div>
-                    <p className="text-xs text-muted-foreground">A strong random password is generated automatically — never predictable, never stored in plaintext.</p>
+                    <div className="space-y-2">
+                      <Label htmlFor="sa-pass">Password *</Label>
+                      <Input id="sa-pass" type="password" value={superAdminPassword} onChange={(e) => setSuperAdminPassword(e.target.value)} required minLength={8} maxLength={128} autoComplete="new-password" placeholder="Set the initial password" />
+                      <p className="text-xs text-muted-foreground">Share this with them directly. They will be forced to change it on first login.</p>
+                    </div>
                   </div>
                   <Button type="submit" className="w-full" disabled={createMutation.isPending}>
                     {createMutation.isPending ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Creating…</> : 'Create symposium + super admin'}
@@ -246,7 +249,7 @@ export default function UltimateAdminDashboard() {
             <AlertDescription className="text-amber-700">
               <div className="flex items-center gap-2 mt-2">
                 <code className="rounded bg-white border px-3 py-2 font-mono text-base select-all">{resetResult.tempPassword}</code>
-                <Button variant="outline" size="sm" onClick={() => copyPassword(resetResult.tempPassword)}>
+                <Button variant="outline" size="sm" onClick={() => copyToClipboard(resetResult.tempPassword)}>
                   {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
                   {copied ? 'Copied' : 'Copy'}
                 </Button>

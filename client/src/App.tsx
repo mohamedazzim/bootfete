@@ -12,8 +12,7 @@ import AppHeader from "@/components/Header";
 // initial chunk — a participant must reach a live exam with zero lazy-load
 // latency. Everything admin-side is route-split.
 import NotFound from "@/pages/not-found";
-import Login from "@/pages/login";
-import ParticipantRegisterPage from "@/pages/public/register";
+import UltimateLoginPage from "@/pages/ultimate-login";
 import PublicRegistrationFormPage from "@/pages/public/registration-form";
 import EventRegistrationPage from "@/pages/public/event-registration";
 import ParticipantDashboard from "@/pages/participant/dashboard";
@@ -50,9 +49,9 @@ const AdminSettingsPage = lazy(() => import("@/pages/admin/settings"));
 const UltimateAdminBrandingPage = lazy(() => import("@/pages/ultimate-admin/settings"));
 // Phase 2: ultimate-admin landing (symposium provisioning dashboard).
 const UltimateAdminDashboardPage = lazy(() => import("@/pages/ultimate-admin/dashboard"));
-// Phase 2: public per-symposium landing + directory; forced password change.
+// Phase 2: public per-symposium landing + per-symposium login.
 const SymposiumLandingPage = lazy(() => import("@/pages/public/symposium-landing"));
-const SymposiumDirectoryPage = lazy(() => import("@/pages/public/symposium-directory"));
+const SymposiumLoginPage = lazy(() => import("@/pages/public/symposium-login"));
 const ForcePasswordChangePage = lazy(() => import("@/pages/force-password-change"));
 // Event-admin surfaces (lazy)
 const EventAdminDashboard = lazy(() => import("@/pages/event-admin/dashboard"));
@@ -98,12 +97,12 @@ function ProtectedRoute({
   }
 
   if (!user) {
-    return <Redirect to="/login" />;
+    return <Redirect to="/" />;
   }
 
   if (allowedRoles && !allowedRoles.includes(user.role) &&
       !(user.role === 'ultimate_admin' && allowedRoles.includes('super_admin'))) {
-    return <Redirect to="/login" />;
+    return <Redirect to="/" />;
   }
 
   return <Component />;
@@ -129,11 +128,14 @@ function Router() {
       }
     >
       <Switch>
-      <Route path="/login" component={Login} />
+      {/* The bare /login is gone: the platform login lives at "/". */}
+      <Route path="/login">
+        <Redirect to="/" />
+      </Route>
 
       {/* Phase 2: forced password change for provisioned staff accounts. */}
       <Route path="/force-password-change">
-        {user ? <ForcePasswordChangePage /> : <Redirect to="/login" />}
+        {user ? <ForcePasswordChangePage /> : <Redirect to="/" />}
       </Route>
 
       {/* Phase 2: ultimate-admin landing — symposium provisioning dashboard. */}
@@ -142,6 +144,9 @@ function Router() {
       </Route>
 
       {/* Phase 2: public per-symposium landing page, keyed by locked slug. */}
+      {/* The symposium's own login lives at /s/:slug/login (before the
+          parameterized landing route). */}
+      <Route path="/s/:slug/login" component={SymposiumLoginPage} />
       <Route path="/s/:slug" component={SymposiumLandingPage} />
 
       <Route path="/">
@@ -150,13 +155,12 @@ function Router() {
           // mustChangePassword -> /force-password-change (never bypassed).
           <Redirect to={getPostLoginPath(user)} />
         ) : (
-          // Phase 2: bare "/" is a public symposium directory (see
-          // symposium-directory.tsx for the decision rationale).
-          <SymposiumDirectoryPage />
+          // Bare "/" is the platform (ultimate-admin) login — generic
+          // BootFete chrome, no symposium or college identity.
+          <UltimateLoginPage />
         )}
       </Route>
 
-      <Route path="/register" component={ParticipantRegisterPage} />
       <Route path="/register/:slug" component={PublicRegistrationFormPage} />
       <Route path="/register/event/:eventId" component={EventRegistrationPage} />
       <Route path="/admin/tests">
@@ -344,7 +348,15 @@ function App() {
   const [location] = useLocation();
   // Phase 1 prep for exam isolation (Phase 3): the global identity bar is
   // hidden on the active exam route. Exam component internals untouched.
-  const hideChrome = location.startsWith('/participant/test/');
+  // Login surfaces also hide it: the platform login ("/") must show no
+  // tenant identity at all, and a symposium login shows only its own brand
+  // inside the card — never the default symposium's brand from the header.
+  const isSymposiumLogin = /^\/s\/[^/]+\/login\/?$/.test(location);
+  const hideChrome =
+    location.startsWith('/participant/test/') ||
+    location === '/' ||
+    location === '/login' ||
+    isSymposiumLogin;
 
   return (
     <QueryClientProvider client={queryClient}>

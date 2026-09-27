@@ -172,13 +172,13 @@ export default function SymposiumLandingPage() {
           </p>
           <div className="flex flex-col sm:flex-row items-center justify-center gap-4 pt-2">
             <Button asChild size="lg" variant="secondary">
-              <Link href="/register">
+              <a href="#events">
                 <UserPlus className="h-4 w-4 mr-2" aria-hidden="true" />
                 Register as participant
-              </Link>
+              </a>
             </Button>
             <Button asChild size="lg" variant="outline" className="bg-transparent text-white border-slate-600 hover:bg-slate-800">
-              <Link href="/login">
+              <Link href={`/s/${slug}/login`}>
                 <LogIn className="h-4 w-4 mr-2" aria-hidden="true" />
                 Organizer sign in
               </Link>
@@ -188,7 +188,7 @@ export default function SymposiumLandingPage() {
       </section>
 
       {/* Events — this symposium's active events only */}
-      <section className="mx-auto max-w-5xl px-4 py-12">
+      <section id="events" className="mx-auto max-w-5xl px-4 py-12">
         <h2 className="text-2xl font-bold mb-6">Open events</h2>
         {events.length === 0 ? (
           <Card>

@@ -1,18 +1,38 @@
+// Shared login card used by both login surfaces:
+//   - "/" — the platform (ultimate-admin) login: generic BootFete chrome,
+//     no symposium/college identity anywhere.
+//   - "/s/:slug/login" — the per-symposium login: that symposium's logo,
+//     event name and college name.
+//
+// Authentication itself is identical on both (global username+password);
+// only the branding differs. There is no self-registration link: participants
+// are registered through the super_admin's custom registration forms and
+// receive their credentials by email after fee confirmation.
 import { useState, useEffect } from 'react';
 import { useAuth, getPostLoginPath } from '@/lib/auth';
-import { useLocation, Link } from 'wouter';
+import { useLocation } from 'wouter';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { useToast } from '@/hooks/use-toast';
-import { useBranding } from '@/lib/branding';
 import { errorToast, infoToast, successToast } from '@/lib/toast';
 import { Eye, EyeOff, AlertCircle, GraduationCap } from 'lucide-react';
 
-export default function Login() {
-  // Phase B: login chrome follows live branding.
-  const branding = useBranding();
+export interface LoginCardBranding {
+  appName: string;
+  organizerName?: string | null;
+  logoUrl?: string | null;
+  accentColor?: string;
+}
+
+interface LoginCardProps {
+  branding: LoginCardBranding;
+  description: string;
+  documentTitle: string;
+}
+
+export default function LoginCard({ branding, description, documentTitle }: LoginCardProps) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -22,6 +42,10 @@ export default function Login() {
   const { login, user } = useAuth();
   const { toast } = useToast();
   const [location, setLocation] = useLocation();
+
+  useEffect(() => {
+    document.title = documentTitle;
+  }, [documentTitle]);
 
   // Post-login routing lives here and ONLY here. This effect fires after
   // `user` has landed in AuthProvider state (never on the stale null), so
@@ -51,7 +75,7 @@ export default function Login() {
     setIsLoading(true);
     try {
       await login(username, password);
-            successToast(
+      successToast(
         toast,
         'Login successful',
         'Welcome back!',
@@ -83,18 +107,35 @@ export default function Login() {
     return hasError ? 'border-destructive focus-visible:ring-destructive' : undefined;
   }
 
+  const accent = branding.accentColor || '#4F46E5';
+
   return (
     <div className="min-h-screen flex items-center justify-center bg-slate-50 px-4 py-12">
       <Card className="w-full max-w-md">
         <CardHeader className="space-y-2">
           <div className="flex flex-col items-center text-center space-y-2" data-testid="heading-login">
-            <div className="h-12 w-12 rounded-xl bg-indigo-600 flex items-center justify-center" aria-hidden="true">
-              <GraduationCap className="h-6 w-6 text-white" />
-            </div>
+            {branding.logoUrl ? (
+              <img
+                src={branding.logoUrl}
+                alt={`${branding.appName} logo`}
+                className="h-12 w-12 rounded-xl object-contain"
+              />
+            ) : (
+              <div
+                className="h-12 w-12 rounded-xl flex items-center justify-center"
+                style={{ backgroundColor: accent }}
+                aria-hidden="true"
+              >
+                <GraduationCap className="h-6 w-6 text-white" />
+              </div>
+            )}
             <CardTitle className="text-2xl font-bold tracking-tight text-slate-950">
               {branding.appName}
             </CardTitle>
-            <CardDescription>Staff login — sign in to access your dashboard</CardDescription>
+            {branding.organizerName && (
+              <p className="text-sm font-medium text-slate-600">{branding.organizerName}</p>
+            )}
+            <CardDescription>{description}</CardDescription>
           </div>
         </CardHeader>
         <CardContent>
@@ -174,12 +215,6 @@ export default function Login() {
               {isLoading ? 'Signing in...' : 'Sign In'}
             </Button>
           </form>
-          <p className="mt-6 text-center text-sm text-slate-600">
-            New to {branding.appName}?{' '}
-            <Link href="/register" className="font-medium text-indigo-600 hover:text-indigo-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 rounded-sm">
-              Register as a participant
-            </Link>
-          </p>
         </CardContent>
       </Card>
     </div>

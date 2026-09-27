@@ -913,7 +913,7 @@ export default function TakeTestPage() {
               </CardDescription>
             </CardHeader>
             <CardContent className="text-center">
-              <Button onClick={() => setLocation('/login')} data-testid="button-relogin">
+              <Button onClick={() => setLocation('/')} data-testid="button-relogin">
                 Log in again to resume
               </Button>
             </CardContent>

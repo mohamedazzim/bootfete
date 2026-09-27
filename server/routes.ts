@@ -802,7 +802,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/ultimate-admin/symposiums", requireAuth, requireUltimateAdmin, async (req: AuthRequest, res: Response) => {
     try {
       const { name, organizerName, logoUrl, primaryColor, supportEmail, footerText,
-              superAdminUsername, superAdminEmail, superAdminFullName } = req.body ?? {}
+              superAdminUsername, superAdminEmail, superAdminFullName, superAdminPassword } = req.body ?? {}
       if (typeof name !== "string" || !name.trim() || name.trim().length > 80) {
         return res.status(400).json({ message: "name is required (1-80 characters)" })
       }
@@ -837,6 +837,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (typeof superAdminFullName !== "string" || superAdminFullName.trim().length < 2) {
         return res.status(400).json({ message: "superAdminFullName is required" })
       }
+      // The ultimate admin sets the super_admin's initial password at creation
+      // time (they hand the id + password to the college contact directly).
+      // Only the bcrypt hash is stored; mustChangePassword forces a change
+      // on first login.
+      if (typeof superAdminPassword !== "string" || superAdminPassword.length < 8 || superAdminPassword.length > 128) {
+        return res.status(400).json({ message: "superAdminPassword is required (8-128 characters)" })
+      }
       if (await storage.getUserByUsername(superAdminUsername)) {
         return res.status(400).json({ message: "Username already exists" })
       }
@@ -853,11 +860,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         slug = `${baseSlug}-${suffix++}`
       }
 
-      // CREDENTIAL SAFETY: random 16-char password from crypto.randomBytes.
-      // Returned ONCE in this response; only the bcrypt hash is stored.
-      // Never logged, never stored in plaintext.
-      const tempPassword = generateSecurePassword()
-      const passwordHash = await bcrypt.hash(tempPassword, 10)
+      // The initial password is chosen by the ultimate admin at creation.
+      // Only the bcrypt hash is stored. Never logged, never returned.
+      const passwordHash = await bcrypt.hash(superAdminPassword, 10)
 
       // ATOMIC: symposium + super_admin in one transaction. No orphaned
       // symposium without an admin, no admin pointing at a rolled-back row.
@@ -890,8 +895,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(201).json({
         symposium,
         superAdmin: safeAdmin,
-        // ONE-TIME: show this to the creator now; it will never be shown again.
-        tempPassword,
       })
     } catch (error) {
       console.error("Create symposium error:", error)

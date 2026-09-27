@@ -67,7 +67,7 @@ export default function UltimateAdminBrandingSettings() {
 
   useEffect(() => {
     if (!isLoading && user?.role !== 'ultimate_admin') {
-      setLocation('/login');
+      setLocation('/');
     }
   }, [user, isLoading, setLocation]);
 

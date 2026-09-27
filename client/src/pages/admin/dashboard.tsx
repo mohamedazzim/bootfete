@@ -114,7 +114,7 @@ export default function AdminDashboard() {
 
   useEffect(() => {
     if (!isLoading && (!user || !hasSuperAdminAccess(user.role))) {
-      setLocation('/login');
+      setLocation('/');
     }
   }, [user, isLoading, setLocation]);
 
