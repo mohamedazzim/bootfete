@@ -128,12 +128,6 @@ Then run:
 npm run seed
 ```
 
-#### Method 3: From Replit
-Simply run in the Shell:
-```bash
-tsx server/seed.ts
-```
-
 ### Test Credentials After Seeding
 
 ```

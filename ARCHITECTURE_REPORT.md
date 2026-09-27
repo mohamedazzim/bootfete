@@ -144,7 +144,6 @@ bootfete/
 ├── .env                          # Environment secrets (not committed; ignored? see §17)
 ├── .gitignore
 ├── .nycrc.json                   # Coverage config
-├── .replit                       # Replit config (CONTAINS SECRETS)
 ├── DEPLOYMENT_GUIDE.md
 ├── PAGES_AND_FUNCTIONALITIES_AUDIT.md
 ├── PAGES_FUNCTIONALITIES_AUDIT.md
@@ -160,7 +159,6 @@ bootfete/
 ├── package-lock.json
 ├── playwright.config.ts
 ├── postcss.config.js
-├── replit.md                     # Project overview/status notes
 ├── tailwind.config.ts
 ├── tsconfig.json
 ├── vercel.json                   # Vercel config (deprecated vs nginx/PM2)
@@ -175,7 +173,7 @@ Determined from `package.json`, `tsconfig.json`, `vite.config.ts`, `drizzle.conf
 
 **Languages / runtime**
 - TypeScript (strict mode, ESM, `"type": "module"`)
-- Node.js 20 (per `.replit` `nodejs-20` module and `@types/node@^20`)
+- Node.js 20 (per `@types/node@^20`)
 
 **Frontend**
 - React 18.3
@@ -227,7 +225,6 @@ Determined from `package.json`, `tsconfig.json`, `vite.config.ts`, `drizzle.conf
 **Deployment / process**
 - PM2 (`ecosystem.config.cjs`, cluster mode)
 - Nginx (`deployment/nginx/sympodupli`)
-- Replit (`autoscale` target)
 - Vercel (`vercel.json`, though WebSocket support is flagged as limited)
 
 ---
@@ -736,8 +733,6 @@ Failure behavior:
 
 From `.env`: `APP_URL`, `DATABASE_URL`, `JWT_SECRET`, `NODE_ENV`, `PGDATABASE`, `PGHOST`, `PGPASSWORD`, `PGPORT`, `PGUSER`, `PORT`, `REDIS_HOST`, `REDIS_PASSWORD`, `REDIS_PORT`, `SMTP_FROM_EMAIL`, `SMTP_HOST`, `SMTP_PASS`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`.
 
-From `.replit`: additionally `RESEND_FROM_EMAIL`, plus a duplicate database/`PG*` set.
-
 Referenced in code but not present in `.env` (optional/unset): `INSTANCE_ID`, `DISABLE_REDIS`, `SESSION_SECRET`, `GOOGLE_SERVICE_ACCOUNT_EMAIL`, `GOOGLE_PRIVATE_KEY` (Google Sheets sync is documented but **not implemented**).
 
 **Development** → `npm run dev` → `cross-env NODE_ENV=development tsx server/index.ts` (Vite HMR middleware, port 5000).
@@ -746,17 +741,16 @@ Referenced in code but not present in `.env` (optional/unset): `INSTANCE_ID`, `D
 
 **Test** → `NODE_ENV=test`, Redis disabled via `redisClient.ts` guard.
 
-**Config files**: `tsconfig.json`, `vite.config.ts`, `tailwind.config.ts`, `postcss.config.js`, `components.json`, `drizzle.config.ts`, `jest.config.js`, `playwright.config.ts`, `.nycrc.json`, `vercel.json`, `ecosystem.config.cjs`, `.replit`, `deployment/nginx/sympodupli`.
+**Config files**: `tsconfig.json`, `vite.config.ts`, `tailwind.config.ts`, `postcss.config.js`, `components.json`, `drizzle.config.ts`, `jest.config.js`, `playwright.config.ts`, `.nycrc.json`, `vercel.json`, `ecosystem.config.cjs`, `deployment/nginx/sympodupli`.
 
 ---
 
 ## 14. Deployment Architecture
 
-There are **three deployment descriptions** in the repo, with some inconsistency:
+There are **two deployment descriptions** in the repo, with some inconsistency (Replit support was removed 2026-09-27):
 
-1. **Replit (autoscale)** — `.replit`: `build = npm run build`, `run = npm run start`, port 5000, nodejs-20 + postgresql-16 modules.
-2. **PM2 + Nginx (college server)** — `ecosystem.config.cjs` runs 2 cluster instances on port 3000; Nginx config (`deployment/nginx/sympodupli`) upstreams to `127.0.0.1:3001/3002/3003` (note: **mismatch** — PM2 config uses port 3000, nginx upstreams to 3001–3003).
-3. **Vercel** — `vercel.json` builds `@vercel/node` and routes `/api`, `/socket.io`, and `/(.*)` to `/dist/index.js`; docs note WebSocket support is limited on Vercel.
+1. **PM2 + Nginx (college server)** — `ecosystem.config.cjs` runs 2 cluster instances on port 3000; Nginx config (`deployment/nginx/sympodupli`) upstreams to `127.0.0.1:3001/3002/3003` (note: **mismatch** — PM2 config uses port 3000, nginx upstreams to 3001–3003).
+2. **Vercel** — `vercel.json` builds `@vercel/node` and routes `/api`, `/socket.io`, and `/(.*)` to `/dist/index.js`; docs note WebSocket support is limited on Vercel.
 
 Production flow (college server):
 ```
@@ -821,7 +815,6 @@ Utility/migration scripts (not wired into npm scripts): `server/run-migration.ts
 - `README.md` and `docs/*` are generally accurate on the high-level feature set, roles, and tech stack.
 - `README.md` describes a `participants` table with a JSON `selected_events` array and an "old form-based registration"; the actual current schema uses the `registrations` + `team_members` + `participant_registry` + `event_credentials` design. Some README schema/relationship prose is therefore **outdated**.
 - `docs/DATABASE_STRUCTURE.md` describes `testAttempts` columns (`score`, `totalQuestions`, `correctAnswers`, `timeTaken`, `violationCount`, `violationDetails`) and `registrationForms` columns (`eventId`, `formName`, `slug`, `maxRegistrations`) that **do not match** the current `shared/schema.ts` columns. This file is **outdated** relative to the real schema.
-- `replit.md` references `attached_assets/` and Google Sheets sync; `attached_assets/` does not exist and Google Sheets integration is documented as "not yet configured."
 - `DEPLOYMENT_GUIDE.md` and `SETUP.md` describe seed data (event admins, committees, sample events) that `server/seed.ts` no longer creates — the seed now creates **only** a superadmin.
 - `server/config/resend.config.ts` is deprecated (empty), while `README`/docs imply Resend/SMTP config elsewhere.
 
@@ -832,7 +825,7 @@ Utility/migration scripts (not wired into npm scripts): `server/run-migration.ts
 1. **Hardcoded secrets in source** (high severity):
    - Brevo API key embedded in `server/services/emailService.ts` and `scripts/test-brevo.ts`.
    - Resend API key embedded in `server/services/emailService.ts`.
-   - Full Neon `DATABASE_URL` and `PGPASSWORD` present in `.replit` (and `.env`).
+   - Full Neon `DATABASE_URL` and `PGPASSWORD` were committed in `.replit` (file deleted 2026-09-27 — **rotate these credentials, they remain in git history**) and `.env`.
    These are committed/working-tree files and should be rotated/moved to environment variables.
 
 2. **`.env` is tracked by git** — contains `DATABASE_URL`, `JWT_SECRET`, `PG*`, Redis and SMTP credentials.
@@ -858,7 +851,7 @@ Utility/migration scripts (not wired into npm scripts): `server/run-migration.ts
 ## 20. Unknowns / Things That Could Not Be Determined
 
 - Actual runtime values of secrets (intentionally not read).
-- Whether the production environment currently uses Replit, Vercel, or the college-server (PM2+Nginx) deployment; all three configs exist.
+- Whether the production environment currently uses Vercel or the college-server (PM2+Nginx) deployment; both configs exist. (Replit support was removed 2026-09-27.)
 - The exact live database state/row data — only the schema and seed script were inspected.
 - Whether `passport`, `nodemailer`, `sib-api-v3-sdk`, and `@types/socket.io` (declared deps) are used anywhere beyond declarations — grep evidence suggests they are **not** used by active code, but this was not exhaustively proven across every file.
 - Whether untracked files (`scripts/*`, new pages, `uploads/`) are intended production artifacts or in-progress work.
@@ -899,11 +892,11 @@ Test submission flow
 
 ## 22. Recommended Next Investigation Steps
 
-1. **Secret rotation & removal** — rotate Brevo/Resend/Neon/JWT/Redis/SMTP credentials; remove them from `.replit`, `.env` (if tracked), `emailService.ts`, and `scripts/test-brevo.ts`; add `.env` to `.gitignore`.
+1. **Secret rotation & removal** — rotate Brevo/Resend/Neon/JWT/Redis/SMTP credentials (`.replit` was deleted 2026-09-27 but its secrets persist in git history); remove them from `.env` (if tracked), `emailService.ts`, and `scripts/test-brevo.ts`; add `.env` to `.gitignore`.
 2. **Resolve PM2/Nginx port mismatch** and confirm the actual production process/port topology.
 3. **Reconcile documentation** — update `docs/DATABASE_STRUCTURE.md` and `README.md` schema sections to match `shared/schema.ts`; update seed documentation to reflect superadmin-only seed.
 4. **Split `server/routes.ts`** into domain routers/controllers to reduce the 7,990-line monolith.
 5. **Decide legacy credential migration** — remove or migrate plaintext `event_credentials.event_password` values to bcrypt.
 6. **Fix duplicate route definition** (`POST /api/upload/question-image`).
 7. **Audit the public event detail fetch** for the unauthenticated registration page.
-8. **Decide the deployment target** (Replit vs Vercel vs college server) and align configs/docs accordingly.
+8. **Decide the deployment target** (Vercel vs college server) and align configs/docs accordingly. (Replit was removed 2026-09-27.)

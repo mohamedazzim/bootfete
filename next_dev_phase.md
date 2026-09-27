@@ -19,7 +19,7 @@
       git history on GitHub (`.env` was tracked before it was untracked in `dc24448`).
 - [ ] **Set a real JWT secret** — `.env` still uses the placeholder
       `your-super-secret-jwt-key-change-in-production`. Use a 64-hex random value.
-- [ ] **Scrub `.replit`** — may still contain plaintext Neon DB credentials while tracked.
+- [x] **Scrub `.replit`** — done 2026-09-27: `.replit`, `replit.md`, `SETUP.md` deleted; Replit Vite plugins and npm deps removed. Rotate any credentials that were in `.replit` — they remain in git history.
 
 ## 3. Listed-but-unfixed findings (from the persona-wise audit)
 
