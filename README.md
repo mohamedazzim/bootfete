@@ -1,863 +1,270 @@
-# BootFete 2K26 - Symposium Management System
-
-A comprehensive React-based web application for managing symposium events with role-based access control, proctored online testing, real-time updates, and advanced reporting capabilities.
-
-## 📋 Table of Contents
-
-- [Overview](#overview)
-- [Features](#features)
-- [Tech Stack](#tech-stack)
-- [User Roles](#user-roles)
-- [Installation](#installation)
-- [Usage](#usage)
-- [WebSocket Real-Time Communication](#websocket-real-time-communication)
-- [Testing](#testing)
-- [Database Schema](#database-schema)
-- [API Documentation](#api-documentation)
-- [Deployment](#deployment)
-
-## 🎯 Overview
-
-The Symposium Management System is designed to streamline the entire lifecycle of symposium events, from registration to results publication. It provides a robust, secure, and user-friendly platform for organizing and conducting online assessments with strict integrity measures.
-
-**Business Vision:** Deliver a comprehensive solution for online event management and assessment, tapping into the growing market for virtual and hybrid events.
-
-## ✨ Features
-
-### 🔐 Authentication & Authorization
-- **JWT-based Authentication** with bcrypt password hashing
-- **Role-Based Access Control (RBAC)** for 4 user types
-- **Universal Login System** supporting event-specific participant credentials and admin accounts
-- **Secure Session Management** with token-based authentication
-
-### 🎓 Event Management
-- **Complete Event Lifecycle Management**
-  - Create, read, update, delete (CRUD) operations
-  - Event categories: Technical and Non-Technical
-  - Event types: Quiz, Coding, General, etc.
-  - Status tracking: Draft, Active, Completed
-  - Date range management with validation
-- **Event Rules Configuration**
-  - Customizable proctoring settings per event
-  - Round-level and event-level rule inheritance
-
-### 🔄 Round Management
-- **3-State Lifecycle**: Not Started → In Progress → Completed
-- **Admin-Controlled Test Flow**
-  - Start/Stop rounds manually
-  - Restart rounds when needed
-  - Real-time status synchronization via WebSocket
-- **Live Countdown Timers** for active rounds
-- **Round-Specific Configuration**
-  - Duration settings
-  - Question allocation
-  - Proctoring rules
-
-### ❓ Question Management
-- **Multiple Question Types**
-  - Multiple Choice Questions (MCQ)
-  - True/False
-  - Short Answer
-  - Coding Questions
-- **Bulk Upload Support**
-  - CSV format import
-  - JSON format import
-  - Validation and error reporting
-- **Question Bank Management**
-  - Categorization by rounds
-  - Difficulty levels
-  - Point allocation
-
-### 🛡️ Proctored Online Testing
-- **Zero-Tolerance Browser Controls**
-  - Fullscreen enforcement (cannot exit fullscreen)
-  - Tab switch detection and blocking
-  - Page refresh prevention
-  - Browser back button disabled
-  - Keyboard shortcut disabling (Ctrl+C, Ctrl+V, etc.)
-  - Right-click context menu disabled
-- **Violation Tracking**
-  - Real-time violation logging
-  - Configurable violation thresholds
-  - Auto-submission on rule violations
-- **Test Security**
-  - One attempt per participant per round
-  - Answer auto-save functionality
-  - Secure test environment
-  - Session monitoring
-
-### 👥 Participant Management
-- **Registration System**
-  - Public registration forms with custom slugs
-  - On-spot registration by Registration Committee
-  - Event selection with rules:
-    - Maximum 1 technical event
-    - Maximum 2 non-technical events
-    - Time overlap validation
-- **Human-Readable Credentials**
-  - Format: `eventname-firstname-001` (username)
-  - Format: `shortname001` (password)
-  - Per-event incremental counters
-  - Automatic credential generation
-- **Credential Management**
-  - Export credentials as CSV
-  - Export credentials as PDF
-  - Email notifications with credentials
-  - Retry logic for failed emails
-- **Test Access Control**
-  - Enable/disable test access per participant
-  - Bulk access management
-  - Real-time status updates
-
-### 📊 Reporting & Analytics
-- **Comprehensive Report Generation**
-  - Event-wise reports
-  - Symposium-wide reports
-  - Multiple export formats: JSON, Excel, PDF
-- **Report Contents**
-  - Participant performance metrics
-  - Question-wise analysis
-  - Leaderboard data
-  - Violation logs
-  - Time tracking
-- **Super Admin Override Reports**
-  - All override actions tracked
-  - Before/after change comparison
-  - Audit trail with timestamps
-  - IP address logging
-
-### 🏆 Leaderboard System
-- **Real-Time Leaderboards**
-  - Round-specific leaderboards
-  - Event-specific leaderboards
-  - Live rank updates
-- **Visual Podium Display**
-  - Top 3 positions highlighted
-  - Medal indicators (Gold, Silver, Bronze)
-  - Animated transitions
-- **Ranking Criteria**
-  - Total score
-  - Time taken (tiebreaker)
-  - Completion status
-  - Time taken (tiebreaker)
-
-### ⚖️ Load Balancing & High Availability
-- **Multi-Server Architecture**
-  - Nginx Load Balancer distributing traffic
-  - PM2 Process Manager running 3 concurrent instances
-  - Stateless application design
-- **Redis-Backed State Management**
-  - Distributed Session Store (connect-redis)
-  - Synchronized WebSocket Broadcasting (Redis Adapter)
-  - Shared Cache and Message Queues
-
-### 📈 Monitoring & Observability
-- **Structured Logging**
-  - JSON-formatted logs with Winston
-  - Daily log rotation
-  - Unique `Correlation-ID` for request tracing
-- **Real-Time Metrics (Prometheus)**
-  - HTTP Request Duration & Throughput
-  - Database Query Performance
-  - Cache Hit/Miss Rates
-  - Active Session Counts
-  - Email Queue Depth
-- **Proactive Alerting**
-  - Automated checks every minute
-  - Alerts for High Latency, Error Rates, and Queue Backlogs
-  - Admin Dashboard for System Status
-
-### 📧 Email Notification System
-- **Automated Emails**
-  - Registration confirmation
-  - Credential delivery
-  - Test reminders
-  - Result notifications
-- **Email Features**
-  - SMTP configuration support
-  - Retry logic for failed sends
-  - Comprehensive email logs
-  - Status tracking (pending, sent, failed)
-- **Email Log Management**
-  - Search by recipient
-  - Filter by status
-  - View email content
-  - Retry failed emails
-
-### 🔧 Super Admin Override Capabilities
-- **Event Overrides**
-  - Modify any event parameter
-  - Change event status
-  - Update dates and settings
-- **Question Overrides**
-  - Edit questions across all events
-  - Modify correct answers
-  - Update point values
-- **Round Overrides**
-  - Force start/stop rounds
-  - Reset round status
-  - Modify round settings
-- **Audit Logging**
-  - All actions logged with:
-    - Admin ID and username
-    - Action type and target
-    - Before/after values (JSONB)
-    - Reason for override
-    - Timestamp and IP address
-  - Searchable audit trail
-  - Export audit logs
-
-### 🔴 Real-Time WebSocket Communication
-- **Production-Ready Socket.io Implementation**
-  - JWT authentication for WebSocket connections
-  - Single connection per client via centralized context
-  - Authentication-aware lifecycle (auto-connect/disconnect)
-  - Automatic reconnection with exponential backoff
-- **RBAC-Filtered Event Broadcasting**
-  - `registrationUpdate`: Super Admin, Event Admin, Registration Committee
-  - `roundStatus`: Super Admin, Event Admin, Event Participants
-  - `overrideAction`: Super Admin only
-  - `resultPublished`: Specific participant only
-- **Real-Time Updates**
-  - New registrations
-  - Round status changes
-  - Admin override actions
-  - Results publication
-  - Live connection status badge
-- **Stress Tested & Validated**
-  - 200+ concurrent connections validated
-  - <1.5s average latency
-  - 100% message delivery rate
-  - 0 duplicates, 0 zombie connections
-  - See `docs/websocket-validation-report.md` for details
-
-### 👮 Registration Committee Portal
-- **Registration Management Dashboard**
-  - View all registrations
-  - Search and filter capabilities
-  - Approval workflow
-- **On-Spot Registration**
-  - Quick participant registration
-  - Instant credential generation
-  - Immediate email delivery
-  - Multiple registration formats
-- **Credential Export**
-  - Bulk export to CSV
-  - Bulk export to PDF
-  - Print-ready formats
-  - QR code generation (optional)
-
-## 🏗️ Tech Stack
-
-### Frontend
-- **Framework:** React 18 with Vite
-- **Routing:** Wouter (lightweight React router)
-- **State Management:** TanStack Query v5 (React Query)
-- **Styling:** Tailwind CSS
-- **UI Components:** shadcn/ui (Radix UI primitives)
-- **Forms:** React Hook Form with Zod validation
-- **Icons:** Lucide React, React Icons
-- **Animations:** Framer Motion
-- **Real-time:** Socket.io Client
-
-### Backend
-- **Runtime:** Node.js with TypeScript
-- **Framework:** Express.js
-- **Database:** PostgreSQL (Neon for Replit)
-- **ORM:** Drizzle ORM
-- **Authentication:** JSON Web Tokens (JWT)
-- **Password Hashing:** bcrypt
-- **Validation:** Zod schemas
-- **File Generation:**
-  - PDFKit (PDF reports)
-  - ExcelJS (Excel reports)
-- **Email:** Nodemailer (SMTP)
-- **Real-time:** Socket.io Server
-
-### Infrastructure
-- **Development:** Vite Dev Server
-- **Build Tool:** Vite
-- **Package Manager:** npm
-- **Database Migrations:** Drizzle Kit
-- **Load Balancer:** Nginx
-- **Process Manager:** PM2
-- **State Store:** Redis
-- **Monitoring:** Prometheus, Winston
-
-## 👤 User Roles
-
-### 1. Super Admin
-**Full system control with override capabilities**
-
-**Capabilities:**
-- ✅ Manage all events (create, edit, delete, override)
-- ✅ Create and assign Event Admins
-- ✅ Create Registration Committee members
-- ✅ Manage registration forms
-- ✅ View all registrations
-- ✅ Generate symposium-wide and event-specific reports
-- ✅ Override any event, question, or round
-- ✅ View comprehensive audit logs
-- ✅ View email logs and retry failed emails
-- ✅ Access all system features
-- ✅ Receive all WebSocket notifications
-
-**Pages:**
-- Dashboard with system overview
-- Events management
-- Event Admin assignment
-- Registration forms
-- Registration Committee management
-- All registrations view
-- Report generation
-- Email logs
-- Super Admin overrides & audit logs
-
-### 2. Event Admin
-**Manages a single assigned event**
-
-**Capabilities:**
-- ✅ View assigned event details
-- ✅ Configure event and round proctoring rules
-- ✅ Manage rounds (create, edit, start, stop, restart)
-- ✅ Manage questions (create, edit, bulk upload)
-- ✅ View event participants
-- ✅ Control test access for participants
-- ✅ Monitor live test sessions
-- ✅ View round and event leaderboards
-- ✅ Receive event-specific WebSocket notifications
-
-**Pages:**
-- Single-event focused dashboard
-- Event details and settings
-- Event rules configuration
-- Rounds management
-- Round rules configuration
-- Questions management
-- Bulk question upload
-- Participants view
-
-### 3. Participant
-**Takes tests and views results**
-
-**Capabilities:**
-- ✅ View assigned event details
-- ✅ Access available tests (when enabled)
-- ✅ Take proctored tests with strict controls
-- ✅ View test results and scores
-- ✅ Access round and event leaderboards
-- ✅ View test history
-- ✅ Receive result notifications via WebSocket
-
-**Pages:**
-- Participant dashboard
-- Browse events
-- Event details
-- Take test (proctored environment)
-- Test results
-- My tests history
-- Round leaderboard
-- Event leaderboard
-
-### 4. Registration Committee
-**Manages participant registrations**
-
-**Capabilities:**
-- ✅ View all registrations
-- ✅ Approve/reject registrations
-- ✅ On-spot participant registration
-- ✅ Generate and export credentials (CSV, PDF)
-- ✅ Send credential emails
-- ✅ Receive registration notifications via WebSocket
-
-**Pages:**
-- Registration dashboard
-- View all registrations
-- On-spot registration form
-- Credential management
-
-## 🚀 Installation
-
-### Prerequisites
-- Node.js 20+ (or use Replit)
-- PostgreSQL database
-- SMTP credentials (for email notifications)
-
-### Environment Variables
-
-Create a `.env` file with the following:
-
-```bash
-# Database (Replit provides these automatically)
-DATABASE_URL=postgresql://user:password@host:port/database
-PGHOST=your-postgres-host
-PGPORT=5432
-PGUSER=your-postgres-user
-PGPASSWORD=your-postgres-password
-PGDATABASE=your-database-name
-
-# Authentication
-JWT_SECRET=your-super-secret-jwt-key-change-in-production
-
-# Email (Optional - for email notifications)
-SMTP_HOST=smtp.gmail.com
-SMTP_PORT=587
-SMTP_USER=your-email@gmail.com
-SMTP_PASS=your-app-password
-SMTP_FROM=BootFete 2K26 <noreply@bootfeet.com>
-```
-
-### Installation Steps
-
-1. **Clone the repository**
-```bash
-git clone <repository-url>
-cd symposium-management-system
-```
-
-2. **Install dependencies**
-```bash
-npm install
-```
-
-3. **Setup database**
-```bash
-# Push schema to database
-npm run db:push
-```
-
-4. **Start development server**
-```bash
-npm run dev
-```
-
-5. **Access the application**
-```
-http://localhost:5000
-```
-
-### First-Time Setup
-
-1. **Create Super Admin** (via database or registration)
-2. **Login as Super Admin**
-3. **Create Events**
-4. **Assign Event Admins**
-5. **Create Registration Forms**
-6. **Set up Registration Committee**
-
-## 📖 Usage
-
-### For Super Admin
-
-1. **Login** with super admin credentials
-2. **Create Events** from the Events page
-3. **Assign Event Admins** to manage specific events
-4. **Create Registration Forms** with custom slugs
-5. **Monitor Registrations** and approve participants
-6. **Generate Reports** for events or entire symposium
-7. **Use Override Capabilities** when needed (with audit trail)
-
-### For Event Admin
-
-1. **Login** with event admin credentials
-2. **View Your Assigned Event** on the dashboard
-3. **Configure Event Rules** (proctoring settings)
-4. **Create Rounds** with duration and settings
-5. **Add Questions** individually or via bulk upload
-6. **Start Round** when participants are ready
-7. **Monitor Live Tests** and participant progress
-8. **Stop Round** when time expires
-9. **View Leaderboards** and results
-
-### For Participants
-
-1. **Register** via public registration form
-2. **Receive Credentials** via email
-3. **Login** with provided credentials
-4. **Wait for Test Access** to be enabled
-5. **Take Test** in proctored environment
-   - Enter fullscreen mode
-   - Do not switch tabs or refresh
-   - Submit before time expires
-6. **View Results** when published
-7. **Check Leaderboard** to see rankings
-
-### For Registration Committee
-
-1. **Login** with registration committee credentials
-2. **View All Registrations** on dashboard
-3. **Approve/Reject** pending registrations
-4. **On-Spot Registration**:
-   - Enter participant details
-   - Select events (with validation)
-   - Auto-generate credentials
-   - Send credentials via email
-5. **Export Credentials** in CSV/PDF format
-
-## 🔴 WebSocket Real-Time Communication
-
-### Connection Management
-
-The application uses Socket.io for real-time bidirectional communication:
-
-```typescript
-// Frontend - Automatic connection on login
-import { useWebSocket } from '@/contexts/WebSocketContext';
-
-function MyComponent() {
-  const { isConnected, socket } = useWebSocket();
-  
-  // Connection status shown as "Live" badge when connected
-  return <Badge>{isConnected ? 'Live' : 'Offline'}</Badge>;
-}
-```
-
-### WebSocket Events
-
-#### 1. `registrationUpdate`
-**Sent to:** Super Admin, Event Admin (for that event), Registration Committee
-
-**Payload:**
-```json
-{
-  "type": "new_registration",
-  "eventId": "event-uuid",
-  "registration": {
-    "id": "registration-uuid",
-    "fullName": "John Doe",
-    "eventName": "Coding Challenge"
-  }
-}
-```
-
-#### 2. `roundStatus`
-**Sent to:** Super Admin, Event Admin (for that event), Participants (of that event)
-
-**Payload:**
-```json
-{
-  "eventId": "event-uuid",
-  "roundId": "round-uuid",
-  "status": "in_progress",
-  "round": {
-    "name": "Round 1",
-    "duration": 60
-  }
-}
-```
-
-#### 3. `overrideAction`
-**Sent to:** Super Admin only
-
-**Payload:**
-```json
-{
-  "action": "event_modified",
-  "targetType": "event",
-  "targetId": "event-uuid",
-  "changes": {
-    "before": { "status": "draft" },
-    "after": { "status": "active" }
-  },
-  "timestamp": "2025-10-03T12:00:00.000Z"
-}
-```
-
-#### 4. `resultPublished`
-**Sent to:** Specific participant only
-
-**Payload:**
-```json
-{
-  "eventId": "event-uuid",
-  "result": {
-    "score": 85,
-    "totalQuestions": 20,
-    "correctAnswers": 17
-  }
-}
-```
-
-### WebSocket Rooms
-
-- `super_admin` - All super admins
-- `event:{eventId}` - Event admins for specific event
-- `participant:{userId}` - Individual participants
-- `registration_committee` - All registration committee members
-
-## 🧪 Testing
-
-### WebSocket Stress Test
-
-The application includes a comprehensive WebSocket stress test suite:
-
-```bash
-# Run WebSocket validation and stress test
-npm run test:websocket
-```
-
-**Test Coverage:**
-- ✅ Authentication lifecycle (connect, disconnect, reconnect)
-- ✅ RBAC filtering for all 4 event types
-- ✅ Stress test with 200+ concurrent connections
-- ✅ Performance metrics (latency, duplicates, zombies)
-- ✅ Message delivery verification
-
-**Test Results:**
-- 6/6 tests passing
-- 200 concurrent connections (100% success)
-- ~1.4s average latency
-- 100% message delivery
-- 0 duplicates, 0 zombies
-
-See `docs/websocket-validation-report.md` for full validation report.
-
-### Manual Testing
-
-**Test User Credentials:**
-```
-Super Admin:
-Username: admin
-Password: admin123
-
-Event Admin:
-Username: eventadmin
-Password: admin123
-
-Participant:
-Username: participant
-Password: user123
-```
-
-## 🗄️ Database Schema
-
-### Core Tables
-
-**users**
-- Authentication and user management
-- Roles: super_admin, event_admin, participant, registration_committee
-
-**events**
-- Event information and configuration
-- Categories: technical, non_technical
-- Status: draft, active, completed
-
-**eventAdmins**
-- Assignment of admins to events
-- One-to-many relationship
-
-**rounds**
-- Test rounds within events
-- Lifecycle: not_started, in_progress, completed
-
-**questions**
-- Question bank linked to rounds
-- Types: mcq, true_false, short_answer, coding
-
-**participants**
-- Participant registrations
-- Event selection and credentials
-
-**testAttempts**
-- Test submissions and scoring
-- Violation tracking
-- Answer storage
-
-**eventRules & roundRules**
-- Proctoring configuration
-- Rule inheritance system
-
-**auditLogs**
-- Super admin override tracking
-- Complete audit trail
-
-**emailLogs**
-- Email delivery tracking
-- Retry management
-
-**registrationForms**
-- Public registration forms
-- Custom slugs
-
-### Relationships
-
-```
-users (1) ─── (N) eventAdmins ─── (1) events
-events (1) ─── (N) rounds ─── (N) questions
-events (1) ─── (N) participants ─── (1) users
-rounds (1) ─── (N) testAttempts ─── (1) participants
-events (1) ─── (1) eventRules
-rounds (1) ─── (1) roundRules
-```
-
-## 📡 API Documentation
-
-### Authentication
-```
-POST /api/auth/login          - Login with username/password
-POST /api/auth/register       - Register new user
-GET  /api/auth/me             - Get current user info
-POST /api/auth/logout         - Logout user
-```
-
-### Events (Super Admin)
-```
-GET    /api/events            - Get all events
-POST   /api/events            - Create event
-GET    /api/events/:id        - Get event details
-PUT    /api/events/:id        - Update event
-DELETE /api/events/:id        - Delete event
-```
-
-### Rounds (Event Admin)
-```
-GET    /api/events/:id/rounds        - Get event rounds
-POST   /api/events/:id/rounds        - Create round
-PUT    /api/rounds/:id               - Update round
-DELETE /api/rounds/:id               - Delete round
-POST   /api/rounds/:id/start         - Start round
-POST   /api/rounds/:id/stop          - Stop round
-POST   /api/rounds/:id/restart       - Restart round
-```
-
-### Questions (Event Admin)
-```
-GET    /api/rounds/:id/questions     - Get round questions
-POST   /api/rounds/:id/questions     - Create question
-PUT    /api/questions/:id            - Update question
-DELETE /api/questions/:id            - Delete question
-POST   /api/rounds/:id/questions/bulk - Bulk upload questions
-```
-
-### Participants
-```
-GET    /api/events/:id/participants  - Get event participants
-POST   /api/participants              - Register participant
-PUT    /api/participants/:id/access  - Toggle test access
-POST   /api/participants/:id/credentials/send - Send credentials email
-GET    /api/participants/my-credential - Get participant's credential
-```
-
-### Tests (Participant)
-```
-GET    /api/rounds/:id/test          - Get test questions
-POST   /api/test-attempts             - Submit test
-GET    /api/test-attempts/:id         - Get test attempt results
-GET    /api/participants/my-tests     - Get participant's test history
-```
-
-### Reports (Super Admin)
-```
-POST   /api/reports/event            - Generate event report
-POST   /api/reports/symposium        - Generate symposium report
-GET    /api/reports                  - Get all reports
-GET    /api/reports/:id/download     - Download report
-```
-
-### Leaderboards
-```
-GET    /api/rounds/:id/leaderboard   - Get round leaderboard
-GET    /api/events/:id/leaderboard   - Get event leaderboard
-```
-
-### Super Admin Overrides
-```
-POST   /api/admin/override/event     - Override event
-POST   /api/admin/override/question  - Override question
-POST   /api/admin/override/round     - Override round
-GET    /api/admin/audit-logs         - Get audit logs
-```
-
-### Email Logs
-```
-GET    /api/email-logs               - Get all email logs
-GET    /api/email-logs/:email        - Get logs by recipient
-GET    /api/email-logs/:email        - Get logs by recipient
-POST   /api/email-logs/:id/retry     - Retry failed email
-
-### System Monitoring
-GET    /health                       - System health status
-GET    /metrics                      - Prometheus metrics
-GET    /api/admin/status             - Cluster status (Super Admin)
-GET    /api/admin/queue-stats        - Queue metrics (Super Admin)
-```
-
-## 🚀 Deployment
-
-### Replit Deployment
-
-1. **Configure Environment Variables** in Replit Secrets
-2. **Set Database URL** (automatically provided by Replit)
-3. **Configure SMTP** settings for email
-4. **Click "Deploy"** button in Replit
-5. **Access via** provided Replit URL
-
-### Manual Deployment
-
-1. **Build the application**
-```bash
-npm run build
-```
-
-2. **Set Production Environment Variables**
-```bash
-export NODE_ENV=production
-export JWT_SECRET=your-production-secret
-export DATABASE_URL=your-production-database-url
-# Add SMTP variables
-```
-
-3. **Run Database Migrations**
-```bash
-npm run db:push
-```
-
-4. **Start Production Server**
-```bash
-npm start
-```
-
-### Environment Checklist
-
-- ✅ `DATABASE_URL` set
-- ✅ `JWT_SECRET` set (strong random value)
-- ✅ `NODE_ENV=production`
-- ✅ SMTP credentials configured (optional)
-- ✅ Database migrations run
-- ✅ Super admin account created
-
-## 📚 Documentation
-
-Additional documentation available:
-
-- **WebSocket System:** `docs/websockets.md`
-- **WebSocket Validation Report:** `docs/websocket-validation-report.md`
-- **Project Overview:** `replit.md`
-
-## 🔒 Security Features
-
-- ✅ JWT-based authentication with bcrypt password hashing
-- ✅ Role-based access control (RBAC) at API level
-- ✅ Input validation using Zod schemas
-- ✅ SQL injection prevention via Drizzle ORM
-- ✅ XSS protection via React's built-in escaping
-- ✅ CSRF protection via same-origin policy
-- ✅ Secure WebSocket authentication
-- ✅ Proctored test environment with strict browser controls
-- ✅ Comprehensive audit logging for admin actions
-- ✅ Violation tracking for test integrity
-
-## 🤝 Contributing
-
-This is a proprietary system built for BootFete 2K26 Symposium.
-
-## 📄 License
-
-Proprietary - All rights reserved
+# 🎓 BootFete — Multi-Tenant Symposium Management Platform
+
+> Run entire college symposiums end-to-end: registrations, proctored online exams, live leaderboards, certificates, and reports — with strict tenant isolation between symposiums.
+
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.x-blue?logo=typescript)](https://www.typescriptlang.org/)
+[![React](https://img.shields.io/badge/React-18-61dafb?logo=react)](https://react.dev/)
+[![Express](https://img.shields.io/badge/Express-4.x-black?logo=express)](https://expressjs.com/)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-336791?logo=postgresql)](https://www.postgresql.org/)
+[![Drizzle ORM](https://img.shields.io/badge/Drizzle-ORM-c5f74f)](https://orm.drizzle.team/)
+[![Socket.IO](https://img.shields.io/badge/Socket.IO-realtime-black?logo=socketdotio)](https://socket.io/)
 
 ---
 
-**Built with ❤️ for BootFete 2K26 Symposium**
+## What this is
 
-For support or inquiries, contact the system administrator.
-"# SympoAzzi" 
+BootFete is a full-stack web platform for running technical symposiums (think college tech-fests). One deployment hosts **multiple independent symposiums** — each with its own branding, events, admins, participants, and data — fully isolated from the others.
+
+**End-to-end flow:**
+
+```
+📢 Public site → 📝 Registration → 👤 Credentials → 🖥️ Proctored exam
+   → 🏆 Live leaderboard → 📜 Certificates → 📊 Reports
+```
+
+- **Ultimate admins** provision symposiums (each gets a scoped super-admin + one-time password).
+- **Super admins** run their symposium: events, event admins, registration committee, forms, reports.
+- **Event admins** own their events: rounds, questions, proctoring rules, live monitoring, evaluation.
+- **Registration committee** handles on-spot registrations and credentials.
+- **Participants** register publicly, take proctored tests, and download certificates.
+
+---
+
+## ✨ Feature highlights
+
+### 🏟️ Multi-tenancy (the core invariant)
+- Every symposium is a tenant: `symposiums` table with slug-based public URLs (`/s/:slug`).
+- **NULL-scope invariant** (migration `006`): scoped roles (`super_admin`, `event_admin`, `registration_committee`) *must* belong to a symposium — enforced by a DB `CHECK` constraint, not just app code. `ultimate_admin` is unscoped by role.
+- Cross-tenant access returns `403` everywhere: APIs, WebSocket rooms, reports, certificates.
+- Event names are unique **per symposium** (`UNIQUE(symposium_id, name)`) — the same name can exist in different symposiums.
+
+### 🖥️ Proctored exam engine
+- Round lifecycle: `not_started → in_progress → completed`, admin-controlled.
+- Question types: multiple-choice, true/false, image MCQ, coding, descriptive.
+- **Proctoring**: fullscreen enforcement, tab-switch/refresh detection, violation logging, configurable strike threshold → auto-disqualification at 3 strikes, with `attempt_disqualification_reset` audit trail.
+- Answer auto-save with a save queue, server-authoritative timers, submit-vs-disqualify race handled transactionally.
+- Evaluation workflow: event admins evaluate submissions → evaluated leaderboards.
+
+### 📝 Registration system
+- Public registration forms with custom slugs, roll-number validation, college/food-preference capture.
+- Team (`solo`/`team`) and event-type (`technical`/`non_technical`) support with selection rules.
+- On-spot registration by the committee, bulk confirm with compare-and-swap safety.
+- Human-readable credential export (CSV/PDF), credential status tracking.
+
+### 🏆 Leaderboards, certificates, reports
+- Real-time round + event leaderboards (Socket.IO), evaluated leaderboards post-evaluation.
+- Dynamic certificates (PNG/PDF) with per-event branding snapshots, rank reconciliation, strict access gates (unpublished → 403, disqualified → 403, cross-owner → 403).
+- Event-wise and symposium-wide reports (JSON/Excel/PDF) with question-wise analysis and violation logs.
+
+### ⚡ Realtime
+- Socket.IO with Redis adapter (multi-instance safe), JWT-authenticated, RBAC-filtered rooms (`super_admin`, `event:{id}`, `participant:{id}`, `registration_committee`).
+- Live round monitor with polling fallback + freshness indicator when sockets drop.
+
+### 🔒 Security
+- JWT auth, bcrypt hashing, forced password change on first login for provisioned accounts.
+- Rate limiting (including IPv6-aware keys and per-user exam limiters), `trust proxy` hardening.
+- Advisory locks for credential generation, transactional grading/disqualification, audit logs for overrides and disqualifications.
+
+---
+
+## 🏗️ Architecture
+
+```
+┌─────────────┐      ┌──────────────────────────────────────────────┐
+│   Client    │      │                    Server                    │
+│ React 18    │◄────►│  Express + TypeScript                        │
+│ Vite        │ HTTP │  ┌──────────┐  ┌───────────┐  ┌───────────┐ │
+│ Tailwind    │  WS  │  │ REST API │  │ Socket.IO │  │ Services  │ │
+│ shadcn/Radix│      │  │ (RBAC +  │  │ (Redis    │  │ email,    │ │
+│ TanStack    │      │  │ tenant   │  │  adapter) │  │ reports,  │ │
+│ Query v5    │      │  │ scoped)  │  │           │  │ certs,    │ │
+│ Wouter      │      │  └──────────┘  └───────────┘  │ branding) │ │
+└─────────────┘      └──────────────┬───────────────────────────┘ │
+                                    │ Drizzle ORM                 │
+                            ┌───────▼────────┐   ┌──────────────┐ │
+                            │  PostgreSQL    │   │    Redis     │ │
+                            │ (Neon / local) │   │ (queue, WS,  │ │
+                            └────────────────┘   │ rate limit)  │ │
+                                                 └──────────────┘ │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+**Code layout:**
+
+| Path | What lives here |
+|---|---|
+| `client/src/pages` | Route pages per role (`admin/`, `event-admin/`, `participant/`, `registration-committee/`, `ultimate-admin/`, `public/`) |
+| `client/src/components` | Shared UI (`AdminSidebar`, `ExamShell`, `StatusBadge`, `ScrollableTable`, `ReportGenerateShell`) |
+| `server/routes.ts` | REST API (tenant-scoped, RBAC-enforced) |
+| `server/middleware/auth.ts` | `requireAuth`, tenant-scope assertions, cache invalidation |
+| `server/services` | `emailService`, `reportingService`, `brandingService`, `queueService`, metrics/monitoring |
+| `server/websocket.ts` | Socket.IO server, room topology |
+| `server/migrations` | `001`–`007` SQL migrations (see below) |
+| `shared/schema.ts` | Drizzle schema — single source of truth |
+| `e2e/` | Exam-flow harness (`exam-flow.mjs`) + runbook |
+
+---
+
+## 👥 Roles & capabilities
+
+| | ultimate_admin | super_admin | event_admin | registration_committee | participant |
+|---|---|---|---|---|---|
+| Provision symposiums | ✅ | — | — | — | — |
+| Manage own symposium (events, admins, forms) | — | ✅ | — | — | — |
+| Manage assigned events (rounds, questions, monitor) | — | ✅ | ✅ (assigned only) | — | — |
+| Registrations / on-spot signup | — | ✅ | — | ✅ | — |
+| Take proctored tests | — | — | — | — | ✅ |
+| Certificates & reports | — | ✅ | ✅ (own events) | — | ✅ (own) |
+| Tenant scope | none (all) | one symposium | assigned events | one symposium | own data |
+
+**Login routing** is deterministic: after auth the client resolves a single routing table (`getPostLoginPath()`) — provisioned accounts land on `/force-password-change` first, then their role dashboard. No login bounce.
+
+---
+
+## 🗄️ Data model (essentials)
+
+```
+symposiums ─┬─ users (scoped roles MUST have symposium_id — CHECK 006)
+            ├─ events (UNIQUE per symposium) ─┬─ rounds ─┬─ questions
+            │                                 │          └─ testAttempts ── answers
+            │                                 └─ eventAdmins, registrations, eventRules
+            └─ registrationForms, reports, certificates, auditLogs, emailLogs
+```
+
+**Migrations** (`server/migrations/`, run in order):
+
+| # | File | What |
+|---|---|---|
+| 001 | `timestamptz_and_constraints` | timestamptz normalization + integrity constraints |
+| 002 | `system_settings` | system settings table |
+| 003 | `global_settings` | global settings / branding defaults |
+| 004 | `event_branding_snapshot` | per-event branding snapshots (checked before live settings, backfilled at migration) |
+| 005 | `symposiums_multitenant` | symposiums table — multi-tenancy foundation |
+| 006 | `nullscope_invariant` | scoped-role `symposium_id` CHECK + per-symposium event-name uniqueness |
+| 007 | `provisioning` | ultimate-admin provisioning flow support |
+
+Fresh installs: `npm run db:push` (schema) → migrations `001`–`007` in order → `npm run db:seed`.
+
+---
+
+## 🚀 Getting started
+
+### Prerequisites
+- Node.js 20+
+- PostgreSQL 14+ (or Neon)
+- Redis (email queue, realtime, rate limiting)
+
+### 1. Configure
+
+```bash
+cp .env.example .env
+```
+
+Required variables (see `.env.example` for the full list):
+
+```bash
+APP_URL=https://your-domain            # used for links inside emails (no fallback)
+SENDER_EMAIL=info@your-domain           # must be on a domain you control (SPF/DKIM)
+DATABASE_URL=postgresql://...          # Neon, or use LOCAL_DATABASE_URL for local pg
+JWT_SECRET=<strong-random>             # auth signing
+SESSION_SECRET=<strong-random>
+REDIS_HOST=127.0.0.1
+REDIS_PORT=6379
+# SMTP_*/BREVO_* for email delivery
+```
+
+> Never commit a filled-in `.env`. The server fails loudly on missing required config instead of silently degrading.
+
+### 2. Install & set up the database
+
+```bash
+npm install
+npm run db:push          # push Drizzle schema
+# run server/migrations/001-007 in order against the DB
+npm run db:seed          # creates "BootFete 2K26" symposium + superadmin
+```
+
+`db:seed` prints a **one-time random superadmin password** — save it, it's never stored in source. (It wipes existing data first — dev only.)
+
+### 3. Run
+
+```bash
+npm run dev      # development (Vite + tsx)
+npm run build    # production build (vite + esbuild → dist/)
+npm start        # serve production build
+```
+
+Open `http://localhost:5000`, log in as `superadmin` with the seeded password, change it when prompted.
+
+### First-time flow
+1. **Ultimate admin** provisions a symposium → scoped super-admin created with a one-time password panel.
+2. **Super admin** creates events, assigns event admins, sets up registration forms.
+3. **Event admin** builds rounds + questions, configures proctoring, starts the round.
+4. **Participants** register at `/s/:slug` or `/register`, get credentials, take the test.
+5. **Results**: live leaderboard → evaluation → certificates → reports.
+
+---
+
+## 📡 API overview
+
+All `/api/*` routes are JWT-authenticated (unless marked public) and tenant-scoped.
+
+| Group | Examples |
+|---|---|
+| Auth | `POST /api/auth/login`, `POST /api/auth/change-password`, `GET /api/auth/me` |
+| Symposiums | `GET /api/symposiums/by-slug/:slug` (public), `POST /api/ultimate-admin/symposiums` |
+| Events | `GET/POST /api/events`, `PATCH /api/events/:id`, `GET /api/events/:id/leaderboard` |
+| Rounds | `POST /api/events/:eventId/rounds`, `GET /api/rounds/:roundId/statistics`, `.../leaderboard`, `.../monitor` |
+| Questions | `POST /api/rounds/:roundId/questions`, bulk upload, `PATCH .../questions/:questionId` |
+| Exam | answer save, submit, violations, disqualify (`PATCH /api/participants/:id/disqualify`) |
+| Registration | `POST /api/registration-forms/:slug/submit`, `POST /api/registrations/bulk-confirm`, on-spot |
+| Participants | `GET /api/participants/my-attempts`, credential + id-pass endpoints |
+| Certificates | `GET /api/rounds/:roundId/certificate/:attemptId`, template management |
+| Reports | `POST /api/reports/generate/event`, `POST /api/reports/generate/symposium`, `GET /api/reports/:id/download` |
+| Admin | audit logs, email logs + retry, cache flush, system settings, branding |
+
+**Realtime events** (Socket.IO, RBAC-filtered rooms): `roundStatus`, `registrationUpdate`, `overrideAction`, `resultPublished`, leaderboard ticks.
+
+---
+
+## 🧪 Testing
+
+```bash
+npm run check       # tsc --noEmit
+npm run test        # Jest unit tests (tests/unit)
+npm run test:e2e    # exam-flow harness (e2e/exam-flow.mjs)
+```
+
+The repo also carries Playwright verification harnesses under `e2e/` from prior hardening passes. Verification standard here is **demonstrated, not reasoned**: fixes ship with live browser/DB evidence, and honest gaps are documented, not glossed over.
+
+---
+
+## 📦 Deployment notes
+
+- `npm run build && npm start` — serves API + static client from `dist/`.
+- Multi-instance: Socket.IO uses the Redis adapter; `trust proxy` is set for correct client IPs behind nginx.
+- PM2 + nginx (`ip_hash` for socket stickiness) is the documented production topology — see `docs/`.
+- Email queue, rate limiting, and WS fan-out all go through Redis — it must be reachable in prod.
+- Run migrations `001`–`007` in order on deploy; `001` needs base tables to exist (fresh installs use `db:push` first).
+
+---
+
+## 📚 Docs
+
+- `e2e/RUNBOOK.md` — local dev, test users, rate-limiter notes
+- `docs/websockets.md` / `docs/websocket-validation-report.md` — realtime topology + validation
+- `docs/DATABASE_STRUCTURE.md` — schema reference
+- `docs/COLLEGE_SERVER_DEPLOYMENT.md`, `docs/VERCEL_DEPLOYMENT.md` — deployment guides
+
+---
+
+## 🔒 Security model (short version)
+
+- Tenant isolation is enforced at **three layers**: DB constraints (`006`), API middleware (role-first scope checks), and WS room filtering.
+- Provisioned accounts must change passwords on first login; `/me` responses are cache-invalidated on write.
+- Exam integrity: server-side timers, transactional submit/disqualify, violation strikes with audit trail, no client-trusted scoring.
+- Secrets live in env, never in source. One-time deploy tokens are single-use.
+
+---
+
+*Built for running symposiums at scale — registrations to certificates, one platform.*
