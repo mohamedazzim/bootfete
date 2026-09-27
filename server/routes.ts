@@ -1317,6 +1317,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
             fullName: user.fullName,
             role: user.role,
             eventId: eventCredential.eventId,
+            // Tenant scoping for nav chrome: the participant's symposium is
+            // their event's symposium (participant rows carry no symposiumId).
+            symposiumId: (await storage.getEvent(eventCredential.eventId))?.symposiumId ?? null,
           },
           token,
         })
@@ -1346,6 +1349,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
           email: user.email,
           fullName: user.fullName,
           role: user.role,
+          // Tenant scoping for nav chrome (the client User type already
+          // declares this; it was simply never sent).
+          symposiumId: user.symposiumId ?? null,
           // Phase 2 credential safety: client forces a password change
           // screen when true (staff accounts with generated passwords).
           mustChangePassword: !!user.mustChangePassword,

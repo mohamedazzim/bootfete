@@ -1,6 +1,7 @@
 import { useAuth, hasSuperAdminAccess } from '@/lib/auth';
-import { useBranding } from '@/lib/branding';
+import { useBranding, PLATFORM_BRANDING } from '@/lib/branding';
 import { useWebSocket } from '@/contexts/WebSocketContext';
+import { useLocation } from 'wouter';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { GraduationCap, LogOut, Circle, Menu } from 'lucide-react';
@@ -21,8 +22,13 @@ const PERSONA_LABELS: Record<string, string> = {
 export default function Header() {
   const { user, logout } = useAuth();
   const { isConnected } = useWebSocket();
+  const [location] = useLocation();
   // Phase B: sitewide live branding — header wordmark follows global_settings.
-  const branding = useBranding();
+  // Ultimate-admin routes are the platform operator's view: they always show
+  // the platform identity, never a tenant symposium's branding.
+  const tenantBranding = useBranding();
+  const isPlatformRoute = location.startsWith('/ultimate-admin');
+  const branding = isPlatformRoute ? PLATFORM_BRANDING : tenantBranding;
 
   const personaLabel = user ? (PERSONA_LABELS[user.role] ?? user.role) : null;
   // Phase 4: all three administrative personas share the <AdminSidebar />
@@ -53,10 +59,14 @@ export default function Header() {
           <div className="h-8 w-8 rounded-lg bg-indigo-600 flex items-center justify-center shrink-0" aria-hidden="true">
             <GraduationCap className="h-5 w-5 text-white" />
           </div>
-          <span className="hidden sm:block text-sm font-medium text-slate-700 truncate max-w-[220px] lg:max-w-none">
-            {branding.organizerName}
-          </span>
-          <span className="hidden sm:block text-slate-300" aria-hidden="true">|</span>
+          {branding.organizerName && (
+            <>
+              <span className="hidden sm:block text-sm font-medium text-slate-700 truncate max-w-[220px] lg:max-w-none">
+                {branding.organizerName}
+              </span>
+              <span className="hidden sm:block text-slate-300" aria-hidden="true">|</span>
+            </>
+          )}
           {/* Compact mobile lockup: dynamic wordmark, truncated so a long
               renamed brand can never overflow the 390px viewport */}
           <span className="sm:hidden text-base font-bold tracking-tight text-slate-950 truncate max-w-[160px]">

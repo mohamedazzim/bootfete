@@ -360,8 +360,8 @@ function App() {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <BrandingProvider>
       <AuthProvider>
+      <BrandingProvider>
         <WebSocketProvider>
           <TooltipProvider>
             <div className="min-h-screen flex flex-col">
@@ -373,8 +373,8 @@ function App() {
             </div>
           </TooltipProvider>
         </WebSocketProvider>
-      </AuthProvider>
       </BrandingProvider>
+      </AuthProvider>
     </QueryClientProvider>
   );
 }

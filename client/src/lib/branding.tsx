@@ -14,6 +14,8 @@
 // and never consult this context.
 import { createContext, useContext, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useAuth } from "./auth";
+import { apiRequest } from "./queryClient";
 
 export interface PublicBranding {
   appName: string;
@@ -33,14 +35,36 @@ export const DEFAULT_CLIENT_BRANDING: PublicBranding = {
   footerText: "© 2026 BootFete. All rights reserved.",
 };
 
+// The platform (ultimate-admin) identity. Used on the platform login and on
+// every ultimate-admin chrome surface — a tenant's symposium branding must
+// never leak into the platform operator's view.
+export const PLATFORM_BRANDING: PublicBranding = {
+  ...DEFAULT_CLIENT_BRANDING,
+  appName: "TechnoZim",
+  organizerName: "",
+  footerText: "© 2026 TechnoZim. All rights reserved.",
+};
+
 const BrandingContext = createContext<PublicBranding>(DEFAULT_CLIENT_BRANDING);
 
 export function BrandingProvider({ children }: { children: ReactNode }) {
-  // The default queryFn (see lib/queryClient) fetches queryKey.join("/").
-  // Fetched once per session; a rename takes effect on next load (the
-  // ultimate-admin settings page also updates the cache on save).
+  // Tenant scoping: a logged-in symposium user sees their OWN symposium's
+  // branding in the nav chrome — never the default (oldest) symposium's.
+  // The symposium id is part of the query key, so login/logout swaps the
+  // cached brand instead of showing a stale one. Logged-out and
+  // ultimate-admin contexts fall back to the default brand (the ultimate
+  // header overrides to the platform identity by route anyway).
+  const { user } = useAuth();
+  const symposiumId = user?.symposiumId ?? null;
   const { data } = useQuery<PublicBranding>({
-    queryKey: ["/api/settings/branding"],
+    queryKey: ["/api/settings/branding", symposiumId ?? "default"],
+    queryFn: async () => {
+      const url = symposiumId
+        ? `/api/settings/branding?symposiumId=${encodeURIComponent(symposiumId)}`
+        : "/api/settings/branding";
+      const res = await apiRequest("GET", url);
+      return (await res.json()) as PublicBranding;
+    },
     staleTime: Infinity,
     gcTime: Infinity,
     retry: 1,
