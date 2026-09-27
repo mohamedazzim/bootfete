@@ -1364,6 +1364,65 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   })
 
+  // Platform login (the bare "/" page). Same credential check as the staff
+  // branch of /api/auth/login, but ONLY ultimate_admin accounts are admitted:
+  // symposium staff and participants must use their symposium's own login
+  // page (/s/:slug/login). Event credentials are not accepted here at all.
+  // Wrong password -> 401 "Invalid credentials" (identical to the regular
+  // endpoint, so probing learns nothing); correct password on a non-platform
+  // account -> 403 with guidance to the right login page.
+  app.post("/api/auth/platform-login", loginLimiter, async (req: Request, res: Response) => {
+    try {
+      const { username, password } = req.body
+
+      if (!username || !password) {
+        return res.status(400).json({ message: "Username and password are required" })
+      }
+
+      if (typeof username !== 'string' || typeof password !== 'string') {
+        return res.status(400).json({ message: "Invalid credentials format" })
+      }
+
+      let user = await storage.getUserByUsername(username)
+      if (!user) {
+        user = await storage.getUserByEmail(username)
+      }
+      if (!user) {
+        return res.status(401).json({ message: "Invalid credentials" })
+      }
+
+      const isValidPassword = await bcrypt.compare(password, user.password)
+      if (!isValidPassword) {
+        return res.status(401).json({ message: "Invalid credentials" })
+      }
+
+      if (user.role !== "ultimate_admin") {
+        return res.status(403).json({
+          message: "This sign-in is for platform administrators only. Symposium staff and participants must use their symposium's login page.",
+        })
+      }
+
+      const token = jwt.sign({ id: user.id, username: user.username, role: user.role }, JWT_SECRET, { expiresIn: "7d" })
+
+      res.json({
+        message: "Login successful",
+        user: {
+          id: user.id,
+          username: user.username,
+          email: user.email,
+          fullName: user.fullName,
+          role: user.role,
+          symposiumId: user.symposiumId ?? null,
+          mustChangePassword: !!user.mustChangePassword,
+        },
+        token,
+      })
+    } catch (error) {
+      console.error("Platform login error:", error)
+      res.status(500).json({ message: "Internal server error" })
+    }
+  })
+
   // Phase 2 credential safety: user sets their own password, clearing the
   // forced-change flag. Requires the current password (proves possession of
   // the generated credential being replaced).

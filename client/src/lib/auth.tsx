@@ -17,6 +17,7 @@ interface AuthContextType {
   user: User | null;
   token: string | null;
   login: (username: string, password: string) => Promise<void>;
+  platformLogin: (username: string, password: string) => Promise<void>;
   register: (username: string, password: string, email: string, fullName: string, role: string) => Promise<void>;
   logout: () => void;
   isLoading: boolean;
@@ -139,6 +140,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(data.user);
   }
 
+  // Platform login (the bare "/" page): hits /api/auth/platform-login,
+  // which admits ONLY ultimate_admin accounts. Tenant staff who try the
+  // platform page get a 403 with guidance instead of a session.
+  async function platformLogin(username: string, password: string) {
+    const response = await fetch('/api/auth/platform-login', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ username, password })
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.message || 'Login failed');
+    }
+
+    const data = await response.json();
+    localStorage.setItem('token', data.token);
+    // Same shared-device hygiene as login(): drop the previous user's
+    // cached queries before installing the new session.
+    queryClient.clear();
+    setToken(data.token);
+    // Navigation is NOT done here — see the comment in login().
+    setUser(data.user);
+  }
+
   async function register(username: string, password: string, email: string, fullName: string, role: string) {
     const response = await fetch('/api/auth/register', {
       method: 'POST',
@@ -175,7 +203,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   return (
-    <AuthContext.Provider value={{ user, token, login, register, logout, isLoading }}>
+    <AuthContext.Provider value={{ user, token, login, platformLogin, register, logout, isLoading }}>
       {children}
     </AuthContext.Provider>
   );

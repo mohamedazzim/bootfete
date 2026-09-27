@@ -4,10 +4,13 @@
 //   - "/s/:slug/login" — the per-symposium login: that symposium's logo,
 //     event name and college name.
 //
-// Authentication itself is identical on both (global username+password);
-// only the branding differs. There is no self-registration link: participants
-// are registered through the super_admin's custom registration forms and
-// receive their credentials by email after fee confirmation.
+// The platform page ("/") signs in ONLY ultimate_admin accounts via
+// /api/auth/platform-login — symposium staff who try it get a 403 with
+// guidance, never a session. The symposium page signs in staff and
+// participants via the regular /api/auth/login. There is no
+// self-registration link: participants are registered through the
+// super_admin's custom registration forms and receive their credentials
+// by email after fee confirmation.
 import { useState, useEffect } from 'react';
 import { useAuth, getPostLoginPath } from '@/lib/auth';
 import { useLocation } from 'wouter';
@@ -30,16 +33,20 @@ interface LoginCardProps {
   branding: LoginCardBranding;
   description: string;
   documentTitle: string;
+  // When true (the bare "/" platform page), sign-in goes through
+  // /api/auth/platform-login, which admits ONLY ultimate_admin accounts.
+  // Tenant staff on the wrong page get a 403 error, never a session.
+  platformOnly?: boolean;
 }
 
-export default function LoginCard({ branding, description, documentTitle }: LoginCardProps) {
+export default function LoginCard({ branding, description, documentTitle, platformOnly }: LoginCardProps) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<{ username?: string; password?: string }>({});
   const [formError, setFormError] = useState<string | null>(null);
-  const { login, user } = useAuth();
+  const { login, platformLogin, user } = useAuth();
   const { toast } = useToast();
   const [location, setLocation] = useLocation();
 
@@ -74,7 +81,11 @@ export default function LoginCard({ branding, description, documentTitle }: Logi
 
     setIsLoading(true);
     try {
-      await login(username, password);
+      if (platformOnly) {
+        await platformLogin(username, password);
+      } else {
+        await login(username, password);
+      }
       successToast(
         toast,
         'Login successful',

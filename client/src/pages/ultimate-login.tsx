@@ -11,6 +11,7 @@ export default function UltimateLogin() {
       branding={{ appName: PLATFORM_BRANDING.appName }}
       description="Platform administration — sign in with your ultimate admin account"
       documentTitle={`${PLATFORM_BRANDING.appName} — Platform login`}
+      platformOnly
     />
   );
 }
