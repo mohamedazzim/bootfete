@@ -188,6 +188,14 @@ monitoringService.start();
     throw err;
   });
 
+  // Unknown /api/* paths must answer JSON, not the SPA's index.html (the
+  // static fallback in serveStatic deliberately skips /api) and not
+  // Express's default HTML 404. Registered after all API routes so only
+  // genuinely unmapped API paths land here.
+  app.use("/api", (_req: Request, res: Response) => {
+    res.status(404).json({ message: "Not found" });
+  });
+
   // importantly only setup vite in development and after
   // setting up all the other routes so the catch-all route
   // doesn't interfere with the other routes

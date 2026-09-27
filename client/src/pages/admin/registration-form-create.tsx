@@ -220,7 +220,7 @@ export default function RegistrationFormCreatePage() {
               </CardDescription>
             </CardHeader>
             <CardContent>
-              <Button onClick={() => setLocation('/admin/events/create')} data-testid="button-create-event">
+              <Button onClick={() => setLocation('/admin/events/new')} data-testid="button-create-event">
                 Create Event
               </Button>
             </CardContent>

@@ -140,7 +140,7 @@ export default function SymposiumLandingPage() {
           <CardFooter className="justify-center">
             <Button asChild variant="outline">
               <Link href="/">
-                <ArrowLeft className="h-4 w-4 mr-2" /> Back to directory
+                <ArrowLeft className="h-4 w-4 mr-2" /> Back to sign in
               </Link>
             </Button>
           </CardFooter>
