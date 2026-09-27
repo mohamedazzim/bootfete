@@ -6,14 +6,33 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { StatusBadge } from '@/components/StatusBadge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { ArrowLeft, Edit, Plus } from 'lucide-react';
+import { ArrowLeft, Edit, Plus, Trash2 } from 'lucide-react';
 import type { Event, User, Round, Participant } from '@shared/schema';
 import ScrollableTable from '@/components/ScrollableTable';
+import { apiRequest, queryClient } from '@/lib/queryClient';
+import { useToast } from '@/hooks/use-toast';
+import { errorToast, successToast } from '@/lib/toast';
 
 export default function EventDetailsPage() {
   const [, setLocation] = useLocation();
   const [, params] = useRoute('/admin/events/:id');
   const eventId = params?.id;
+  const { toast } = useToast();
+
+  async function handleRemoveAdmin(adminId: string, adminName: string) {
+    if (!confirm(`Remove ${adminName} from this event? Their account stays but loses access to this event.`)) return;
+    try {
+      const res = await apiRequest('DELETE', `/api/events/${eventId}/admins/${adminId}`);
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.message || 'Failed to remove admin');
+      }
+      queryClient.invalidateQueries({ queryKey: ['/api/events', eventId, 'admins'] });
+      successToast(toast, 'Admin removed', `${adminName} no longer has access to this event.`);
+    } catch (error: any) {
+      errorToast(toast, 'Remove failed', error.message);
+    }
+  }
 
   const { data: event, isLoading } = useQuery<Event>({
     queryKey: ['/api/events', eventId],
@@ -228,10 +247,18 @@ export default function EventDetailsPage() {
           <TabsContent value="admins">
             <Card>
               <CardHeader>
-                <CardTitle>Assigned Event Admins</CardTitle>
-                <CardDescription className="mt-2">
-                  Event admins are assigned when creating a new admin account. To add more admins to this event, create a new event admin and select this event.
-                </CardDescription>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <CardTitle>Assigned Event Admins</CardTitle>
+                    <CardDescription className="mt-2">
+                      Create a new event admin for this event, or remove an existing assignment.
+                      To reassign, remove the current admin then create the replacement.
+                    </CardDescription>
+                  </div>
+                  <Button size="sm" onClick={() => setLocation('/admin/event-admins/create')}>
+                    <Plus className="h-4 w-4 mr-2" /> New admin
+                  </Button>
+                </div>
               </CardHeader>
               <CardContent>
                 {!eventAdmins || eventAdmins.length === 0 ? (
@@ -247,6 +274,7 @@ export default function EventDetailsPage() {
                                             <TableHead>Name</TableHead>
                                             <TableHead>Email</TableHead>
                                             <TableHead>Username</TableHead>
+                                            <TableHead className="text-right">Actions</TableHead>
                                           </TableRow>
                                         </TableHeader>
                                         <TableBody>
@@ -255,6 +283,16 @@ export default function EventDetailsPage() {
                                               <TableCell>{admin.fullName}</TableCell>
                                               <TableCell>{admin.email}</TableCell>
                                               <TableCell>{admin.username}</TableCell>
+                                              <TableCell className="text-right">
+                                                <Button
+                                                  variant="ghost"
+                                                  size="sm"
+                                                  onClick={() => handleRemoveAdmin(admin.id, admin.fullName)}
+                                                  title={`Remove ${admin.fullName} from this event`}
+                                                >
+                                                  <Trash2 className="h-4 w-4 text-destructive" />
+                                                </Button>
+                                              </TableCell>
                                             </TableRow>
                                           ))}
                                         </TableBody>

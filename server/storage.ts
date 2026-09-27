@@ -1,7 +1,7 @@
 import { eq, ne, and, desc, asc, sql, gte, lte, or, inArray, isNull } from 'drizzle-orm';
 import { db } from './db';
-import { users, events, eventAdmins, eventRules, rounds, roundRules, questions, participants, testAttempts, answers, reports, registrationForms, registrations, teamMembers, eventCredentials, auditLogs, emailLogs, participantRegistry, manualRoundEntries, eventWinners, systemSettings, certificateTemplates } from '@shared/schema';
-import type { User, InsertUser, Event, InsertEvent, EventRules, InsertEventRules, Round, InsertRound, RoundRules, InsertRoundRules, Question, InsertQuestion, Participant, InsertParticipant, TestAttempt, InsertTestAttempt, Answer, InsertAnswer, Report, InsertReport, RegistrationForm, InsertRegistrationForm, Registration, InsertRegistration, TeamMember, InsertTeamMember, EventCredential, InsertEventCredential, AuditLog, InsertAuditLog, EmailLog, InsertEmailLog, ParticipantRegistry, InsertParticipantRegistry, FoodType, ManualRoundEntry, InsertManualRoundEntry, EventWinner, InsertEventWinner, CertificateTemplate, CertificatePlaceholders } from '@shared/schema';
+import { users, events, eventAdmins, eventRules, rounds, roundRules, questions, participants, testAttempts, answers, reports, registrationForms, registrations, teamMembers, eventCredentials, auditLogs, emailLogs, participantRegistry, manualRoundEntries, eventWinners, systemSettings, certificateTemplates, symposiums } from '@shared/schema';
+import type { User, InsertUser, Event, InsertEvent, EventRules, InsertEventRules, Round, InsertRound, RoundRules, InsertRoundRules, Question, InsertQuestion, Participant, InsertParticipant, TestAttempt, InsertTestAttempt, Answer, InsertAnswer, Report, InsertReport, RegistrationForm, InsertRegistrationForm, Registration, InsertRegistration, TeamMember, InsertTeamMember, EventCredential, InsertEventCredential, AuditLog, InsertAuditLog, EmailLog, InsertEmailLog, ParticipantRegistry, InsertParticipantRegistry, FoodType, ManualRoundEntry, InsertManualRoundEntry, EventWinner, InsertEventWinner, CertificateTemplate, CertificatePlaceholders, Symposium, InsertSymposium } from '@shared/schema';
 import { normalizeDepartment } from './lib/departmentUtils';
 
 // Strike-chronology normalization. Violation log entries carry ISO timestamps,
@@ -121,7 +121,7 @@ export interface IStorage {
   deleteReport(id: string): Promise<void>;
 
   generateEventReport(eventId: string, generatedBy: string): Promise<Report>;
-  generateSymposiumReport(generatedBy: string): Promise<Report>;
+  generateSymposiumReport(symposiumId: string, generatedBy: string): Promise<Report>;
 
   createRegistrationForm(title: string, description: string, formFields: any[], slug: string): Promise<RegistrationForm>;
   getRegistrationFormBySlug(slug: string): Promise<RegistrationForm | undefined>;
@@ -327,6 +327,13 @@ export class DatabaseStorage implements IStorage {
     return await db.select().from(users);
   }
 
+  // Multi-tenancy (Phase 1): tenant-scoped user listing. Pass null/undefined
+  // ONLY for ultimate_admin (unscoped by design).
+  async getUsersBySymposium(symposiumId: string | null | undefined): Promise<User[]> {
+    if (!symposiumId) return await db.select().from(users);
+    return await db.select().from(users).where(eq(users.symposiumId, symposiumId));
+  }
+
   async getUser(id: string): Promise<User | undefined> {
     const [user] = await db.select().from(users).where(eq(users.id, id));
     return user;
@@ -379,6 +386,27 @@ export class DatabaseStorage implements IStorage {
     return user;
   }
 
+  // Phase 2 credential safety: set a new bcrypt-hashed password AND flag the
+  // account to force a password change on next login, atomically. The caller
+  // supplies the hash; the plaintext is NEVER passed here, stored, or logged.
+  async resetUserPassword(userId: string, passwordHash: string): Promise<User | undefined> {
+    const [user] = await db.update(users)
+      .set({ password: passwordHash, mustChangePassword: true })
+      .where(eq(users.id, userId))
+      .returning();
+    return user;
+  }
+
+  // Phase 2: user sets their own password (via /api/auth/change-password),
+  // clearing the forced-change flag.
+  async setUserPassword(userId: string, passwordHash: string): Promise<User | undefined> {
+    const [user] = await db.update(users)
+      .set({ password: passwordHash, mustChangePassword: false })
+      .where(eq(users.id, userId))
+      .returning();
+    return user;
+  }
+
   async deleteUser(userId: string): Promise<void> {
     await db.delete(users).where(eq(users.id, userId));
   }
@@ -401,6 +429,75 @@ export class DatabaseStorage implements IStorage {
 
   async getEvents(): Promise<Event[]> {
     return await db.select().from(events);
+  }
+
+  // Multi-tenancy (Phase 1): tenant-scoped event listing. Pass null/undefined
+  // ONLY for ultimate_admin (unscoped by design).
+  async getEventsBySymposium(symposiumId: string | null | undefined): Promise<Event[]> {
+    if (!symposiumId) return await db.select().from(events);
+    return await db.select().from(events).where(eq(events.symposiumId, symposiumId));
+  }
+
+  async getEventByNameAndSymposium(name: string, symposiumId: string): Promise<Event | undefined> {
+    const [event] = await db
+      .select()
+      .from(events)
+      .where(and(eq(events.name, name), eq(events.symposiumId, symposiumId)));
+    return event;
+  }
+
+  // ── Symposiums (Phase 1 multi-tenancy) ──────────────────────────────
+  // The symposium `name` is immutable: there is intentionally NO update
+  // method here. Renaming is not a supported operation.
+
+  async getSymposiums(): Promise<Symposium[]> {
+    return await db.select().from(symposiums).orderBy(asc(symposiums.createdAt));
+  }
+
+  async getSymposium(id: string): Promise<Symposium | undefined> {
+    const [s] = await db.select().from(symposiums).where(eq(symposiums.id, id));
+    return s;
+  }
+
+  async getSymposiumByName(name: string): Promise<Symposium | undefined> {
+    const [s] = await db.select().from(symposiums).where(eq(symposiums.name, name));
+    return s;
+  }
+
+  async getSymposiumBySlug(slug: string): Promise<Symposium | undefined> {
+    const [s] = await db.select().from(symposiums).where(eq(symposiums.slug, slug));
+    return s;
+  }
+
+  async createSymposium(insert: InsertSymposium): Promise<Symposium> {
+    const [s] = await db.insert(symposiums).values(insert).returning();
+    return s;
+  }
+
+  // Phase 2 provisioning: atomically create a symposium AND its super_admin.
+  // All-or-nothing — a crash between the two used to leave an orphaned
+  // symposium with no admin (or an admin pointing at a rolled-back
+  // symposium). The caller supplies the bcrypt-hashed password; the
+  // plaintext temporary password is NEVER passed here, stored, or logged.
+  async createSymposiumWithSuperAdmin(
+    symposiumInsert: InsertSymposium,
+    superAdminInsert: { username: string; passwordHash: string; email: string; fullName: string; createdBy: string },
+  ): Promise<{ symposium: Symposium; superAdmin: any }> {
+    return await db.transaction(async (tx) => {
+      const [symposium] = await tx.insert(symposiums).values(symposiumInsert).returning();
+      const rows: any[] = await (tx.insert(users) as any).values({
+        username: superAdminInsert.username,
+        password: superAdminInsert.passwordHash,
+        email: superAdminInsert.email,
+        fullName: superAdminInsert.fullName,
+        role: "super_admin",
+        symposiumId: symposium.id,
+        mustChangePassword: true,
+        createdBy: superAdminInsert.createdBy,
+      }).returning();
+      const [superAdmin] = rows;
+      return { symposium, superAdmin };
+    });
   }
 
   async getEvent(id: string): Promise<Event | undefined> {
@@ -1267,6 +1364,7 @@ export class DatabaseStorage implements IStorage {
 
     const report = await this.createReport({
       eventId,
+      symposiumId: event.symposiumId,
       reportType: 'event_wise',
       title: `${event.name} - Event Report`,
       generatedBy,
@@ -1278,12 +1376,19 @@ export class DatabaseStorage implements IStorage {
   }
 
 
-  async generateSymposiumReport(generatedBy: string): Promise<Report> {
-    const allEvents = await this.getEvents();
-    const allUsers = await this.getUsers();
+  // Multi-tenancy (Phase 1): symposium-wide reports aggregate ONLY the
+  // given symposium's events/users/registrations. There is no global report.
+  async generateSymposiumReport(symposiumId: string, generatedBy: string): Promise<Report> {
+    const symposium = await this.getSymposium(symposiumId);
+    if (!symposium) {
+      throw new Error('Symposium not found');
+    }
+    const allEvents = await this.getEventsBySymposium(symposiumId);
+    const allUsers = await this.getUsersBySymposium(symposiumId);
+    const symposiumEventIds = new Set(allEvents.map(e => e.id));
 
-    // Get all registrations across all events for college and attendance statistics
-    const allRegistrations = await this.getRegistrations();
+    // Get all registrations for this symposium's events only
+    const allRegistrations = (await this.getRegistrations()).filter(r => symposiumEventIds.has(r.eventId));
 
     // Calculate unique colleges across all events
     const allColleges = new Set<string>();
@@ -1464,8 +1569,9 @@ export class DatabaseStorage implements IStorage {
 
     const report = await this.createReport({
       eventId: null,
+      symposiumId,
       reportType: 'symposium_wide',
-      title: 'Symposium-wide Report',
+      title: `${symposium.name} - Symposium-wide Report`,
       generatedBy,
       reportData,
       fileUrl: null
@@ -1558,6 +1664,7 @@ export class DatabaseStorage implements IStorage {
   async createRegistrationForm(
     titleOrData: string | {
       title: string;
+      symposiumId: string;
       description?: string | null;
       formSlug: string;
       formFields: any[];
@@ -1569,16 +1676,23 @@ export class DatabaseStorage implements IStorage {
     formFields?: any[],
     slug?: string,
     headerImage?: string | null,
+    symposiumId?: string,
   ): Promise<RegistrationForm> {
-    // Accept both a full object and the legacy positional signature
+    // Accept both a full object and the legacy positional signature.
+    // Phase 1 multi-tenancy: symposiumId is REQUIRED in both forms.
     const data = typeof titleOrData === 'object' ? titleOrData : {
       title: titleOrData,
+      symposiumId: symposiumId ?? '',
       description: description ?? '',
       formSlug: slug!,
       formFields: formFields!,
       headerImage: headerImage ?? null,
     };
+    if (!data.symposiumId) {
+      throw new Error('symposiumId is required to create a registration form');
+    }
     const [form] = await db.insert(registrationForms).values({
+      symposiumId: data.symposiumId,
       title: data.title,
       description: data.description ?? '',
       formSlug: data.formSlug,
@@ -2154,10 +2268,10 @@ export class DatabaseStorage implements IStorage {
     return { valid: true };
   }
 
-  async getUniqueColleges(): Promise<string[]> {
+  async getUniqueColleges(eventIds?: string[]): Promise<string[]> {
     const result = await db.selectDistinct({ college: registrations.organizerCollege })
       .from(registrations)
-      .where(sql`${registrations.organizerCollege} IS NOT NULL AND ${registrations.organizerCollege} != ''`)
+      .where(sql`${registrations.organizerCollege} IS NOT NULL AND ${registrations.organizerCollege} != ''${eventIds?.length ? sql` AND ${registrations.eventId} IN (${sql.join(eventIds.map(id => sql`${id}`), sql`, `)})` : sql``}`)
       .orderBy(asc(registrations.organizerCollege));
 
     return result.map(r => r.college).filter((c): c is string => c !== null);
@@ -2667,10 +2781,11 @@ export class DatabaseStorage implements IStorage {
     return log;
   }
 
-  async getEmailLogs(filters?: { status?: string; templateType?: string; startDate?: Date; endDate?: Date; limit?: number; offset?: number }): Promise<Omit<EmailLog, 'metadata'>[]> {
+  async getEmailLogs(filters?: { status?: string; templateType?: string; startDate?: Date; endDate?: Date; limit?: number; offset?: number; symposiumId?: string | null }): Promise<Omit<EmailLog, 'metadata'>[]> {
     // Select only essential fields, exclude large metadata to prevent 507 errors
     let query = db.select({
       id: emailLogs.id,
+      symposiumId: emailLogs.symposiumId,
       recipientEmail: emailLogs.recipientEmail,
       recipientName: emailLogs.recipientName,
       subject: emailLogs.subject,
@@ -2682,6 +2797,7 @@ export class DatabaseStorage implements IStorage {
     }).from(emailLogs);
 
     const conditions = [];
+    if (filters?.symposiumId) conditions.push(eq(emailLogs.symposiumId, filters.symposiumId));
     if (filters?.status) conditions.push(eq(emailLogs.status, filters.status));
     if (filters?.templateType) conditions.push(eq(emailLogs.templateType, filters.templateType));
     if (filters?.startDate) conditions.push(gte(emailLogs.sentAt, filters.startDate));
@@ -2798,7 +2914,7 @@ export class DatabaseStorage implements IStorage {
     }
   }
 
-  async getRegistrationStats(adminId?: string) {
+  async getRegistrationStats(adminId?: string, scopeEventIds?: string[]) {
     let eventFilter = undefined;
 
     if (adminId) {
@@ -2815,6 +2931,19 @@ export class DatabaseStorage implements IStorage {
         };
       }
       eventFilter = sql`${registrations.eventId} IN (${sql.join(eventIds.map(id => sql`${id}`), sql`, `)})`;
+    } else if (scopeEventIds !== undefined) {
+      // Phase 1 multi-tenancy: restrict stats to a symposium's events.
+      if (scopeEventIds.length === 0) {
+        return {
+          totalTeams: 0,
+          teamsPerEvent: [],
+          teamsPerCollege: [],
+          totalParticipants: 0,
+          vegCount: 0,
+          nonVegCount: 0
+        };
+      }
+      eventFilter = sql`${registrations.eventId} IN (${sql.join(scopeEventIds.map(id => sql`${id}`), sql`, `)})`;
     }
 
     const teamsPerEvent = await db

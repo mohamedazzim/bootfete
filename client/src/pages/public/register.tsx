@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Link, useLocation } from 'wouter';
 import { AlertCircle, UserPlus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -7,7 +7,7 @@ import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { useToast } from '@/hooks/use-toast';
 import { useBranding } from '@/lib/branding';
-import { useAuth } from '@/lib/auth';
+import { useAuth, getPostLoginPath } from '@/lib/auth';
 import { errorToast, successToast } from '@/lib/toast';
 
 interface FieldErrors {
@@ -34,10 +34,21 @@ export default function ParticipantRegister() {
   const [isLoading, setIsLoading] = useState(false);
   const { register, user } = useAuth();
   const { toast } = useToast();
-  const [, setLocation] = useLocation();
+  const [location, setLocation] = useLocation();
+
+  // Post-registration routing: an effect, not a render-time setLocation
+  // (render-time navigation is unsafe and can fire before state settles).
+  // getPostLoginPath keeps this consistent with the login flow.
+  useEffect(() => {
+    if (user) {
+      const path = getPostLoginPath(user);
+      if (path !== location) {
+        setLocation(path);
+      }
+    }
+  }, [user, location, setLocation]);
 
   if (user) {
-    setLocation('/participant/dashboard');
     return null;
   }
 

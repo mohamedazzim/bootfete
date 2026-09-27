@@ -1,18 +1,20 @@
 import { db } from './db';
 import bcrypt from 'bcrypt';
-import { 
-  users, 
-  events, 
-  eventAdmins, 
-  rounds, 
-  questions, 
-  participants, 
-  testAttempts, 
-  answers, 
-  registrationForms, 
-  registrations, 
-  eventCredentials, 
-  auditLogs 
+import crypto from 'crypto';
+import {
+  users,
+  symposiums,
+  events,
+  eventAdmins,
+  rounds,
+  questions,
+  participants,
+  testAttempts,
+  answers,
+  registrationForms,
+  registrations,
+  eventCredentials,
+  auditLogs
 } from '@shared/schema';
 
 async function clearDatabase() {
@@ -31,6 +33,9 @@ async function clearDatabase() {
   await db.delete(events);
   await db.delete(auditLogs);
   await db.delete(users);
+  // Multi-tenancy (Phase 1): symposiums parent users and events, both
+  // already deleted above.
+  await db.delete(symposiums);
 
   console.log('✅ Database cleared successfully!');
 }
@@ -40,8 +45,23 @@ async function seed() {
 
   await clearDatabase();
 
-  // Hash the password: Azzi@03
-  const hashedPassword = await bcrypt.hash('Azzi@03', 10);
+  // One-time random superadmin password — same 16-char crypto.randomBytes
+  // scheme as provisioned temp passwords (server/routes.ts). Printed once
+  // below; never hardcode a real/memorable password in source.
+  const superadminPassword = crypto.randomBytes(12).toString('base64').slice(0, 16);
+  const hashedPassword = await bcrypt.hash(superadminPassword, 10);
+
+  // Phase 1 multi-tenancy: a super_admin is a scoped role and MUST belong
+  // to a symposium (migration 006 CHECK constraint
+  // users_symposium_required_for_scoped_roles rejects NULL). Seed the
+  // default symposium first, then scope the superadmin to it.
+  console.log('Creating default symposium...');
+  const [symposium] = await db.insert(symposiums).values({
+    name: 'BootFete 2K26',
+    slug: 'bootfete-2k26',
+    organizerName: 'Bishop Heber College',
+    supportEmail: 'azzimandabdullah1@gmail.com',
+  }).returning({ id: symposiums.id });
 
   console.log('Creating ONLY superadmin user...');
   await db.insert(users).values({
@@ -50,7 +70,8 @@ async function seed() {
     email: 'azzimandabdullah1@gmail.com',
     fullName: 'Mohamed Azzim',
     role: 'super_admin',
-    phone: '+916380083647'
+    phone: '+916380083647',
+    symposiumId: symposium.id,
   });
 
   console.log('✅ Superadmin created successfully!');
@@ -59,7 +80,7 @@ async function seed() {
   console.log('  SUPERADMIN LOGIN CREDENTIALS');
   console.log('═══════════════════════════════════════');
   console.log('  Username: superadmin');
-  console.log('  Password: Azzi@03');
+  console.log('  Password: ' + superadminPassword + '   (shown once — save it now)');
   console.log('  Email: azzimandabdullah1@gmail.com');
   console.log('═══════════════════════════════════════');
   console.log('');

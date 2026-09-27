@@ -1,6 +1,7 @@
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useLocation } from 'wouter';
+import { useQuery } from '@tanstack/react-query';
 import AdminLayout from '@/components/layouts/AdminLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -16,6 +17,11 @@ import { z } from 'zod';
 import { useAuth } from '@/lib/auth';
 import { ArrowLeft } from 'lucide-react';
 
+interface SymposiumOption {
+  id: string;
+  name: string;
+}
+
 const formSchema = insertEventSchema.extend({
   startDate: z.string().optional(),
   endDate: z.string().optional(),
@@ -27,6 +33,15 @@ export default function EventCreatePage() {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
   const { user } = useAuth();
+  const isUltimateAdmin = user?.role === 'ultimate_admin';
+
+  // Phase 1 multi-tenancy: ultimate_admin picks the owning symposium for the
+  // new event. A scoped super_admin always creates inside their own
+  // symposium (sent automatically from their profile).
+  const { data: symposiums = [], isLoading: symposiumsLoading } = useQuery<SymposiumOption[]>({
+    queryKey: ['/api/ultimate-admin/symposiums'],
+    enabled: isUltimateAdmin,
+  });
 
   const form = useForm<FormData>({
     resolver: zodResolver(formSchema),
@@ -37,6 +52,7 @@ export default function EventCreatePage() {
       category: 'technical',
       status: 'active',
       createdBy: user?.id || '',
+      symposiumId: user?.symposiumId || '',
       startDate: '',
       endDate: '',
       minMembers: 1,
@@ -55,6 +71,9 @@ export default function EventCreatePage() {
         category: data.type,
         status: data.status,
         createdBy: user?.id || '',
+        // Scoped super_admin: their own symposium. Ultimate admin: the
+        // symposium chosen in the picker (form field, validated server-side).
+        symposiumId: isUltimateAdmin ? data.symposiumId : (user?.symposiumId || ''),
         startDate: data.startDate ? new Date(data.startDate) : null,
         endDate: data.endDate ? new Date(data.endDate) : null,
         minMembers: data.minMembers || 1,
@@ -104,6 +123,30 @@ export default function EventCreatePage() {
           <CardContent>
             <Form {...form}>
               <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
+                {isUltimateAdmin && (
+                  <FormField
+                    control={form.control}
+                    name="symposiumId"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Symposium</FormLabel>
+                        <Select onValueChange={field.onChange} value={field.value} disabled={symposiumsLoading}>
+                          <FormControl>
+                            <SelectTrigger data-testid="select-symposium">
+                              <SelectValue placeholder={symposiumsLoading ? "Loading symposiums..." : "Select symposium"} />
+                            </SelectTrigger>
+                          </FormControl>
+                          <SelectContent>
+                            {symposiums.map((s) => (
+                              <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                )}
                 <FormField
                   control={form.control}
                   name="name"

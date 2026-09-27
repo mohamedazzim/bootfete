@@ -9,6 +9,8 @@ interface User {
   fullName: string;
   role: string;
   eventId?: string;
+  symposiumId?: string | null;
+  mustChangePassword?: boolean;
 }
 
 interface AuthContextType {
@@ -26,6 +28,29 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 // hasSuperAdminAccess): ultimate_admin inherits every super_admin UI gate.
 export function hasSuperAdminAccess(role: string | undefined | null): boolean {
   return role === 'super_admin' || role === 'ultimate_admin';
+}
+
+// Single post-authentication routing table. Phase 2 credential safety:
+// staff with a generated password must set their own before doing
+// anything else; ultimate_admin lands on the symposium provisioning
+// dashboard, never on a scoped admin's dashboard.
+export function getPostLoginPath(user: { role?: string | null; mustChangePassword?: boolean }): string {
+  if (user.mustChangePassword) {
+    return '/force-password-change';
+  }
+  if (user.role === 'ultimate_admin') {
+    return '/ultimate-admin';
+  }
+  if (hasSuperAdminAccess(user.role)) {
+    return '/admin/dashboard';
+  }
+  if (user.role === 'event_admin') {
+    return '/event-admin/dashboard';
+  }
+  if (user.role === 'registration_committee') {
+    return '/registration-committee/dashboard';
+  }
+  return '/participant/dashboard';
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -105,17 +130,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // lab machines) — drop the previous user's cached queries first.
     queryClient.clear();
     setToken(data.token);
+    // Navigation is NOT done here. React state updates are asynchronous, so
+    // navigating immediately would render the destination route while `user`
+    // is still null; its guard would bounce to /login, whose own effect
+    // would then mis-route (ultimate_admin and mustChangePassword users
+    // landed on /admin/dashboard). Instead the Login page's effect navigates
+    // via getPostLoginPath once `user` has actually landed in state.
     setUser(data.user);
-    
-    if (hasSuperAdminAccess(data.user.role)) {
-      setLocation('/admin/dashboard');
-    } else if (data.user.role === 'event_admin') {
-      setLocation('/event-admin/dashboard');
-    } else if (data.user.role === 'registration_committee') {
-      setLocation('/registration-committee/dashboard');
-    } else {
-      setLocation('/participant/dashboard');
-    }
   }
 
   async function register(username: string, password: string, email: string, fullName: string, role: string) {
@@ -138,17 +159,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // lab machines) — drop the previous user's cached queries first.
     queryClient.clear();
     setToken(data.token);
+    // Same as login(): no navigation here — the register page's effect
+    // navigates via getPostLoginPath once `user` has landed in state.
     setUser(data.user);
-    
-    if (hasSuperAdminAccess(data.user.role)) {
-      setLocation('/admin/dashboard');
-    } else if (data.user.role === 'event_admin') {
-      setLocation('/event-admin/dashboard');
-    } else if (data.user.role === 'registration_committee') {
-      setLocation('/registration-committee/dashboard');
-    } else {
-      setLocation('/participant/dashboard');
-    }
   }
 
   function logout() {

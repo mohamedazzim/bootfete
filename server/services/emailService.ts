@@ -8,7 +8,7 @@
 
 import { Resend } from 'resend';
 import { storage } from '../storage';
-import { getBranding, resolveEventBranding, type EventBranding } from './brandingService';
+import { getBranding, resolveEventBranding, getDefaultSymposiumId, type EventBranding } from './brandingService';
 import { getSenderEmail } from '../config/env';
 import type { EmailBrand } from '../templates/emailTemplates';
 import { redisClient } from './redisClient';
@@ -435,13 +435,13 @@ export class EmailService {
 
   // --- Template Methods ---
 
-  async sendRegistrationReceived(to: string, name: string, eventName: string, registrationId?: string, eventBranding?: EventBranding | null) {
+  async sendRegistrationReceived(to: string, name: string, eventName: string, registrationId?: string, eventBranding?: EventBranding | null, eventId?: string) {
     const brand = await this.resolveEmailBrand(eventBranding);
     const html = generateRegistrationReceivedEmail(name, eventName, registrationId, brand);
-    return this.sendEmail(to, `Registration Successful - ${eventName}`, html, 'registration_received', name, { eventName });
+    return this.sendEmail(to, `Registration Successful - ${eventName}`, html, 'registration_received', name, { eventName, eventId });
   }
 
-  async sendConsolidatedRegistrationReceived(to: string, name: string, events: Array<{ name: string }>, details: any, eventBranding?: EventBranding | null) {
+  async sendConsolidatedRegistrationReceived(to: string, name: string, events: Array<{ name: string }>, details: any, eventBranding?: EventBranding | null, eventIds?: string[]) {
     const brand = await this.resolveEmailBrand(eventBranding);
     const html = generateConsolidatedRegistrationEmail(name, events, details, brand);
     const eventNames = events.map(e => e.name).join(', ');
@@ -451,27 +451,28 @@ export class EmailService {
       html,
       'registration_received_consolidated',
       name,
-      { eventNames, eventCount: events.length }
+      { eventNames, eventCount: events.length, eventIds }
     );
   }
 
-  async sendRegistrationApproved(to: string, name: string, eventName: string, username: string, password: string, eventBranding?: EventBranding | null) {
+  async sendRegistrationApproved(to: string, name: string, eventName: string, username: string, password: string, eventBranding?: EventBranding | null, eventId?: string, symposiumId?: string) {
     const brand = await this.resolveEmailBrand(eventBranding);
     const html = generateRegistrationApprovedEmail(name, eventName, username, password, brand);
-    return this.sendEmail(to, `Registration Approved - ${eventName}`, html, 'registration_approved', name, { eventName, username });
+    return this.sendEmail(to, `Registration Approved - ${eventName}`, html, 'registration_approved', name, { eventName, username, eventId, symposiumId });
   }
 
-  async sendCredentials(to: string, name: string, eventName: string, username: string, password: string, eventBranding?: EventBranding | null) {
+  async sendCredentials(to: string, name: string, eventName: string, username: string, password: string, eventBranding?: EventBranding | null, eventId?: string) {
     const brand = await this.resolveEmailBrand(eventBranding);
     const html = generateCredentialsEmail(name, eventName, username, password, brand);
-    return this.sendEmail(to, `Your Credentials for ${eventName}`, html, 'credentials_distribution', name, { eventName, username });
+    return this.sendEmail(to, `Your Credentials for ${eventName}`, html, 'credentials_distribution', name, { eventName, username, eventId });
   }
 
   async sendConsolidatedCredentials(
     to: string,
     name: string,
     credentials: Array<{ eventName: string; username: string; password: string }>,
-    eventBranding?: EventBranding | null
+    eventBranding?: EventBranding | null,
+    eventIds?: string[]
   ) {
     const brand = await this.resolveEmailBrand(eventBranding);
     const html = generateConsolidatedCredentialsEmail(name, credentials, brand);
@@ -482,20 +483,20 @@ export class EmailService {
       html,
       'credentials_consolidated',
       name,
-      { eventNames, eventCount: credentials.length }
+      { eventNames, eventCount: credentials.length, eventIds }
     );
   }
 
-  async sendTestStartReminder(to: string, name: string, eventName: string, roundName: string, startTime: Date, eventBranding?: EventBranding | null) {
+  async sendTestStartReminder(to: string, name: string, eventName: string, roundName: string, startTime: Date, eventBranding?: EventBranding | null, eventId?: string) {
     const brand = await this.resolveEmailBrand(eventBranding);
     const html = generateTestStartReminderEmail(name, eventName, roundName, startTime, brand);
-    return this.sendEmail(to, `Test Starting Soon - ${roundName}`, html, 'test_start_reminder', name, { eventName, roundName, startTime });
+    return this.sendEmail(to, `Test Starting Soon - ${roundName}`, html, 'test_start_reminder', name, { eventName, roundName, startTime, eventId });
   }
 
-  async sendResultPublished(to: string, name: string, eventName: string, score: number, rank: number, eventBranding?: EventBranding | null) {
+  async sendResultPublished(to: string, name: string, eventName: string, score: number, rank: number, eventBranding?: EventBranding | null, eventId?: string) {
     const brand = await this.resolveEmailBrand(eventBranding);
     const html = generateResultPublishedEmail(name, eventName, score, rank, brand);
-    return this.sendEmail(to, `Results Published - ${eventName}`, html, 'result_published', name, { eventName, score, rank });
+    return this.sendEmail(to, `Results Published - ${eventName}`, html, 'result_published', name, { eventName, score, rank, eventId });
   }
 
   async sendTestQualification(
@@ -505,7 +506,8 @@ export class EmailService {
     roundName: string,
     score: number,
     maxScore: number,
-    eventBranding?: EventBranding | null
+    eventBranding?: EventBranding | null,
+    eventId?: string
   ) {
     const brand = await this.resolveEmailBrand(eventBranding);
     const html = generateTestQualificationEmail(name, eventName, roundName, score, maxScore, brand);
@@ -515,7 +517,7 @@ export class EmailService {
       html,
       'test_result_qualified',
       name,
-      { eventName, roundName, score, maxScore }
+      { eventName, roundName, score, maxScore, eventId }
     );
   }
 
@@ -529,7 +531,8 @@ export class EmailService {
     finalsRoom: string,
     finalsTime: string,
     message?: string,
-    eventBranding?: EventBranding | null
+    eventBranding?: EventBranding | null,
+    eventId?: string
   ) {
     const brand = await this.resolveEmailBrand(eventBranding);
     const html = generateTestQualificationWithFinalsDetailsEmail(name, eventName, roundName, score, maxScore, finalsRoom, finalsTime, message, brand);
@@ -539,7 +542,7 @@ export class EmailService {
       html,
       'test_result_qualified_with_finals',
       name,
-      { eventName, roundName, score, maxScore, finalsRoom, finalsTime, message }
+      { eventName, roundName, score, maxScore, finalsRoom, finalsTime, message, eventId }
     );
   }
 
@@ -551,7 +554,8 @@ export class EmailService {
     venueRoom: string,
     dateTime: string,
     message?: string,
-    eventBranding?: EventBranding | null
+    eventBranding?: EventBranding | null,
+    eventId?: string
   ) {
     const brand = await this.resolveEmailBrand(eventBranding);
     const html = generateWinnerAnnouncementEmail(name, eventName, roundName, venueRoom, dateTime, message, brand);
@@ -561,7 +565,7 @@ export class EmailService {
       html,
       'winner_announcement',
       name,
-      { eventName, roundName, venueRoom, dateTime, message }
+      { eventName, roundName, venueRoom, dateTime, message, eventId }
     );
   }
 
@@ -577,6 +581,29 @@ export class EmailService {
 
   // --- Logging ---
 
+  // Phase 1 multi-tenancy: attribute an email log row to its symposium.
+  // Resolution order: explicit metadata.eventId (single-event emails) →
+  // metadata.eventIds[0] (consolidated multi-event emails; documented
+  // approximation when one send spans symposiums) → metadata.symposiumId
+  // (explicit override) → default (oldest) symposium. Returns null only when
+  // no symposium row exists at all (migrations not run) — the caller then
+  // skips the log write rather than failing the (already sent) email.
+  private async resolveLogSymposiumId(metadata: any): Promise<string | null> {
+    const eventId: string | undefined =
+      metadata?.eventId ?? (Array.isArray(metadata?.eventIds) ? metadata.eventIds[0] : undefined);
+    if (eventId) {
+      try {
+        const event = await storage.getEvent(eventId);
+        if (event?.symposiumId) return event.symposiumId;
+      } catch {
+        // fall through to default
+      }
+    }
+    if (typeof metadata?.symposiumId === 'string' && metadata.symposiumId) {
+      return metadata.symposiumId;
+    }
+    return getDefaultSymposiumId();
+  }
 
   private async logEmail(
     options: { to: string; subject: string; html: string; metadata?: any },
@@ -585,7 +612,13 @@ export class EmailService {
     result: SendResult
   ) {
     try {
+      const symposiumId = await this.resolveLogSymposiumId(options.metadata);
+      if (!symposiumId) {
+        console.warn('[EmailService] Skipping email log: no symposium exists');
+        return;
+      }
       await storage.createEmailLog({
+        symposiumId,
         recipientEmail: options.to,
         recipientName: recipientName || null,
         subject: options.subject,

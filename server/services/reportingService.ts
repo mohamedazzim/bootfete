@@ -52,16 +52,23 @@ export interface OverallSymposiumReport {
   averageScore: number | null;
 }
 
-export async function getOverallSymposiumReport(): Promise<OverallSymposiumReport> {
+export async function getOverallSymposiumReport(symposiumId?: string): Promise<OverallSymposiumReport> {
+  // Phase 1 multi-tenancy: when symposiumId is given, every aggregate is
+  // restricted to that symposium's events (via the events join).
+  const symFilter = symposiumId ? eq(events.symposiumId, symposiumId) : undefined;
+
   // 1. Total events.
   const [{ eventCount }] = await db
     .select({ eventCount: sql<number>`count(*)` })
-    .from(events);
+    .from(events)
+    .where(symFilter);
 
   // 2. Participants grouped by status (single aggregate query).
   const participantRows = await db
     .select({ status: participants.status, count: sql<number>`count(*)` })
     .from(participants)
+    .innerJoin(events, eq(participants.eventId, events.id))
+    .where(symFilter)
     .groupBy(participants.status);
   const pCount = (s: string) =>
     Number(participantRows.find((r) => r.status === s)?.count ?? 0);
@@ -79,13 +86,15 @@ export async function getOverallSymposiumReport(): Promise<OverallSymposiumRepor
     })
     .from(testAttempts)
     .innerJoin(rounds, eq(testAttempts.roundId, rounds.id))
+    .innerJoin(events, eq(rounds.eventId, events.id))
     .leftJoin(
       participants,
       and(
         eq(participants.userId, testAttempts.userId),
         eq(participants.eventId, rounds.eventId),
       ),
-    );
+    )
+    .where(symFilter);
 
   return {
     generatedAt: new Date().toISOString(),
@@ -291,7 +300,8 @@ export interface CollegeWiseReport {
  * resolve to (mode across their registrations); scores are the user's total
  * across scored, non-disqualified attempts symposium-wide.
  */
-export async function getCollegeWiseReport(): Promise<CollegeWiseReport> {
+export async function getCollegeWiseReport(symposiumId?: string): Promise<CollegeWiseReport> {
+  // Phase 1 multi-tenancy: restrict to one symposium's registrations.
   // 1. All active registrations with team members (two queries, no N+1).
   const regRows = await db
     .select({
@@ -304,7 +314,12 @@ export async function getCollegeWiseReport(): Promise<CollegeWiseReport> {
     })
     .from(registrations)
     .leftJoin(teamMembers, eq(teamMembers.registrationId, registrations.id))
-    .where(ne(registrations.status, "cancelled"));
+    .innerJoin(events, eq(registrations.eventId, events.id))
+    .where(
+      symposiumId
+        ? and(ne(registrations.status, "cancelled"), eq(events.symposiumId, symposiumId))
+        : ne(registrations.status, "cancelled"),
+    );
 
   // 2. Registry colleges for every roll number seen (one query).
   const rollNos = Array.from(

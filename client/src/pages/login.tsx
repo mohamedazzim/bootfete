@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useAuth, hasSuperAdminAccess } from '@/lib/auth';
+import { useAuth, getPostLoginPath } from '@/lib/auth';
 import { useLocation, Link } from 'wouter';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -21,21 +21,22 @@ export default function Login() {
   const [formError, setFormError] = useState<string | null>(null);
   const { login, user } = useAuth();
   const { toast } = useToast();
-  const [, setLocation] = useLocation();
+  const [location, setLocation] = useLocation();
 
+  // Post-login routing lives here and ONLY here. This effect fires after
+  // `user` has landed in AuthProvider state (never on the stale null), so
+  // the destination route's guard always sees the authenticated user —
+  // no bounce through /login, no mis-route to /admin/dashboard. The
+  // location guard keeps the /me re-fetch (same user, new object identity)
+  // from re-navigating.
   useEffect(() => {
     if (user) {
-      if (hasSuperAdminAccess(user.role)) {
-        setLocation('/admin/dashboard');
-      } else if (user.role === 'event_admin') {
-        setLocation('/event-admin/dashboard');
-      } else if (user.role === 'registration_committee') {
-        setLocation('/registration-committee/dashboard');
-      } else {
-        setLocation('/participant/dashboard');
+      const path = getPostLoginPath(user);
+      if (path !== location) {
+        setLocation(path);
       }
     }
-  }, [user, setLocation]);
+  }, [user, location, setLocation]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();

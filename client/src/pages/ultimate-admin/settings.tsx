@@ -1,14 +1,15 @@
-// Ultimate-admin branding settings (Phase B).
+// Ultimate-admin branding settings (Phase 1 multi-tenancy).
 //
-// Strict ultimate_admin-only surface: edits the live global_settings brand
-// (app_name, organizer_name, logo, primary_color). The inline warning states
-// the historical-integrity contract: renames apply to NEW events and pages
-// going forward; past events, certificates, and reports keep the brand they
-// were created under (their per-event snapshot).
+// Strict ultimate_admin-only surface: edits one symposium's brand
+// (organizer_name, logo, primary_color). Symposium names are IMMUTABLE —
+// there is no rename control; the name is shown read-only. The inline
+// warning states the historical-integrity contract: renames apply to NEW
+// events and pages going forward; past events, certificates, and reports
+// keep the brand they were created under (their per-event snapshot).
 import { useEffect, useRef, useState } from 'react';
 import { useLocation } from 'wouter';
 import { useAuth } from '@/lib/auth';
-import { useBranding, DEFAULT_CLIENT_BRANDING } from '@/lib/branding';
+import { useBranding } from '@/lib/branding';
 import AdminLayout from '@/components/layouts/AdminLayout';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -17,9 +18,17 @@ import { Label } from '@/components/ui/label';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { useToast } from '@/hooks/use-toast';
 import { successToast, errorToast } from '@/lib/toast';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiRequest } from '@/lib/queryClient';
 import { AlertTriangle, Save, Upload, X, GraduationCap, Loader2 } from 'lucide-react';
+
+interface SymposiumOption {
+  id: string;
+  name: string;
+  organizerName: string | null;
+  logoUrl: string | null;
+  primaryColor: string | null;
+}
 
 export default function UltimateAdminBrandingSettings() {
   const { user, isLoading } = useAuth();
@@ -28,14 +37,33 @@ export default function UltimateAdminBrandingSettings() {
   const queryClient = useQueryClient();
   const fileRef = useRef<HTMLInputElement>(null);
 
+  // Symposium picker — branding is edited per symposium (Phase 1).
+  const { data: symposiums = [] } = useQuery<SymposiumOption[]>({
+    queryKey: ['/api/ultimate-admin/symposiums'],
+    queryFn: async () => {
+      const res = await apiRequest('GET', '/api/ultimate-admin/symposiums');
+      if (!res.ok) throw new Error('Failed to load symposiums');
+      return res.json();
+    },
+    enabled: !isLoading && user?.role === 'ultimate_admin',
+  });
+  const [symposiumId, setSymposiumId] = useState<string | null>(null);
+  const selectedSymposium = symposiums.find((s) => s.id === symposiumId) ?? null;
+
+  // Default to the first symposium once loaded.
+  useEffect(() => {
+    if (!symposiumId && symposiums.length > 0) {
+      setSymposiumId(symposiums[0].id);
+    }
+  }, [symposiums, symposiumId]);
+
   // Live values seed the form; the form state drives the preview.
+  // (Global chrome brand; the per-symposium form below overrides on select.)
   const live = useBranding();
-  const [appName, setAppName] = useState(live.appName);
-  const [organizerName, setOrganizerName] = useState(live.organizerName);
-  const [primaryColor, setPrimaryColor] = useState(live.primaryColor);
-  const [logoUrl, setLogoUrl] = useState<string | null>(live.logoUrl);
-  const [seeded, setSeeded] = useState(false);
-  const [uploading, setUploading] = useState(false);
+  const [organizerName, setOrganizerName] = useState('');
+  const [primaryColor, setPrimaryColor] = useState('#4F46E5');
+  const [logoUrl, setLogoUrl] = useState<string | null>(null);
+  const [seededFor, setSeededFor] = useState<string | null>(null);
 
   useEffect(() => {
     if (!isLoading && user?.role !== 'ultimate_admin') {
@@ -43,23 +71,22 @@ export default function UltimateAdminBrandingSettings() {
     }
   }, [user, isLoading, setLocation]);
 
-  // Seed once from the fetched live brand (defaults are the fallback, so a
-  // failed fetch still yields a usable form).
+  // Seed the form from the selected symposium's brand.
   useEffect(() => {
-    if (!seeded && live !== DEFAULT_CLIENT_BRANDING) {
-      setAppName(live.appName);
-      setOrganizerName(live.organizerName);
-      setPrimaryColor(live.primaryColor);
-      setLogoUrl(live.logoUrl);
-      setSeeded(true);
+    if (selectedSymposium && seededFor !== selectedSymposium.id) {
+      setOrganizerName(selectedSymposium.organizerName ?? '');
+      setPrimaryColor(selectedSymposium.primaryColor ?? '#4F46E5');
+      setLogoUrl(selectedSymposium.logoUrl);
+      setSeededFor(selectedSymposium.id);
     }
-  }, [live, seeded]);
+  }, [selectedSymposium, seededFor]);
 
   const saveMutation = useMutation({
     mutationFn: async () => {
+      if (!symposiumId) throw new Error('Select a symposium first');
       const res = await apiRequest('PUT', '/api/admin/settings/branding', {
-        appName: appName.trim(),
-        organizerName: organizerName.trim(),
+        symposiumId,
+        organizerName: organizerName.trim() || null,
         primaryColor: primaryColor.trim(),
         logoUrl,
       });
@@ -72,12 +99,15 @@ export default function UltimateAdminBrandingSettings() {
     onSuccess: () => {
       // Push the new brand into every useBranding() consumer immediately.
       queryClient.invalidateQueries({ queryKey: ['/api/settings/branding'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/ultimate-admin/symposiums'] });
       successToast(toast, 'Branding saved', 'New events and pages will use the updated brand.');
     },
     onError: (e: any) => {
       errorToast(toast, 'Save failed', e.message || 'Could not save branding.');
     },
   });
+
+  const [uploading, setUploading] = useState(false);
 
   const uploadLogo = async (file: File) => {
     setUploading(true);
@@ -113,7 +143,7 @@ export default function UltimateAdminBrandingSettings() {
     );
   }
 
-  const previewName = appName.trim() || live.appName;
+  const previewName = selectedSymposium?.name ?? live.appName;
   const previewOrg = organizerName.trim() || live.organizerName;
   const previewColor = /^#[0-9a-fA-F]{6}$/.test(primaryColor.trim()) ? primaryColor.trim() : live.primaryColor;
 
@@ -125,7 +155,7 @@ export default function UltimateAdminBrandingSettings() {
             Branding Settings
           </h1>
           <p className="text-sm text-slate-500 mt-1">
-            The live name, organizer, logo, and accent color for the whole site. Ultimate admin only.
+            The organizer, logo, and accent color for each symposium's site chrome. Ultimate admin only.
           </p>
         </div>
 
@@ -133,7 +163,8 @@ export default function UltimateAdminBrandingSettings() {
           <AlertTriangle className="h-4 w-4 text-amber-600" />
           <AlertDescription className="text-amber-900">
             This changes branding for all NEW events and pages going forward. Past events,
-            certificates, and reports keep the name they were created under.
+            certificates, and reports keep the name they were created under. Symposium names
+            are permanent and cannot be changed here.
           </AlertDescription>
         </Alert>
 
@@ -146,15 +177,19 @@ export default function UltimateAdminBrandingSettings() {
             </CardHeader>
             <CardContent className="space-y-5">
               <div className="space-y-2">
-                <Label htmlFor="brand-app-name">Application name</Label>
-                <Input
-                  id="brand-app-name"
-                  value={appName}
-                  maxLength={80}
-                  onChange={(e) => setAppName(e.target.value)}
-                  placeholder="BootFete 2K26"
-                  data-testid="input-app-name"
-                />
+                <Label htmlFor="brand-symposium">Symposium</Label>
+                <select
+                  id="brand-symposium"
+                  value={symposiumId ?? ''}
+                  onChange={(e) => setSymposiumId(e.target.value || null)}
+                  className="w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm"
+                  data-testid="select-symposium"
+                >
+                  {symposiums.map((s) => (
+                    <option key={s.id} value={s.id}>{s.name}</option>
+                  ))}
+                </select>
+                <p className="text-xs text-slate-400">Symposium names are immutable.</p>
               </div>
               <div className="space-y-2">
                 <Label htmlFor="brand-organizer">Organizer name</Label>

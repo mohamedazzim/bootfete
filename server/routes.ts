@@ -28,6 +28,9 @@ import {
   requireRoundAccess,
   requireRegistrationCommittee,
   requireEventAdminOrSuperAdmin,
+  assertTenantScope,
+  logNullScopeAlert,
+  invalidateUserCache,
   type AuthRequest,
 } from "./middleware/auth"
 import { loginLimiter, publicApiLimiter, examApiLimiter } from "./middleware/rateLimit"
@@ -41,6 +44,178 @@ import multer from "multer";
 import { log } from "./vite"
 import { setIO, io as socketIo } from "./websocket"
 import { queueService } from "./services/queueService"
+
+// ── Phase 1 multi-tenancy: shared route helpers ─────────────────────
+// ultimate_admin is deliberately unscoped (sees all tenants). Every other
+// admin role carries exactly one symposiumId on req.user (hydrated by
+// requireAuth); a scoped admin without one fails closed with 403.
+
+function isUltimateAdmin(req: AuthRequest): boolean {
+  return req.user!.role === "ultimate_admin";
+}
+
+// 403 unless the caller may touch a tenant-owned row. `ownerSymposiumId` is
+// the row's symposium_id. Returns true when access is granted, otherwise
+// sends the 403 response and returns false. Fail-closed: a scoped admin with
+// no symposiumId on their session is denied AND logged as a data-integrity
+// alert (role-first: ultimate_admin returns true above by role, never by
+// null-check).
+function checkTenantAccess(req: AuthRequest, res: Response, ownerSymposiumId: string | null | undefined): boolean {
+  if (isUltimateAdmin(req)) return true;
+  const scope = req.user!.symposiumId;
+  if (!scope) {
+    logNullScopeAlert(req);
+    res.status(403).json({ message: "Access denied: account is not assigned to a symposium" });
+    return false;
+  }
+  if (scope !== ownerSymposiumId) {
+    res.status(403).json({ message: "Access denied: resource belongs to another symposium" });
+    return false;
+  }
+  return true;
+}
+
+// For creation routes: resolve the symposium a new row belongs to.
+// Scoped admin → their own symposium. ultimate_admin (unscoped) → must name
+// it explicitly in the body (validated to exist). Sends the error response
+// and returns undefined when the symposium cannot be resolved.
+async function resolveTargetSymposium(req: AuthRequest, res: Response): Promise<string | undefined> {
+  if (isUltimateAdmin(req)) {
+    const raw = typeof req.body?.symposiumId === "string" ? req.body.symposiumId : null;
+    if (!raw) {
+      res.status(400).json({ message: "symposiumId is required" });
+      return undefined;
+    }
+    const s = await storage.getSymposium(raw);
+    if (!s) {
+      res.status(400).json({ message: "Symposium not found" });
+      return undefined;
+    }
+    return raw;
+  }
+  const scope = assertTenantScope(req, res);
+  if (scope === undefined) return undefined; // 403 already sent
+  if (scope === null) {
+    res.status(403).json({ message: "Tenant scope required" });
+    return undefined;
+  }
+  return scope;
+}
+
+// Phase 1 multi-tenancy: resolve the aggregate-report scope for the live
+// analytics routes (/api/admin/reports/overall, /colleges).
+// Returns null for ultimate_admin (global), a symposiumId string otherwise,
+// or undefined when a 403 was already sent. event_admin is scoped to the
+// symposium of their assigned events (their own symposiumId is still
+// required — NULL is a data-integrity defect).
+// An event_admin with no assigned events gets the "__no_events__" sentinel,
+// which matches no symposium and therefore yields empty aggregates.
+async function resolveReportScope(req: AuthRequest, res: Response): Promise<string | null | undefined> {
+  if (isUltimateAdmin(req)) return null
+  if (req.user!.role === "event_admin") {
+    if (!req.user!.symposiumId) {
+      logNullScopeAlert(req);
+      res.status(403).json({ message: "Account is not assigned to a symposium" })
+      return undefined
+    }
+    const assigned = await storage.getEventsByAdmin(req.user!.id)
+    if (assigned.length === 0) return "__no_events__"
+    const symposiums = new Set(assigned.map((e) => e.symposiumId))
+    if (symposiums.size > 1) {
+      // Data anomaly (assignment routes prevent this): fail closed rather
+      // than leaking another tenant's aggregates.
+      res.status(403).json({ message: "Access denied: events span multiple symposiums" })
+      return undefined
+    }
+    return assigned[0].symposiumId
+  }
+  const scope = assertTenantScope(req, res)
+  // assertTenantScope returns null for ultimate_admin (unreachable here),
+  // undefined when it already sent a 403, or the symposium id.
+  return scope === undefined ? undefined : scope
+}
+// Phase 1 multi-tenancy: resolve an audit-log target to its symposium id.
+// Returns the symposium id, null when the target row doesn't exist, or
+// undefined when the target type has no resolvable tenant (caller should
+// fall back to filtering by the acting admin's symposium).
+// Resolve the owning symposium of a failed email queue job, for tenant
+// scoping of /api/admin/failed-emails and retry-email. Returns null when
+// the job carries no event reference (ultimate_admin-only in that case).
+async function resolveEmailJobSymposiumId(job: any): Promise<string | null> {
+  try {
+    const v = job?.data?.variables
+    const eventId = v?.eventId ?? (Array.isArray(v?.eventIds) ? v.eventIds[0] : null)
+    if (!eventId) return null
+    const event = await storage.getEvent(eventId)
+    return event?.symposiumId ?? null
+  } catch {
+    return null
+  }
+}
+async function resolveAuditTargetSymposium(
+  targetType: string,
+  targetId: string,
+): Promise<string | null | undefined> {
+  if (targetType === "event") {
+    const e = await storage.getEvent(targetId)
+    return e ? e.symposiumId : null
+  }
+  if (targetType === "round") {
+    const r = await storage.getRound(targetId)
+    if (!r) return null
+    const e = await storage.getEvent(r.eventId)
+    return e ? e.symposiumId : null
+  }
+  if (targetType === "question") {
+    const q = await storage.getQuestion(targetId)
+    if (!q) return null
+    const r = await storage.getRound(q.roundId)
+    if (!r) return null
+    const e = await storage.getEvent(r.eventId)
+    return e ? e.symposiumId : null
+  }
+  if (targetType === "registration") {
+    const reg = await storage.getRegistration(targetId)
+    if (!reg) return null
+    const e = await storage.getEvent(reg.eventId)
+    return e ? e.symposiumId : null
+  }
+  if (targetType === "test_attempt") {
+    const attempt = await storage.getTestAttempt(targetId)
+    if (!attempt) return null
+    const r = await storage.getRound(attempt.roundId)
+    if (!r) return null
+    const e = await storage.getEvent(r.eventId)
+    return e ? e.symposiumId : null
+  }
+  return undefined
+}
+
+// Query-param variant of resolveTargetSymposium for GET export routes:
+// ultimate_admin names the symposium via ?symposiumId=; scoped admins use
+// their own. Sends the error response and returns undefined on failure.
+async function resolveTargetSymposiumQuery(req: AuthRequest, res: Response): Promise<string | undefined> {
+  if (isUltimateAdmin(req)) {
+    const raw = typeof req.query?.symposiumId === "string" ? req.query.symposiumId : null;
+    if (!raw) {
+      res.status(400).json({ message: "symposiumId is required" });
+      return undefined;
+    }
+    const s = await storage.getSymposium(raw);
+    if (!s) {
+      res.status(400).json({ message: "Symposium not found" });
+      return undefined;
+    }
+    return raw;
+  }
+  const scope = assertTenantScope(req, res);
+  if (scope === undefined) return undefined; // 403 already sent
+  if (scope === null) {
+    res.status(403).json({ message: "Tenant scope required" });
+    return undefined;
+  }
+  return scope;
+}
 
 const JWT_SECRET = process.env.JWT_SECRET || "symposium-secret-key-change-in-production"
 
@@ -178,6 +353,15 @@ function generateFormSlug(eventName: string): string {
 
 function generateSecurePassword(): string {
   return crypto.randomBytes(12).toString("base64").slice(0, 16)
+}
+
+// Phase 2: derive a locked URL slug from a symposium name.
+// "BootFete 2K26" → "bootfete-2k26". Lowercase, non-alphanumerics become
+// hyphens, collapsed and trimmed. Never changes after creation.
+function deriveSlug(name: string): string {
+  let slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "")
+  if (!slug) slug = "symposium"
+  return slug
 }
 
 function generateHumanReadableCredentials(
@@ -412,7 +596,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/users", requireAuth, requireSuperAdmin, async (req: AuthRequest, res: Response) => {
     try {
-      const users = await storage.getUsers()
+      // Phase 1 multi-tenancy: scoped super_admin sees only their own
+      // symposium's users; ultimate_admin (unscoped) sees all.
+      const scope = isUltimateAdmin(req) ? null : assertTenantScope(req, res)
+      if (scope === undefined) return
+      const users = await storage.getUsersBySymposium(scope)
       const usersWithoutPasswords = users.map(({ password, ...user }) => user)
       res.json(usersWithoutPasswords)
     } catch (error) {
@@ -428,6 +616,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!username && !email && !password && !fullName) {
         return res.status(400).json({ message: "At least one field (username, email, password, or fullName) must be provided" })
       }
+
+      // Phase 1 multi-tenancy: no cross-symposium credential takeover.
+      // Load the target first; 403 unless it belongs to the caller's symposium.
+      const target = await storage.getUser(req.params.id)
+      if (!target) {
+        return res.status(404).json({ message: "User not found" })
+      }
+      if (!checkTenantAccess(req, res, target.symposiumId)) return
 
       const updates: any = {}
       if (username !== undefined) updates.username = username
@@ -448,7 +644,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Track-3: drop the cached auth user row so credential/role changes
       // propagate immediately instead of waiting out the 20s TTL.
-      await cacheService.delete(`auth:user:${req.params.id}`)
+      await invalidateUserCache(req.params.id)
 
       const { password: _, ...userWithoutPassword } = user
       res.json({
@@ -475,16 +671,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const targetUser = await storage.getUser(targetId)
+      if (!targetUser) {
+        return res.status(404).json({ message: "User not found" })
+      }
+      // Phase 1 multi-tenancy: no cross-symposium deletion.
+      if (!checkTenantAccess(req, res, targetUser.symposiumId)) return
       // Phase A: rank protection. A caller may never delete an account whose
       // role outranks their own, and the last remaining top-tier admin can
       // never be deleted (ultimate_admin inherits all super_admin powers, so
       // either role counts toward the anti-lockout invariant).
-      if (targetUser && (targetUser.role === "super_admin" || targetUser.role === "ultimate_admin")) {
+      // Phase 1: the anti-lockout count is per-symposium for scoped callers —
+      // a symposium must never lose its last super_admin.
+      if (targetUser.role === "super_admin" || targetUser.role === "ultimate_admin") {
         if (targetUser.role === "ultimate_admin" && req.user!.role !== "ultimate_admin") {
           return res.status(403).json({ message: "Only an Ultimate Admin can delete an Ultimate Admin account" })
         }
-        const allUsers = await storage.getUsers()
-        const privilegedCount = allUsers.filter((u) => u.role === "super_admin" || u.role === "ultimate_admin").length
+        const scopeUsers = isUltimateAdmin(req) ? await storage.getUsers() : await storage.getUsersBySymposium(req.user!.symposiumId)
+        const privilegedCount = scopeUsers.filter((u) => u.role === "super_admin" || u.role === "ultimate_admin").length
         if (privilegedCount <= 1) {
           return res.status(400).json({ message: "Cannot delete the last remaining admin account" })
         }
@@ -493,7 +696,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       await storage.deleteUser(targetId)
       // Track-3: drop the cached auth row so the deleted user cannot keep
       // authenticating for the remainder of the 20s TTL.
-      await cacheService.delete(`auth:user:${targetId}`)
+      await invalidateUserCache(targetId)
       res.json({ message: "User deleted successfully" })
     } catch (error) {
       console.error("Delete user error:", error)
@@ -504,30 +707,272 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Phase A white-label: public branding read (cached, DB-backed singleton
   // with hardcoded BootFete 2K26 defaults as fallback). No auth required —
   // the client chrome (header, landing, login) renders this.
+  // Phase 1 multi-tenancy: accepts ?symposiumId= for the symposium's brand;
+  // without it, returns the default (oldest) symposium's brand — the
+  // pre-migration equivalent of the old global singleton.
   app.get("/api/settings/branding", publicApiLimiter, async (req: Request, res: Response) => {
     try {
-      res.json(await getBranding())
+      const symposiumId = typeof req.query.symposiumId === "string" ? req.query.symposiumId : null
+      res.json(await getBranding(symposiumId))
     } catch (error) {
       console.error("Get branding error:", error)
       res.status(500).json({ message: "Internal server error" })
     }
   })
 
-  // Phase A white-label: STRICTLY ultimate_admin. Updates the singleton
+  // Phase 2: public symposium directory (backs the bare "/" page).
+  // Returns only public identity fields — no branding internals, no emails.
+  app.get("/api/symposiums/directory", publicApiLimiter, async (req: Request, res: Response) => {
+    try {
+      const symposiums = await storage.getSymposiums()
+      res.json(symposiums.map((s) => ({
+        id: s.id,
+        name: s.name,
+        slug: s.slug,
+        organizerName: s.organizerName,
+      })))
+    } catch (error) {
+      console.error("Get symposium directory error:", error)
+      res.status(500).json({ message: "Internal server error" })
+    }
+  })
+
+  // Phase 2: public per-symposium landing data, keyed by the locked slug.
+  // Returns the symposium's public branding plus its own open events —
+  // never another symposium's. Rate-limited like other public endpoints.
+  app.get("/api/symposiums/by-slug/:slug", publicApiLimiter, async (req: Request, res: Response) => {
+    try {
+      const slug = String(req.params.slug ?? "").toLowerCase().trim()
+      if (!slug || slug.length > 100 || !/^[a-z0-9-]+$/.test(slug)) {
+        return res.status(400).json({ message: "Invalid symposium slug" })
+      }
+      const symposium = await storage.getSymposiumBySlug(slug)
+      if (!symposium) {
+        return res.status(404).json({ message: "Symposium not found" })
+      }
+      const branding = await getBranding(symposium.id)
+      const events = (await storage.getEventsBySymposium(symposium.id))
+        .filter((e) => e.status === "active")
+        .map((e) => ({
+          id: e.id,
+          name: e.name,
+          description: e.description,
+          type: e.type,
+          category: e.category,
+          startDate: e.startDate,
+          endDate: e.endDate,
+          status: e.status,
+        }))
+      res.json({ symposium, branding, events })
+    } catch (error) {
+      console.error("Get symposium by slug error:", error)
+      res.status(500).json({ message: "Internal server error" })
+    }
+  })
+
+  // Phase A white-label: STRICTLY ultimate_admin. Updates a symposium's
   // branding row and invalidates the Redis cache so the new brand is live
   // immediately. A standard super_admin gets 403 here by design.
+  // Phase 1: the target symposium is explicit (symposiumId in body) —
+  // ultimate_admin is unscoped, so there is no implicit "current" symposium.
+  // The symposium `name` itself is immutable and can never be changed here.
   app.put("/api/admin/settings/branding", requireAuth, requireUltimateAdmin, async (req: AuthRequest, res: Response) => {
     try {
-      const branding = await updateBranding(req.body ?? {}, req.user!.id)
+      const symposiumId = typeof req.body?.symposiumId === "string" ? req.body.symposiumId : null
+      if (!symposiumId) {
+        return res.status(400).json({ message: "symposiumId is required" })
+      }
+      const branding = await updateBranding(symposiumId, req.body ?? {}, req.user!.id)
       res.json(branding)
     } catch (error: any) {
       console.error("Update branding error:", error)
-      if (error?.message && /must be|No valid branding/.test(error.message)) {
+      if (error?.message && /must be|No valid branding|not found/i.test(error.message)) {
         return res.status(400).json({ message: error.message })
       }
       res.status(500).json({ message: "Internal server error" })
     }
   })
+
+  // Phase 1 multi-tenancy: create a new symposium. STRICTLY ultimate_admin.
+  // Takes `name` (IMMUTABLE — no update route may ever touch this field;
+  // there is intentionally no PUT/PATCH for symposiums) plus initial
+  // branding fields. The created symposium starts empty: no events, no
+  // users. Use POST /api/auth/register (as ultimate_admin) or direct
+  // provisioning to create its first super_admin afterwards.
+  app.post("/api/ultimate-admin/symposiums", requireAuth, requireUltimateAdmin, async (req: AuthRequest, res: Response) => {
+    try {
+      const { name, organizerName, logoUrl, primaryColor, supportEmail, footerText,
+              superAdminUsername, superAdminEmail, superAdminFullName } = req.body ?? {}
+      if (typeof name !== "string" || !name.trim() || name.trim().length > 80) {
+        return res.status(400).json({ message: "name is required (1-80 characters)" })
+      }
+      const trimmedName = name.trim()
+      const existing = await storage.getSymposiumByName(trimmedName)
+      if (existing) {
+        return res.status(400).json({ message: "A symposium with this name already exists" })
+      }
+      if (primaryColor !== undefined && !/^#[0-9a-fA-F]{6}$/.test(primaryColor)) {
+        return res.status(400).json({ message: "primaryColor must be a #RRGGBB hex color" })
+      }
+      if (supportEmail !== undefined && (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(supportEmail) || supportEmail.length > 120)) {
+        return res.status(400).json({ message: "supportEmail must be a valid email address" })
+      }
+      if (logoUrl !== undefined && logoUrl !== null) {
+        const v = String(logoUrl).trim()
+        if (v.length > 500 || (!/^https?:\/\//i.test(v) && !v.startsWith("/"))) {
+          return res.status(400).json({ message: "logoUrl must be an http(s) URL or a site-relative path" })
+        }
+      }
+      if (footerText !== undefined && String(footerText).length > 200) {
+        return res.status(400).json({ message: "footerText must be at most 200 characters" })
+      }
+
+      // Phase 2: super_admin credentials for the new symposium.
+      if (typeof superAdminUsername !== "string" || !/^[a-zA-Z0-9_-]{3,50}$/.test(superAdminUsername)) {
+        return res.status(400).json({ message: "superAdminUsername is required (3-50 chars, letters/numbers/_/-)" })
+      }
+      if (typeof superAdminEmail !== "string" || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(superAdminEmail)) {
+        return res.status(400).json({ message: "superAdminEmail must be a valid email address" })
+      }
+      if (typeof superAdminFullName !== "string" || superAdminFullName.trim().length < 2) {
+        return res.status(400).json({ message: "superAdminFullName is required" })
+      }
+      if (await storage.getUserByUsername(superAdminUsername)) {
+        return res.status(400).json({ message: "Username already exists" })
+      }
+      if (await storage.getUserByEmail(superAdminEmail)) {
+        return res.status(400).json({ message: "Email already exists" })
+      }
+
+      // Derive the locked slug. Uniqueness is enforced by the DB constraint;
+      // on collision, suffix with -2, -3, ... (same rule as migration 007).
+      const baseSlug = deriveSlug(trimmedName)
+      let slug = baseSlug
+      let suffix = 2
+      while (await storage.getSymposiumBySlug(slug)) {
+        slug = `${baseSlug}-${suffix++}`
+      }
+
+      // CREDENTIAL SAFETY: random 16-char password from crypto.randomBytes.
+      // Returned ONCE in this response; only the bcrypt hash is stored.
+      // Never logged, never stored in plaintext.
+      const tempPassword = generateSecurePassword()
+      const passwordHash = await bcrypt.hash(tempPassword, 10)
+
+      // ATOMIC: symposium + super_admin in one transaction. No orphaned
+      // symposium without an admin, no admin pointing at a rolled-back row.
+      const { symposium, superAdmin } = await storage.createSymposiumWithSuperAdmin(
+        {
+          name: trimmedName,
+          slug,
+          organizerName: typeof organizerName === "string" && organizerName.trim() ? organizerName.trim() : "Not configured",
+          logoUrl: logoUrl ?? null,
+          primaryColor: primaryColor ?? "#4F46E5",
+          supportEmail: supportEmail ?? "Not configured",
+          footerText: footerText ?? "",
+          createdBy: req.user!.id,
+        },
+        {
+          username: superAdminUsername,
+          passwordHash,
+          email: superAdminEmail,
+          fullName: superAdminFullName.trim(),
+          createdBy: req.user!.id,
+        },
+      )
+
+      // Invalidate the default-brand cache: the new symposium could become
+      // the default only if it is the oldest, which it never is — but the
+      // symposium list itself may be cached elsewhere, so be explicit.
+      await cacheService.delete("branding:default-symposium-id")
+
+      const { password: _pw, ...safeAdmin } = superAdmin
+      res.status(201).json({
+        symposium,
+        superAdmin: safeAdmin,
+        // ONE-TIME: show this to the creator now; it will never be shown again.
+        tempPassword,
+      })
+    } catch (error) {
+      console.error("Create symposium error:", error)
+      res.status(500).json({ message: "Internal server error" })
+    }
+  })
+
+  // Phase 1 multi-tenancy: list all symposiums. STRICTLY ultimate_admin —
+  // scoped super_admins see only their own symposium via /api/settings/branding
+  // and never need (or get) the full tenant list.
+  app.get("/api/ultimate-admin/symposiums", requireAuth, requireUltimateAdmin, async (req: AuthRequest, res: Response) => {
+    try {
+      res.json(await storage.getSymposiums())
+    } catch (error) {
+      console.error("List symposiums error:", error)
+      res.status(500).json({ message: "Internal server error" })
+    }
+  })
+
+  // Phase 2: enriched symposium overview for the ultimate_admin landing
+  // page: name, slug, super_admin identity, event count, created date.
+  app.get("/api/ultimate-admin/symposiums/overview", requireAuth, requireUltimateAdmin, async (req: AuthRequest, res: Response) => {
+    try {
+      const symposiums = await storage.getSymposiums()
+      const overview = await Promise.all(symposiums.map(async (s) => {
+        const users = await storage.getUsersBySymposium(s.id)
+        const superAdmin = users.find((u) => u.role === "super_admin")
+        const events = await storage.getEventsBySymposium(s.id)
+        return {
+          id: s.id,
+          name: s.name,
+          slug: s.slug,
+          createdAt: s.createdAt,
+          eventCount: events.length,
+          superAdmin: superAdmin
+            ? { id: superAdmin.id, fullName: superAdmin.fullName, email: superAdmin.email, username: superAdmin.username }
+            : null,
+        }
+      }))
+      res.json(overview)
+    } catch (error) {
+      console.error("Symposium overview error:", error)
+      res.status(500).json({ message: "Internal server error" })
+    }
+  })
+
+  // Phase 2: reset a symposium's super_admin password (ultimate_admin only).
+  // Generates a new random password, flags forced change on next login.
+  // Returns the plaintext ONCE — never stored or logged.
+  app.patch(
+    "/api/ultimate-admin/symposiums/:id/superadmin/reset-password",
+    requireAuth,
+    requireUltimateAdmin,
+    async (req: AuthRequest, res: Response) => {
+      try {
+        const symposium = await storage.getSymposium(req.params.id)
+        if (!symposium) {
+          return res.status(404).json({ message: "Symposium not found" })
+        }
+        const admins = await storage.getUsersBySymposium(symposium.id)
+        const superAdmin = admins.find((u) => u.role === "super_admin")
+        if (!superAdmin) {
+          return res.status(404).json({ message: "No super_admin found for this symposium" })
+        }
+        const tempPassword = generateSecurePassword()
+        const passwordHash = await bcrypt.hash(tempPassword, 10)
+        await storage.resetUserPassword(superAdmin.id, passwordHash)
+        // Invalidate the cached auth projection so the forced-change flag
+        // takes effect on the next request, not after the 20s TTL.
+        await invalidateUserCache(superAdmin.id)
+        const { password: _pw, ...safeAdmin } = superAdmin
+        res.json({
+          superAdmin: safeAdmin,
+          tempPassword,
+        })
+      } catch (error) {
+        console.error("Reset super_admin password error:", error)
+        res.status(500).json({ message: "Internal server error" })
+      }
+    },
+  )
 
   // Phase B: branding logo upload (ultimate_admin only). Returns the
   // site-relative logoUrl to store via PUT /api/admin/settings/branding.
@@ -556,7 +1001,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/admin/orphaned-admins", requireAuth, requireSuperAdmin, async (req: AuthRequest, res: Response) => {
     try {
       const orphanedAdmins = await storage.getOrphanedEventAdmins()
-      const adminsWithoutPasswords = orphanedAdmins.map(({ password, ...admin }) => admin)
+      // Phase 1 multi-tenancy: scoped super_admin sees only their own
+      // symposium's unassigned admins.
+      const scope = isUltimateAdmin(req) ? null : assertTenantScope(req, res)
+      if (scope === undefined) return
+      const scoped = scope === null ? orphanedAdmins : orphanedAdmins.filter((a) => a.symposiumId === scope)
+      const adminsWithoutPasswords = scoped.map(({ password, ...admin }) => admin)
       res.json(adminsWithoutPasswords)
     } catch (error) {
       console.error("Get orphaned admins error:", error)
@@ -603,7 +1053,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
   })
 
   // QA-1102: Real settings save endpoint — DB-persisted (certified).
-  app.patch("/api/admin/system-settings", requireAuth, requireSuperAdmin, async (req: AuthRequest, res: Response) => {
+  // Phase 1 multi-tenancy: ULTIMATE-ONLY. Notification preferences are a
+  // single global row; a per-symposium super_admin's change would silently
+  // affect every other symposium.
+  app.patch("/api/admin/system-settings", requireAuth, requireUltimateAdmin, async (req: AuthRequest, res: Response) => {
     try {
       const { notifications } = req.body;
 
@@ -711,6 +1164,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Phase A: ultimate_admin accounts can ONLY be created by an existing
       // ultimate_admin — a super_admin must never be able to mint its own
       // superior. Other admin roles require super-admin-level access.
+      let adminUser: { id: string; role: string; symposiumId: string | null } | undefined
       if (role !== "participant") {
         const token = req.headers.authorization?.replace("Bearer ", "")
         if (!token) {
@@ -725,14 +1179,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return res.status(401).json({ message: "Invalid or expired token" })
         }
 
-        const adminUser = await storage.getUser(adminUserId)
+        const fetchedAdmin = await storage.getUser(adminUserId)
         if (role === "ultimate_admin") {
-          if (!adminUser || adminUser.role !== "ultimate_admin") {
+          if (!fetchedAdmin || fetchedAdmin.role !== "ultimate_admin") {
             return res.status(403).json({ message: "Only an Ultimate Admin can create Ultimate Admin accounts" })
           }
-        } else if (!adminUser || !hasSuperAdminAccess(adminUser)) {
+        } else if (!fetchedAdmin || !hasSuperAdminAccess(fetchedAdmin)) {
           return res.status(403).json({ message: "Super Admin access required to create admin accounts" })
         }
+        adminUser = fetchedAdmin
       }
 
       const existingUser = await storage.getUserByUsername(username)
@@ -747,12 +1202,45 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const hashedPassword = await bcrypt.hash(password, 10)
 
+      // Phase 1 multi-tenancy: stamp the new user's symposium.
+      // - Scoped admin (super_admin) creating an admin-role user → the new
+      //   user belongs to the creator's symposium. A super_admin can never
+      //   mint users into another symposium.
+      // - ultimate_admin creating super_admin/event_admin/registration_committee
+      //   → must name the target symposium explicitly in the body.
+      // - ultimate_admin creating ultimate_admin → stays null (unscoped).
+      // - participant self-registration → null; participants are event-bound
+      //   and get their symposium from the event at registration/confirm time.
+      let newUserSymposiumId: string | null = null
+      if (role !== "participant") {
+        if (adminUser!.role === "ultimate_admin" && role === "ultimate_admin") {
+          newUserSymposiumId = null
+        } else if (adminUser!.role === "ultimate_admin") {
+          const raw = typeof req.body?.symposiumId === "string" ? req.body.symposiumId : null
+          if (!raw) {
+            return res.status(400).json({ message: "symposiumId is required when creating admin accounts" })
+          }
+          const s = await storage.getSymposium(raw)
+          if (!s) {
+            return res.status(400).json({ message: "Symposium not found" })
+          }
+          newUserSymposiumId = raw
+        } else {
+          newUserSymposiumId = adminUser!.symposiumId ?? null
+          if (!newUserSymposiumId) {
+            logNullScopeAlert(req);
+            return res.status(403).json({ message: "Your account has no symposium assignment" })
+          }
+        }
+      }
+
       const user = await storage.createUser({
         username,
         password: hashedPassword,
         email,
         fullName: fullName.trim(),
         role,
+        symposiumId: newUserSymposiumId,
       } as any)
 
       const token = jwt.sign({ id: user.id, username: user.username, role: user.role }, JWT_SECRET, { expiresIn: "7d" })
@@ -855,11 +1343,47 @@ export async function registerRoutes(app: Express): Promise<Server> {
           email: user.email,
           fullName: user.fullName,
           role: user.role,
+          // Phase 2 credential safety: client forces a password change
+          // screen when true (staff accounts with generated passwords).
+          mustChangePassword: !!user.mustChangePassword,
         },
         token,
       })
     } catch (error) {
       console.error("Login error:", error)
+      res.status(500).json({ message: "Internal server error" })
+    }
+  })
+
+  // Phase 2 credential safety: user sets their own password, clearing the
+  // forced-change flag. Requires the current password (proves possession of
+  // the generated credential being replaced).
+  app.post("/api/auth/change-password", requireAuth, async (req: AuthRequest, res: Response) => {
+    try {
+      const { currentPassword, newPassword } = req.body ?? {}
+      if (typeof currentPassword !== "string" || typeof newPassword !== "string") {
+        return res.status(400).json({ message: "currentPassword and newPassword are required" })
+      }
+      if (newPassword.length < 8) {
+        return res.status(400).json({ message: "New password must be at least 8 characters" })
+      }
+      if (newPassword === currentPassword) {
+        return res.status(400).json({ message: "New password must differ from the current password" })
+      }
+      const user = await storage.getUser(req.user!.id)
+      if (!user) {
+        return res.status(404).json({ message: "User not found" })
+      }
+      const valid = await bcrypt.compare(currentPassword, user.password)
+      if (!valid) {
+        return res.status(401).json({ message: "Current password is incorrect" })
+      }
+      const hash = await bcrypt.hash(newPassword, 10)
+      await storage.setUserPassword(user.id, hash)
+      await invalidateUserCache(user.id)
+      res.json({ message: "Password changed successfully" })
+    } catch (error) {
+      console.error("Change password error:", error)
       res.status(500).json({ message: "Internal server error" })
     }
   })
@@ -999,6 +1523,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Access denied" })
       }
 
+      // Phase 1 multi-tenancy: a super_admin may only disqualify participants
+      // of their own symposium's events. (event_admin is assignment-scoped;
+      // the participant themselves is unaffected.)
+      if (hasSuperAdminAccess(user) && user.role !== "ultimate_admin") {
+        const event = await storage.getEvent(existing.eventId)
+        if (!event) {
+          return res.status(404).json({ message: "Event not found" })
+        }
+        if (!checkTenantAccess(req, res, event.symposiumId)) return
+      }
+
       const participant = await storage.updateParticipantStatus(participantId, "disqualified")
 
       if (!participant) {
@@ -1035,10 +1570,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Get all events
   app.get("/api/events", requireAuth, async (req: AuthRequest, res: Response) => {
     try {
+      // Phase 1 multi-tenancy: the super_admin and registration_committee
+      // branches are tenant-scoped. Cache keys are namespaced per symposium
+      // so tenant A's list is never served to tenant B.
+      const tenantScope = req.user!.role === "ultimate_admin" ? null : req.user!.symposiumId ?? null
       if (hasSuperAdminAccess(req.user!) || req.user!.role === "registration_committee") {
+        if (!isUltimateAdmin(req) && !tenantScope) {
+          logNullScopeAlert(req);
+          return res.status(403).json({ message: "Your account has no symposium assignment" })
+        }
+        const cacheKey = tenantScope === null ? "events:list:all" : `events:list:sym:${tenantScope}`
         const events = await cacheService.get(
-          'events:list:all',
-          () => storage.getEvents(),
+          cacheKey,
+          () => storage.getEventsBySymposium(tenantScope),
           3600
         );
         res.json(events)
@@ -1071,7 +1615,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/events/unassigned", requireAuth, requireSuperAdmin, async (req: AuthRequest, res: Response) => {
     try {
       const events = await storage.getEventsWithoutAdmins()
-      res.json(events)
+      // Phase 1 multi-tenancy: scoped super_admin sees only their own
+      // symposium's unassigned events.
+      const scope = isUltimateAdmin(req) ? null : assertTenantScope(req, res)
+      if (scope === undefined) return
+      res.json(scope === null ? events : events.filter((e) => e.symposiumId === scope))
     } catch (error) {
       console.error("Get unassigned events error:", error)
       res.status(500).json({ message: "Internal server error" })
@@ -1209,9 +1757,33 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Invalid category. Must be 'technical' or 'non_technical'." })
       }
 
-      const existingEvent = await storage.getEventByName(name)
+      // Phase 1 multi-tenancy: resolve the target symposium FIRST — the
+      // name-uniqueness check below is per-symposium. A scoped super_admin
+      // always creates inside their own symposium; ultimate_admin (unscoped)
+      // must name the symposium explicitly in the body.
+      let symposiumId: string
+      if (req.user!.role === "ultimate_admin") {
+        const raw = typeof req.body?.symposiumId === "string" ? req.body.symposiumId : null
+        if (!raw) {
+          return res.status(400).json({ message: "symposiumId is required" })
+        }
+        const s = await storage.getSymposium(raw)
+        if (!s) {
+          return res.status(400).json({ message: "Symposium not found" })
+        }
+        symposiumId = raw
+      } else {
+        const scope = assertTenantScope(req, res)
+        if (scope === undefined) return // 403 already sent by assertTenantScope
+        if (scope === null) {
+          return res.status(403).json({ message: "Tenant scope required" })
+        }
+        symposiumId = scope
+      }
+
+      const existingEvent = await storage.getEventByNameAndSymposium(name, symposiumId)
       if (existingEvent) {
-        return res.status(400).json({ message: "An event with this name already exists" })
+        return res.status(400).json({ message: "An event with this name already exists in this symposium" })
       }
 
       // VALIDATION FIX: Verify start/end dates are valid and in proper order
@@ -1236,10 +1808,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
 
+      // Phase 1 multi-tenancy: resolve the target symposium. A scoped
+      // super_admin always creates inside their own symposium; ultimate_admin
+      // (unscoped) must name the symposium explicitly in the body.
+      // (Resolved above, before the per-symposium name-uniqueness check.)
+
       // Phase B: capture the brand this event is created under as its own
       // snapshot. Certs/reports/emails for this event read the snapshot
       // FIRST; a later rename must not rewrite this event's identity.
-      const creationBranding = await getBranding();
+      // Phase 1: the snapshot comes from the OWNING SYMPOSIUM's branding,
+      // not the old global singleton.
+      const creationBranding = await getBranding(symposiumId);
       const event = await storage.createEvent({
         name,
         description,
@@ -1251,6 +1830,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         minMembers: minMembers || 1,
         maxMembers: maxMembers || 1,
         createdBy: req.user!.id,
+        symposiumId: symposiumId,
         appName: creationBranding.appName,
         organizerName: creationBranding.organizerName,
         logoUrl: creationBranding.logoUrl,
@@ -1280,16 +1860,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   })
 
-  app.patch("/api/events/:id", requireAuth, requireSuperAdmin, async (req: AuthRequest, res: Response) => {
+  // Phase 2: both the owning super_admin AND a specifically-assigned
+  // event_admin may edit an event. requireEventAccess scopes super_admin by
+  // symposium, event_admin by assignment (+ defense-in-depth symposium
+  // check), and lets ultimate_admin through by role.
+  app.patch("/api/events/:id", requireAuth, requireEventAccess, async (req: AuthRequest, res: Response) => {
     try {
       const { name, description, type, category, startDate, endDate, status, minMembers, maxMembers } = req.body
+
+      // Phase 1 multi-tenancy: no cross-symposium event mutation.
+      // Also: symposium names are immutable — `name` here is the EVENT name
+      // (events are renameable); the check is per-symposium uniqueness.
+      const existingTargetEvent = await storage.getEvent(req.params.id)
+      if (!existingTargetEvent) {
+        return res.status(404).json({ message: "Event not found" })
+      }
+      if (!checkTenantAccess(req, res, existingTargetEvent.symposiumId)) return
 
       try { console.log(`Update event payload for id=${req.params.id} incoming category: ${category}`) } catch (e) { }
 
       if (name !== undefined) {
-        const existingEvent = await storage.getEventByName(name)
+        const existingEvent = await storage.getEventByNameAndSymposium(name, existingTargetEvent.symposiumId)
         if (existingEvent && existingEvent.id !== req.params.id) {
-          return res.status(400).json({ message: "An event with this name already exists" })
+          return res.status(400).json({ message: "An event with this name already exists in this symposium" })
         }
       }
 
@@ -1358,6 +1951,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!event) {
         return res.status(404).json({ message: "Event not found" })
       }
+      // Phase 1 multi-tenancy: no cross-symposium event deletion.
+      if (!checkTenantAccess(req, res, event.symposiumId)) return
 
       // Handle optional admin deletion
       if (req.query.deleteAdmins === 'true') {
@@ -1369,7 +1964,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           if (adminEvents.length === 1 && adminEvents[0].id === req.params.id) {
             await storage.deleteUser(admin.id);
             // Track-3: drop the cached auth row for the cascade-deleted admin.
-            await cacheService.delete(`auth:user:${admin.id}`);
+            await invalidateUserCache(admin.id);
           }
         }
       }
@@ -1394,23 +1989,65 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   })
 
+  // Phase 2: create a NEW event_admin user AND assign them to the event,
+  // atomically from the super_admin's perspective. The event must belong to
+  // the caller's symposium (checkTenantAccess) — the new admin is stamped
+  // with the EVENT's symposium_id, so cross-symposium creation is impossible
+  // by construction. The old "assign existing adminId" behavior is replaced:
+  // use DELETE .../admins/:adminId to remove, then POST again to replace.
   app.post("/api/events/:eventId/admins", requireAuth, requireSuperAdmin, async (req: AuthRequest, res: Response) => {
     try {
-      const { adminId } = req.body
+      const { username, email, fullName } = req.body ?? {}
 
-      if (!adminId) {
-        return res.status(400).json({ message: "Admin ID is required" })
+      if (typeof username !== "string" || !/^[a-zA-Z0-9_-]{3,50}$/.test(username)) {
+        return res.status(400).json({ message: "username is required (3-50 chars, letters/numbers/_/-)" })
+      }
+      if (typeof email !== "string" || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        return res.status(400).json({ message: "email must be a valid email address" })
+      }
+      if (typeof fullName !== "string" || fullName.trim().length < 2) {
+        return res.status(400).json({ message: "fullName is required" })
+      }
+      if (await storage.getUserByUsername(username)) {
+        return res.status(400).json({ message: "Username already exists" })
+      }
+      if (await storage.getUserByEmail(email)) {
+        return res.status(400).json({ message: "Email already exists" })
       }
 
-      const admin = await storage.getUser(adminId)
-      if (!admin || admin.role !== "event_admin") {
-        return res.status(400).json({ message: "Invalid event admin" })
+      const event = await storage.getEvent(req.params.eventId)
+      if (!event) {
+        return res.status(404).json({ message: "Event not found" })
       }
+      // Phase 1 multi-tenancy: the event must be in the caller's symposium.
+      // The new admin inherits the EVENT's symposium_id — a super_admin can
+      // never mint an admin outside their own tenant.
+      if (!checkTenantAccess(req, res, event.symposiumId)) return
 
-      await storage.assignEventAdmin(req.params.eventId, adminId)
-      res.json({ message: "Event admin assigned successfully" })
+      // CREDENTIAL SAFETY: random password, bcrypt-hashed, forced change on
+      // first login. Plaintext returned once, never stored or logged.
+      const tempPassword = generateSecurePassword()
+      const passwordHash = await bcrypt.hash(tempPassword, 10)
+
+      const newAdmin = await storage.createUser({
+        username,
+        password: passwordHash,
+        email,
+        fullName: fullName.trim(),
+        role: "event_admin",
+        symposiumId: event.symposiumId,
+        mustChangePassword: true,
+        createdBy: req.user!.id,
+      } as any)
+      await storage.assignEventAdmin(req.params.eventId, newAdmin.id)
+
+      const { password: _pw, ...safeAdmin } = newAdmin as any
+      res.status(201).json({
+        admin: safeAdmin,
+        tempPassword,
+      })
     } catch (error) {
-      console.error("Assign event admin error:", error)
+      console.error("Create event admin error:", error)
       res.status(500).json({ message: "Internal server error" })
     }
   })
@@ -1434,6 +2071,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
     requireSuperAdmin,
     async (req: AuthRequest, res: Response) => {
       try {
+        // Phase 1 multi-tenancy: no unassigning admins from another
+        // symposium's events, and no touching another symposium's admins.
+        const event = await storage.getEvent(req.params.eventId)
+        if (!event) {
+          return res.status(404).json({ message: "Event not found" })
+        }
+        if (!checkTenantAccess(req, res, event.symposiumId)) return
+        const admin = await storage.getUser(req.params.adminId)
+        if (admin && !checkTenantAccess(req, res, admin.symposiumId)) return
         await storage.removeEventAdmin(req.params.eventId, req.params.adminId)
         res.json({ message: "Event admin removed successfully" })
       } catch (error) {
@@ -2264,7 +2910,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
                 finalsRoom || '', // finalsRoom (if provided)
                 finalsTime || '', // finalsTime (if provided)
                 "Congratulations on qualifying for the next round!",
-                qualBrand
+                qualBrand,
+                event.id
               );
             } catch (emailError: any) {
               console.error(`[Results] Failed to send email to ${qualifier.email}:`, emailError);
@@ -2454,6 +3101,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
                   score: attempt.totalScore || 0,
                   maxScore: attempt.maxScore || 100, // Fallback
                   eventBranding: resultBrand,
+                  eventId: event?.id,
                 },
                 user.fullName
               ).catch(err => console.error(`Failed to queue result email for ${user.email}`, err));
@@ -2711,6 +3359,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Get events assigned to a specific admin (Super Admin only)
   app.get("/api/users/:userId/assigned-events", requireAuth, requireSuperAdmin, async (req: AuthRequest, res: Response) => {
     try {
+      // Phase 1 multi-tenancy: no enumerating another symposium's
+      // admin→event assignments.
+      const target = await storage.getUser(req.params.userId)
+      if (!target) {
+        return res.status(404).json({ message: "User not found" })
+      }
+      if (!checkTenantAccess(req, res, target.symposiumId)) return
       const events = await storage.getEventsByAdmin(req.params.userId)
       res.json(events)
     } catch (error) {
@@ -2905,6 +3560,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (!roundForScope || !myEvents.some((e: any) => e.id === roundForScope.eventId)) {
           return res.status(403).json({ message: "Access denied" })
         }
+      }
+
+      // Phase 1 multi-tenancy: super_admin is NOT global across symposiums.
+      // A scoped super_admin may only read attempts from their own
+      // symposium's events (attempts expose answer keys to admins).
+      if (hasSuperAdminAccess(req.user!) && req.user!.role !== "ultimate_admin") {
+        const roundForTenant = await storage.getRound(attempt.roundId)
+        const eventForTenant = roundForTenant ? await storage.getEvent(roundForTenant.eventId) : null
+        if (!eventForTenant) {
+          return res.status(404).json({ message: "Event not found" })
+        }
+        if (!checkTenantAccess(req, res, eventForTenant.symposiumId)) return
       }
 
       // Get round and questions
@@ -4114,8 +4781,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/reports", requireAuth, requireSuperAdmin, async (req: AuthRequest, res: Response) => {
     try {
+      // Phase 1 multi-tenancy: scoped super_admin sees only their own
+      // symposium's reports.
       const reports = await storage.getReports()
-      res.json(reports)
+      const scope = isUltimateAdmin(req) ? null : assertTenantScope(req, res)
+      if (scope === undefined) return
+      res.json(scope === null ? reports : reports.filter((r) => r.symposiumId === scope))
     } catch (error) {
       console.error("Get reports error:", error)
       res.status(500).json({ message: "Internal server error" })
@@ -4129,6 +4800,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!eventId) {
         return res.status(400).json({ message: "Event ID is required" })
       }
+
+      // Phase 1 multi-tenancy: a super_admin may only generate reports for
+      // their own symposium's events.
+      const event = await storage.getEvent(eventId)
+      if (!event) {
+        return res.status(404).json({ message: "Event not found" })
+      }
+      if (!checkTenantAccess(req, res, event.symposiumId)) return
 
       const report = await storage.generateEventReport(eventId, req.user!.id)
       res.status(201).json(report)
@@ -4144,7 +4823,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
     requireSuperAdmin,
     async (req: AuthRequest, res: Response) => {
       try {
-        const report = await storage.generateSymposiumReport(req.user!.id)
+        // Phase 1 multi-tenancy: the report aggregates exactly one symposium.
+        // Scoped super_admin → their own; ultimate_admin → explicit body field.
+        const reportSymposiumId = await resolveTargetSymposium(req, res)
+        if (!reportSymposiumId) return
+        const report = await storage.generateSymposiumReport(reportSymposiumId, req.user!.id)
         res.status(201).json(report)
       } catch (error) {
         console.error("Generate symposium report error:", error)
@@ -4161,6 +4844,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!report) {
         return res.status(404).json({ message: "Report not found" })
       }
+
+      // Phase 1 multi-tenancy: IDOR guard on stored reports.
+      if (!checkTenantAccess(req, res, report.symposiumId)) return
 
       res.setHeader("Content-Type", "application/json")
       res.setHeader(
@@ -4179,7 +4865,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // (requireEventAdminOrSuperAdmin derives eventId from params).
   app.get("/api/admin/reports/overall", requireAuth, requireEventAdminOrSuperAdmin, async (req: AuthRequest, res: Response) => {
     try {
-      res.json(await reportingService.getOverallSymposiumReport())
+      // Phase 1 multi-tenancy: scoped super_admin gets only their own
+      // symposium's aggregates; event_admin is scoped to the symposium(s) of
+      // their assigned events; ultimate_admin sees all.
+      const overallScope = await resolveReportScope(req, res)
+      if (overallScope === undefined) return
+      res.json(await reportingService.getOverallSymposiumReport(overallScope ?? undefined))
     } catch (error) {
       console.error("Overall report error:", error)
       res.status(500).json({ message: "Internal server error" })
@@ -4201,7 +4892,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/admin/reports/colleges", requireAuth, requireEventAdminOrSuperAdmin, async (req: AuthRequest, res: Response) => {
     try {
-      res.json(await reportingService.getCollegeWiseReport())
+      // Phase 1 multi-tenancy: same symposium restriction as /overall.
+      const collegesScope = await resolveReportScope(req, res)
+      if (collegesScope === undefined) return
+      res.json(await reportingService.getCollegeWiseReport(collegesScope ?? undefined))
     } catch (error) {
       console.error("College-wise report error:", error)
       res.status(500).json({ message: "Internal server error" })
@@ -4214,7 +4908,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
     requireSuperAdmin,
     async (req: AuthRequest, res: Response) => {
       try {
-        const events = await storage.getEvents()
+        // Phase 1 multi-tenancy: scoped super_admin backfills only their own
+        // symposium's events.
+        const backfillScope = isUltimateAdmin(req) ? null : assertTenantScope(req, res)
+        if (backfillScope === undefined) return
+        const events = await storage.getEventsBySymposium(backfillScope)
         let processedCount = 0
         let createdCount = 0
 
@@ -4258,7 +4956,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Super Admin: Get ALL Rounds with event details
   app.get("/api/super-admin/all-rounds", requireAuth, requireSuperAdmin, async (req: AuthRequest, res: Response) => {
     try {
-      const events = await storage.getEvents();
+      // Phase 1 multi-tenancy: scoped super_admin sees only their own
+      // symposium's events (and rounds). The auto-complete side effect is
+      // thereby also tenant-scoped — no cross-tenant state mutation.
+      const scope = isUltimateAdmin(req) ? null : assertTenantScope(req, res)
+      if (scope === undefined) return
+      const events = await storage.getEventsBySymposium(scope)
       let allRounds: any[] = [];
 
       for (const event of events) {
@@ -4395,8 +5098,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Title and formFields are required" })
       }
 
+      // Phase 1 multi-tenancy: forms are stamped with the owning symposium.
+      // Scoped super_admin → their own; ultimate_admin → explicit body field.
+      const formSymposiumId = await resolveTargetSymposium(req, res)
+      if (!formSymposiumId) return
+
       const slug = generateFormSlug(title)
-      const form = await storage.createRegistrationForm(title, description || "", formFields, slug, headerImage || null)
+      const form = await storage.createRegistrationForm(title, description || "", formFields, slug, headerImage || null, formSymposiumId)
 
       res.status(201).json(form)
     } catch (error) {
@@ -4420,7 +5128,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.patch("/api/registration-forms/:id", requireAuth, requireSuperAdmin, async (req: AuthRequest, res: Response) => {
     try {
-      const updates = req.body
+      // Phase 1 multi-tenancy: no cross-symposium form edits.
+      const existing = await storage.getRegistrationFormById(req.params.id)
+      if (!existing) {
+        return res.status(404).json({ message: "Form not found" })
+      }
+      if (!checkTenantAccess(req, res, existing.symposiumId)) return
+      // symposiumId is immutable — never allow it to be moved between tenants.
+      const { symposiumId: _ignored, ...updates } = req.body ?? {}
       const form = await storage.updateRegistrationForm(req.params.id, updates)
       if (!form) {
         return res.status(404).json({ message: "Form not found" })
@@ -4438,6 +5153,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!form) {
         return res.status(404).json({ message: "Form not found" })
       }
+      // Phase 1 multi-tenancy: no cross-symposium form deletion.
+      if (!checkTenantAccess(req, res, form.symposiumId)) return
 
       if (form.isActive) {
         return res.status(400).json({ message: "Cannot delete an active form. Please deactivate it first." })
@@ -4453,8 +5170,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/registration-forms/all", requireAuth, requireSuperAdmin, async (req: AuthRequest, res: Response) => {
     try {
+      // Phase 1 multi-tenancy: scoped super_admin sees only their own
+      // symposium's forms.
       const forms = await storage.getAllRegistrationForms()
-      res.json(forms)
+      const scope = isUltimateAdmin(req) ? null : assertTenantScope(req, res)
+      if (scope === undefined) return
+      res.json(scope === null ? forms : forms.filter((f) => f.symposiumId === scope))
     } catch (error) {
       console.error("Get all registration forms error:", error)
       res.status(500).json({ message: "Internal server error" })
@@ -4467,6 +5188,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!form) {
         return res.status(404).json({ message: "Form not found" })
       }
+      // Phase 1 multi-tenancy: IDOR guard on forms.
+      if (!checkTenantAccess(req, res, form.symposiumId)) return
       res.json(form)
     } catch (error) {
       console.error("Get registration form by id error:", error)
@@ -4612,14 +5335,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // the DB (plus team members) in one response. Page cache keys are
       // namespaced per page; total rides on X-Total-Count so the array shape
       // the dashboard consumes is unchanged.
+      // Phase 1 multi-tenancy: scoped callers see only registrations for
+      // their own symposium's events. Cache keys are namespaced per
+      // symposium so tenant A's page is never served to tenant B.
+      const scope = isUltimateAdmin(req) ? null : assertTenantScope(req, res)
+      if (scope === undefined) return
+      const scopeEventIds = scope === null ? undefined : (await storage.getEventsBySymposium(scope)).map((e) => e.id)
+      if (scope !== null && scopeEventIds!.length === 0) {
+        res.setHeader("X-Total-Count", "0")
+        return res.json([])
+      }
       const page = Math.max(1, parseInt(req.query.page as string, 10) || 1)
       const pageSize = Math.min(200, Math.max(1, parseInt(req.query.pageSize as string, 10) || 50))
       const registrations = await cacheService.get(
-        `registrations:page:${page}:${pageSize}`,
-        () => storage.getRegistrations({ limit: pageSize, offset: (page - 1) * pageSize }),
+        `registrations:page:${scope ?? "all"}:${page}:${pageSize}`,
+        () => storage.getRegistrations({ eventIds: scopeEventIds, limit: pageSize, offset: (page - 1) * pageSize }),
         300 // 5 minutes TTL - registrations change frequently
       )
-      const total = await storage.getRegistrationsCount()
+      const total = await storage.getRegistrationsCount(scopeEventIds)
       res.setHeader("X-Total-Count", String(total))
       res.json(registrations)
     } catch (error) {
@@ -4676,6 +5409,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "Registration not found" });
       }
 
+      // Phase 1 multi-tenancy: no editing another symposium's registrations.
+      // Applies to both the super_admin and registration_committee branches.
+      if (user.role !== "ultimate_admin") {
+        const regEvent = await storage.getEvent(registration.eventId)
+        if (!regEvent) {
+          return res.status(404).json({ message: "Event not found" })
+        }
+        if (!checkTenantAccess(req, res, regEvent.symposiumId)) return
+      }
+
       const updated = await storage.updateRegistration(id, updates);
 
       // Audit Log
@@ -4712,7 +5455,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // Get all confirmed registrations with event details
-      const registrations = await storage.getRegistrations()
+      // Phase 1 multi-tenancy: scoped callers export only their own
+      // symposium's registrations (bulk PII).
+      const dlScope = isUltimateAdmin(req) ? null : assertTenantScope(req, res)
+      if (dlScope === undefined) return
+      const dlEventIds = dlScope === null ? undefined : (await storage.getEventsBySymposium(dlScope)).map((e) => e.id)
+      if (dlScope !== null && dlEventIds!.length === 0) {
+        return res.status(404).json({ message: "No confirmed registrations found" })
+      }
+      const registrations = await storage.getRegistrations({ eventIds: dlEventIds })
       const confirmedRegistrations = registrations.filter(r => r.status === 'confirmed')
 
       if (confirmedRegistrations.length === 0) {
@@ -5054,6 +5805,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           eventName: event.name,
           registrationId: registration.id,
           eventBranding: await resolveEventBranding(event),
+          eventId: event.id,
         },
         organizerName
       ).catch(err => console.error(`Failed to queue registration email for ${organizerEmail}:`, err))
@@ -5072,6 +5824,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
               eventName: event.name,
               registrationId: registration.id,
               eventBranding: memberBrand,
+              eventId: event.id,
             },
             member.memberName
           ).catch(err => console.error(`Failed to queue registration email for ${member.memberEmail}:`, err))
@@ -5335,7 +6088,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         })
 
         results.push({ eventId, success: true, registrationId: registration.id, teamId: registration.teamId })
-        successfulEvents.push({ name: event.name })
+        successfulEvents.push({ name: event.name, eventId })
 
         // Process Emails for Team Members (Individual or Consolidated if we wanted, but sticking to individual for members for now as they might differ per event)
         // User asked for "single mail with both events names... to participant". 
@@ -5350,7 +6103,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
               member.memberEmail,
               `Registration Successful - ${event.name}`,
               'registration_received',
-              { name: member.memberName, eventName: event.name, registrationId: registration.id, eventBranding: bulkMemberBrand },
+              { name: member.memberName, eventName: event.name, registrationId: registration.id, eventBranding: bulkMemberBrand, eventId },
               member.memberName
             ).catch(console.error)
           })
@@ -5368,6 +6121,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           {
             name: organizerDetails.name,
             events: successfulEvents,
+            eventIds: successfulEvents.map(e => e.eventId),
             details: {
               college: organizerDetails.college,
               rollNo: organizerDetails.rollNo
@@ -5428,9 +6182,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Forbidden" })
       }
 
+      // Phase 1 multi-tenancy: scoped callers see only their own symposium's
+      // colleges; cache key is namespaced per symposium.
+      const colScope = isUltimateAdmin(req) ? null : assertTenantScope(req, res)
+      if (colScope === undefined) return
+      const colEventIds = colScope === null ? undefined : (await storage.getEventsBySymposium(colScope)).map((e) => e.id)
       const colleges = await cacheService.get(
-        'registrations:colleges',
-        () => storage.getUniqueColleges(),
+        `registrations:colleges:${colScope ?? "all"}`,
+        () => storage.getUniqueColleges(colEventIds),
         600 // 10 minutes TTL - colleges rarely change
       )
       res.json(colleges)
@@ -5451,6 +6210,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const registration = await storage.getRegistration(req.params.id)
       if (!registration) {
         return res.status(404).json({ message: "Registration not found" })
+      }
+
+      // Phase 1 multi-tenancy: no deleting another symposium's registrations.
+      if (user.role !== "ultimate_admin") {
+        const delRegEvent = await storage.getEvent(registration.eventId)
+        if (!delRegEvent) {
+          return res.status(404).json({ message: "Event not found" })
+        }
+        if (!checkTenantAccess(req, res, delRegEvent.symposiumId)) return
       }
 
       await storage.deleteRegistration(req.params.id)
@@ -5494,6 +6262,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "Event not found" })
       }
 
+      // Phase 1 multi-tenancy: a super_admin/committee may only confirm
+      // registrations for their own symposium's events (side effects create
+      // accounts, credentials, and emails inside that tenant).
+      if (!checkTenantAccess(req, res, event.symposiumId)) return
+
       const eventCredentialsList: Array<{
         eventId: string;
         eventName: string;
@@ -5522,6 +6295,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
             email: email,
             fullName: name,
             role: "participant",
+            // Phase 1 multi-tenancy: participants are event-bound — stamp the
+            // event's symposium at account creation.
+            symposiumId: event.symposiumId,
           } as any)
         }
 
@@ -5636,7 +6412,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           'credentials_consolidated',
           {
             name: registration.organizerName,
-            credentials
+            credentials,
+            eventIds: eventCredentialsList.map(c => c.eventId),
           },
           registration.organizerName
         ).catch(err => {
@@ -5652,7 +6429,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
               'credentials_consolidated',
               {
                 name: member.memberName,
-                credentials
+                credentials,
+                eventIds: eventCredentialsList.map(c => c.eventId),
               },
               member.memberName
             ).catch(err => {
@@ -5715,7 +6493,33 @@ export async function registerRoutes(app: Express): Promise<Server> {
             continue
           }
 
-          // Round-2 H4: flip the status FIRST via the CAS'd confirm. The old
+          // Get event FIRST — tenant authorization must happen BEFORE the
+          // state-changing CAS below. A cross-tenant caller must not be able
+          // to flip a victim registration's status even if all follow-on
+          // side effects are blocked.
+          const event = await storage.getEvent(registration.eventId)
+          if (!event) {
+            errors.push({ id, error: "Event not found" })
+            continue
+          }
+
+          // Phase 1 multi-tenancy: skip registrations from other symposiums
+          // (never confirm cross-tenant; report as an error entry). A scoped
+          // caller with NULL symposium_id is a data-integrity defect — log it.
+          if (user.role !== "ultimate_admin") {
+            const callerScope = user.symposiumId
+            if (!callerScope) {
+              logNullScopeAlert(req);
+              errors.push({ id, error: "Your account has no symposium assignment" })
+              continue
+            }
+            if (callerScope !== event.symposiumId) {
+              errors.push({ id, error: "Registration belongs to another symposium" })
+              continue
+            }
+          }
+
+          // Round-2 H4: flip the status via the CAS'd confirm. The old
           // code created users, generated credentials, and QUEUED THE EMAILS
           // before the status flip — a concurrent confirm between the
           // read-check and confirmRegistration() double-sent credentials.
@@ -5731,13 +6535,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
             throw casErr
           }
 
-          // Get event
-          const event = await storage.getEvent(registration.eventId)
-          if (!event) {
-            errors.push({ id, error: "Event not found" })
-            continue
-          }
-
           // Helper to create user and participant
           const ensureParticipant = async (name: string, email: string) => {
             let participantUser = await storage.getUserByEmail(email)
@@ -5751,6 +6548,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
                 email,
                 fullName: name,
                 role: "participant",
+                // Phase 1 multi-tenancy: stamp the event's symposium.
+                symposiumId: event.symposiumId,
               } as any)
             }
 
@@ -5872,13 +6671,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return res.status(400).json({ message: validation.error })
         }
 
+        // Phase 1 multi-tenancy: the committee member's symposium owns this
+        // route — every selected event must belong to it.
+        const committeeScope = assertTenantScope(req, res)
+        if (committeeScope === undefined) return
+        const eventsList = await storage.getEventsByIds(selectedEvents)
+        for (const event of eventsList) {
+          if (event.symposiumId !== committeeScope) {
+            return res.status(403).json({ message: "Access denied: event belongs to another symposium" })
+          }
+        }
+
         const existingEmail = await storage.getUserByEmail(email)
         if (existingEmail) {
           return res.status(400).json({ message: "Email already exists" })
         }
 
         // Check for existing registrations by Roll No (Database Check)
-        const eventsList = await storage.getEventsByIds(selectedEvents)
         for (const event of eventsList) {
           const existing = await storage.checkRollNoCategoryRegistration(rollNo, event.category)
           if (existing.isRegistered) {
@@ -5900,6 +6709,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
           phone: phone || null,
           role: "participant",
           createdBy: user.id,
+          // Phase 1 multi-tenancy: on-spot participants are stamped to the
+          // committee member's symposium.
+          symposiumId: committeeScope,
         } as any)
 
         const eventCredentialsList = []
@@ -6014,7 +6826,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           await storage.deleteUser(newUser.id);
           // Track-3: defensive — the user was just created, but drop any
           // cached auth row so a rollback can never leave one behind.
-          await cacheService.delete(`auth:user:${newUser.id}`);
+          await invalidateUserCache(newUser.id);
           return res.status(409).json({
             message: firstFailure?.error || 'Registration failed for all selected events',
             code: 'DEPARTMENT_LIMIT_EXCEEDED',
@@ -6137,6 +6949,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Access denied" });
       }
 
+      // Phase 1 multi-tenancy: admins may only read participants of their own
+      // symposium's events.
+      if (!isSelf && req.user!.role !== "ultimate_admin") {
+        const partEvent = await storage.getEvent(participant.eventId)
+        if (!partEvent) {
+          return res.status(404).json({ message: "Event not found" })
+        }
+        if (!checkTenantAccess(req, res, partEvent.symposiumId)) return
+      }
+
       res.json(participant);
     } catch (error) {
       console.error("Get participant error:", error)
@@ -6162,6 +6984,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return res.status(403).json({ message: "You can only edit participants you created" })
         }
 
+        // Phase 1 multi-tenancy: defense in depth — the participant must
+        // belong to the committee member's symposium.
+        if (!checkTenantAccess(req, res, participant.symposiumId)) return
+
         const updates: any = {}
         if (fullName !== undefined) updates.fullName = fullName
         if (email !== undefined) updates.email = email
@@ -6179,7 +7005,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const { password: _, ...userWithoutPassword } = updatedUser
         // Track-3: drop the cached auth user row so detail changes
         // propagate immediately instead of waiting out the 20s TTL.
-        await cacheService.delete(`auth:user:${req.params.id}`)
+        await invalidateUserCache(req.params.id)
         res.json(userWithoutPassword)
       } catch (error: any) {
         console.error("Update on-spot participant error:", error)
@@ -6208,12 +7034,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return res.status(403).json({ message: "You can only delete participants you created" })
         }
 
+        // Phase 1 multi-tenancy: defense in depth — the participant must
+        // belong to the committee member's symposium.
+        if (!checkTenantAccess(req, res, participant.symposiumId)) return
+
         await storage.deleteUser(req.params.id)
 
         // Invalidate caches
         await cacheService.deletePattern('registrations:*')
         // Track-3: drop the cached auth row for the deleted participant user.
-        await cacheService.delete(`auth:user:${req.params.id}`)
+        await invalidateUserCache(req.params.id)
 
         res.json({ message: "Participant deleted successfully" })
       } catch (error) {
@@ -6403,6 +7233,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Forbidden" })
       }
 
+      // Phase 1 multi-tenancy: super_admin/ultimate may only read credentials
+      // of their own symposium's events.
+      if (user.role !== "event_admin" && user.role !== "ultimate_admin") {
+        const credEvent = await storage.getEvent(eventId)
+        if (!credEvent) {
+          return res.status(404).json({ message: "Event not found" })
+        }
+        if (!checkTenantAccess(req, res, credEvent.symposiumId)) return
+      }
+
       const credentials = await storage.getEventCredentialsByEvent(eventId)
       res.json(credentials)
     } catch (error) {
@@ -6435,6 +7275,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       } else if (!hasSuperAdminAccess(user) && user.role !== "registration_committee") {
         return res.status(403).json({ message: "Forbidden" })
+      }
+
+      // Phase 1 multi-tenancy: super_admin/committee may only generate ID
+      // passes for their own symposium's events.
+      if (user.role !== "event_admin" && user.role !== "ultimate_admin") {
+        if (!checkTenantAccess(req, res, event.symposiumId)) return
       }
 
       // Registration status - since we're generating ID pass, assume confirmed
@@ -6573,6 +7419,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return res.status(403).json({ message: "Forbidden" })
         }
 
+        // Phase 1 multi-tenancy: super_admin may only toggle credentials of
+        // their own symposium's events.
+        if (user.role !== "event_admin" && user.role !== "ultimate_admin") {
+          const toggleEvent = await storage.getEvent(credential.eventId)
+          if (!toggleEvent) {
+            return res.status(404).json({ message: "Event not found" })
+          }
+          if (!checkTenantAccess(req, res, toggleEvent.symposiumId)) return
+        }
+
         const updatedCredential = await storage.updateEventCredentialTestStatus(credentialId, true, user.id)
         res.json(updatedCredential)
       } catch (error) {
@@ -6604,6 +7460,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return res.status(403).json({ message: "Forbidden" })
         }
 
+        // Phase 1 multi-tenancy: super_admin may only toggle credentials of
+        // their own symposium's events.
+        if (user.role !== "event_admin" && user.role !== "ultimate_admin") {
+          const toggleEvent = await storage.getEvent(credential.eventId)
+          if (!toggleEvent) {
+            return res.status(404).json({ message: "Event not found" })
+          }
+          if (!checkTenantAccess(req, res, toggleEvent.symposiumId)) return
+        }
+
         const updatedCredential = await storage.updateEventCredentialTestStatus(credentialId, false, user.id)
         res.json(updatedCredential)
       } catch (error) {
@@ -6629,6 +7495,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
           }
         } else if (!hasSuperAdminAccess(user)) {
           return res.status(403).json({ message: "Forbidden" })
+        }
+
+        // Phase 1 multi-tenancy: super_admin may only bulk-toggle credentials
+        // of their own symposium's events.
+        if (user.role !== "event_admin" && user.role !== "ultimate_admin") {
+          const bulkEvent = await storage.getEvent(eventId)
+          if (!bulkEvent) {
+            return res.status(404).json({ message: "Event not found" })
+          }
+          if (!checkTenantAccess(req, res, bulkEvent.symposiumId)) return
         }
 
         const credentials = await storage.getEventCredentialsByEvent(eventId)
@@ -6672,6 +7548,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return res.status(403).json({ message: "Forbidden" })
         }
 
+        // Phase 1 multi-tenancy: super_admin may only bulk-toggle credentials
+        // of their own symposium's events.
+        if (user.role !== "event_admin" && user.role !== "ultimate_admin") {
+          const bulkEvent = await storage.getEvent(eventId)
+          if (!bulkEvent) {
+            return res.status(404).json({ message: "Event not found" })
+          }
+          if (!checkTenantAccess(req, res, bulkEvent.symposiumId)) return
+        }
+
         const credentials = await storage.getEventCredentialsByEvent(eventId)
         let updatedCount = 0
 
@@ -6709,6 +7595,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Forbidden" })
       }
 
+      // Phase 1 multi-tenancy: super_admin may only read credential status of
+      // their own symposium's events.
+      if (user.role !== "event_admin" && user.role !== "ultimate_admin") {
+        const statusEvent = await storage.getEvent(eventId)
+        if (!statusEvent) {
+          return res.status(404).json({ message: "Event not found" })
+        }
+        if (!checkTenantAccess(req, res, statusEvent.symposiumId)) return
+      }
+
       const credentialsWithParticipants = await storage.getEventCredentialsWithParticipants(eventId)
 
       const result = credentialsWithParticipants.map((cred) => ({
@@ -6735,7 +7631,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!hasSuperAdminAccess(req.user!)) {
         return res.status(403).json({ message: "Forbidden" })
       }
-      const stats = await storage.getRegistrationStats()
+      // Phase 1 multi-tenancy: scoped super_admin sees only their own
+      // symposium's registration stats.
+      const statsScope = isUltimateAdmin(req) ? null : assertTenantScope(req, res)
+      if (statsScope === undefined) return
+      const statsEventIds = statsScope === null ? undefined : (await storage.getEventsBySymposium(statsScope)).map((e) => e.id)
+      const stats = await storage.getRegistrationStats(undefined, statsEventIds)
       console.log("Admin stats response:", JSON.stringify(stats, null, 2))
       // Disable caching for stats endpoint
       res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate')
@@ -6756,7 +7657,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Forbidden" })
       }
 
-      const stats = await storage.getRegistrationStats(user.role === 'event_admin' ? user.id : undefined)
+      // Phase 1 multi-tenancy: a super_admin hitting this endpoint sees only
+      // their own symposium's stats (event_admin branch stays
+      // assignment-scoped as before).
+      let stats
+      if (user.role === "event_admin") {
+        stats = await storage.getRegistrationStats(user.id)
+      } else if (isUltimateAdmin(req)) {
+        stats = await storage.getRegistrationStats()
+      } else {
+        const eaScope = assertTenantScope(req, res)
+        if (eaScope === undefined) return
+        const eaEventIds = (await storage.getEventsBySymposium(eaScope)).map((e) => e.id)
+        stats = await storage.getRegistrationStats(undefined, eaEventIds)
+      }
       res.json(stats)
     } catch (error) {
       console.error("Event admin stats error:", error)
@@ -7223,15 +8137,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
     requireSuperAdmin,
     async (req: AuthRequest, res: Response) => {
       try {
-        const events = await storage.getEvents()
-        const allUsers = await storage.getUsers()
-        const participants = allUsers.filter((u) => u.role === "participant")
+        // Phase 1 multi-tenancy: the workbook covers exactly one symposium.
+        // Scoped super_admin → their own; ultimate_admin → explicit query param.
+        const exportSymposiumId = await resolveTargetSymposiumQuery(req, res)
+        if (!exportSymposiumId) return
+        const events = await storage.getEventsBySymposium(exportSymposiumId)
+        const scopeUsers = await storage.getUsersBySymposium(exportSymposiumId)
+        const participants = scopeUsers.filter((u) => u.role === "participant")
 
         const workbook = new ExcelJS.Workbook()
-        // Phase B: symposium-wide report spans all events — no single event
-        // identity applies, so this stays live (the report itself is a
-        // "now" aggregate; its per-event rows keep their own data).
-        const branding = await getBranding()
+        // Phase B: symposium-wide report spans the symposium's events — the
+        // branding resolves the owning symposium, never the old global row.
+        const branding = await getBranding(exportSymposiumId)
         workbook.creator = branding.appName
         workbook.company = branding.organizerName
 
@@ -7367,9 +8284,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
     requireSuperAdmin,
     async (req: AuthRequest, res: Response) => {
       try {
-        const events = await storage.getEvents()
-        const allUsers = await storage.getUsers()
-        const participants = allUsers.filter((u) => u.role === "participant")
+        // Phase 1 multi-tenancy: the report covers exactly one symposium.
+        const exportSymposiumId = await resolveTargetSymposiumQuery(req, res)
+        if (!exportSymposiumId) return
+        const events = await storage.getEventsBySymposium(exportSymposiumId)
+        const scopeUsers = await storage.getUsersBySymposium(exportSymposiumId)
+        const participants = scopeUsers.filter((u) => u.role === "participant")
 
         const doc = new PDFDocument({ size: "A4", layout: "landscape", margin: 50 })
         const fileName = `Symposium_Report_${new Date().toISOString().split("T")[0]}.pdf`
@@ -7379,10 +8299,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
         doc.pipe(res)
 
-        // Phase B: symposium-wide report spans all events — no single event
-        // identity applies, so this stays live (the report itself is a
-        // "now" aggregate; its per-event rows keep their own data).
-        const branding = await getBranding()
+        // Phase B: symposium-wide report spans the symposium's events — the
+        // branding resolves the owning symposium, never the old global row.
+        const branding = await getBranding(exportSymposiumId)
         doc.fontSize(11).font("Helvetica").fillColor("#64748b").text(branding.appName, { align: "center" })
         doc.moveDown(0.25)
         doc.fontSize(20).font("Helvetica-Bold").fillColor("#0f172a").text("Symposium-wide Report", { align: "center" })
@@ -7565,10 +8484,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ==================== Super Admin Override Routes ====================
 
   // DELETE /api/super-admin/reset-participants - Clear all participant data
+  // Phase 1 multi-tenancy: ULTIMATE-ONLY. This is a nuclear ops reset that
+  // deletes entire tables with no WHERE clause; per-symposium partial resets
+  // are semantically dubious, so no scoped super_admin may invoke it.
   app.delete(
     "/api/super-admin/reset-participants",
     requireAuth,
-    requireSuperAdmin,
+    requireUltimateAdmin,
     async (req: AuthRequest, res: Response) => {
       try {
         const user = req.user!
@@ -7650,6 +8572,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return res.status(404).json({ message: "Event not found" })
         }
 
+        // Phase 1 multi-tenancy: no cross-symposium event override.
+        if (!checkTenantAccess(req, res, existingEvent.symposiumId)) return
+
         // Prepare update data
         const updateData: any = {}
         if (name !== undefined) updateData.name = name
@@ -7728,6 +8653,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return res.status(404).json({ message: "Event not found" })
         }
 
+        // Phase 1 multi-tenancy: no cross-symposium event deletion.
+        if (!checkTenantAccess(req, res, existingEvent.symposiumId)) return
+
         // Delete event
         await storage.deleteEvent(eventId)
 
@@ -7784,6 +8712,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const round = await storage.getRound(existingQuestion.roundId)
         const event = round ? await storage.getEvent(round.eventId) : null
         const targetName = `${event?.name || "Unknown Event"} - ${round?.name || "Unknown Round"} - Q${existingQuestion.questionNumber}`
+
+        // Phase 1 multi-tenancy: no cross-symposium question tampering
+        // (answer keys!). Resolve question → round → event → symposium.
+        if (!event) {
+          return res.status(404).json({ message: "Parent event not found" })
+        }
+        if (!checkTenantAccess(req, res, event.symposiumId)) return
 
         // Prepare update data
         const updateData: any = { ...otherFields }
@@ -7864,6 +8799,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return res.status(404).json({ message: "Question not found" })
         }
 
+        // Phase 1 multi-tenancy: resolve question → round → event → symposium.
+        const delRound = await storage.getRound(existingQuestion.roundId)
+        const delEvent = delRound ? await storage.getEvent(delRound.eventId) : null
+        if (!delEvent) {
+          return res.status(404).json({ message: "Parent event not found" })
+        }
+        if (!checkTenantAccess(req, res, delEvent.symposiumId)) return
+
         // Delete question
         await storage.deleteQuestion(questionId)
 
@@ -7917,6 +8860,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Get event info for context
         const event = await storage.getEvent(existingRound.eventId)
         const targetName = `${event?.name || "Unknown Event"} - ${existingRound.name}`
+
+        // Phase 1 multi-tenancy: no cross-symposium round mutation (a round's
+        // window controls another symposium's live exam).
+        if (!event) {
+          return res.status(404).json({ message: "Parent event not found" })
+        }
+        if (!checkTenantAccess(req, res, event.symposiumId)) return
 
         // Prepare update data
         const updateData: any = {}
@@ -7986,7 +8936,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (endDate) filters.endDate = new Date(endDate as string)
 
       const logs = await storage.getAuditLogs(filters)
-      res.json(logs)
+      // Phase 1 multi-tenancy: scoped super_admin sees only actions performed
+      // by admins of their own symposium (audit rows carry no symposium_id of
+      // their own; the acting admin's symposium is the tenant boundary).
+      const scope = isUltimateAdmin(req) ? null : assertTenantScope(req, res)
+      if (scope === undefined) return
+      if (scope === null) {
+        res.json(logs)
+        return
+      }
+      const adminIds = Array.from(new Set(logs.map((l) => l.adminId).filter((id): id is string => !!id)))
+      const admins = await Promise.all(adminIds.map((id) => storage.getUser(id)))
+      const allowed = new Set(
+        admins.filter((a) => a && a.symposiumId === scope).map((a) => a!.id),
+      )
+      res.json(logs.filter((l) => allowed.has(l.adminId)))
     } catch (error) {
       console.error("Get audit logs error:", error)
       res.status(500).json({ message: "Internal server error" })
@@ -8003,6 +8967,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const { targetType, targetId } = req.params
 
         const logs = await storage.getAuditLogsByTarget(targetType, targetId)
+        // Phase 1 multi-tenancy: resolve the target's symposium and deny
+        // cross-symposium audit-trail reads.
+        if (!isUltimateAdmin(req)) {
+          const targetSymposium = await resolveAuditTargetSymposium(targetType, targetId)
+          if (targetSymposium === undefined) {
+            // Unknown target type — fall back to the acting admins' symposium.
+            const scope = assertTenantScope(req, res)
+            if (scope === undefined) return
+            const adminIds = Array.from(new Set(logs.map((l) => l.adminId).filter((id): id is string => !!id)))
+            const admins = await Promise.all(adminIds.map((id) => storage.getUser(id)))
+            const allowed = new Set(
+              admins.filter((a) => a && a.symposiumId === scope).map((a) => a!.id),
+            )
+            res.json(logs.filter((l) => allowed.has(l.adminId)))
+            return
+          }
+          if (targetSymposium === null) {
+            return res.status(404).json({ message: "Target not found" })
+          }
+          if (!checkTenantAccess(req, res, targetSymposium)) return
+        }
         res.json(logs)
       } catch (error) {
         console.error("Get audit logs by target error:", error)
@@ -8023,6 +9008,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (endDate) filters.endDate = new Date(endDate as string)
       if (limit) filters.limit = Math.min(parseInt(limit as string, 10), 100) // Cap at 100
       if (offset) filters.offset = parseInt(offset as string, 10)
+      // Phase 1 multi-tenancy: scoped super_admin sees only their own
+      // symposium's email logs (recipient PII).
+      const scope = isUltimateAdmin(req) ? null : assertTenantScope(req, res)
+      if (scope === undefined) return
+      if (scope !== null) filters.symposiumId = scope
 
       const logs = await storage.getEmailLogs(filters)
       res.json(logs)
@@ -8042,6 +9032,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (templateType) filters.templateType = templateType as string
       if (startDate) filters.startDate = new Date(startDate as string)
       if (endDate) filters.endDate = new Date(endDate as string)
+      // Phase 1 multi-tenancy: count only the caller's symposium.
+      const countScope = isUltimateAdmin(req) ? null : assertTenantScope(req, res)
+      if (countScope === undefined) return
+      if (countScope !== null) filters.symposiumId = countScope
 
       const count = await storage.getEmailLogsCount(filters)
       res.json({ count })
@@ -8061,6 +9055,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "Email log not found" })
       }
 
+      // Phase 1 multi-tenancy: IDOR guard on email logs.
+      if (!checkTenantAccess(req, res, log.symposiumId)) return
+
       res.json(log)
     } catch (error) {
       console.error("Get email log by ID error:", error)
@@ -8078,7 +9075,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const { email } = req.params
 
         const logs = await storage.getEmailLogsByRecipient(email)
-        res.json(logs)
+        // Phase 1 multi-tenancy: scoped super_admin sees only their own
+        // symposium's rows.
+        const recipScope = isUltimateAdmin(req) ? null : assertTenantScope(req, res)
+        if (recipScope === undefined) return
+        res.json(recipScope === null ? logs : logs.filter((l) => l.symposiumId === recipScope))
       } catch (error) {
         console.error("Get email logs by recipient error:", error)
         res.status(500).json({ message: "Internal server error" })
@@ -8095,12 +9096,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Email address and name are required" })
       }
 
+      // Phase 1 multi-tenancy: attribute the test-email log to the caller's
+      // symposium (ultimate_admin falls back to the default symposium).
+      const testScope = isUltimateAdmin(req) ? null : assertTenantScope(req, res)
+      if (testScope === undefined) return
+
       const result = await emailService.sendRegistrationApproved(
         to,
         name,
         "BootFete 2K26 Test Event",
         "test-user-001",
-        "testpass123"
+        "testpass123",
+        null,
+        undefined,
+        testScope ?? undefined,
       )
 
       if (result.success) {
@@ -8133,7 +9142,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Admin cache flush
-  app.post("/api/admin/cache-flush", requireAuth, requireSuperAdmin, async (req: AuthRequest, res: Response) => {
+  app.post("/api/admin/cache-flush", requireAuth, requireUltimateAdmin, async (req: AuthRequest, res: Response) => {
     await cacheService.flushAll();
     res.json({ message: "Cache flushed successfully" });
   });
@@ -8142,6 +9151,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/admin/failed-emails", requireAuth, requireSuperAdmin, async (req: AuthRequest, res: Response) => {
     try {
       const jobs = await queueService.getFailedJobs();
+      // Phase 1 multi-tenancy: scoped super_admin sees only failed jobs for
+      // their own symposium's events. Job symposium is resolved from the
+      // eventId/eventIds carried in the job variables (jobs without any event
+      // reference are visible to ultimate_admin only).
+      if (!isUltimateAdmin(req)) {
+        const scope = assertTenantScope(req, res)
+        if (scope === undefined) return
+        const filtered = []
+        for (const job of jobs) {
+          const jobSymposium = await resolveEmailJobSymposiumId(job)
+          if (jobSymposium !== null && jobSymposium === scope) {
+            filtered.push(job)
+          }
+        }
+        return res.json(filtered)
+      }
       res.json(jobs);
     } catch (error) {
       res.status(500).json({ message: "Failed to get failed jobs" });
@@ -8150,6 +9175,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post("/api/admin/retry-email/:jobId", requireAuth, requireSuperAdmin, async (req: AuthRequest, res: Response) => {
     try {
+      // Phase 1 multi-tenancy: scoped super_admin may only retry their own
+      // symposium's failed jobs.
+      if (!isUltimateAdmin(req)) {
+        const scope = assertTenantScope(req, res)
+        if (scope === undefined) return
+        const jobs = await queueService.getFailedJobs();
+        const job = jobs.find((j: any) => String(j.id) === req.params.jobId)
+        if (!job) {
+          return res.status(404).json({ message: "Job not found" })
+        }
+        const jobSymposium = await resolveEmailJobSymposiumId(job)
+        if (jobSymposium === null || jobSymposium !== scope) {
+          return res.status(403).json({ message: "Access denied: job belongs to another symposium" })
+        }
+      }
       const success = await queueService.retryJob(req.params.jobId);
       if (success) {
         res.json({ message: "Job retry triggered" });
@@ -8174,7 +9214,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Get events allowed for this admin
       let eventIds: string[] = [];
       if (hasSuperAdminAccess(user)) {
-        const allEvents = await storage.getEvents();
+        // Phase 1 multi-tenancy: scoped super_admin exports only their own
+        // symposium's events.
+        const expScope = isUltimateAdmin(req) ? null : assertTenantScope(req, res)
+        if (expScope === undefined) return
+        const allEvents = await storage.getEventsBySymposium(expScope);
         eventIds = allEvents.map(e => e.id);
       } else {
         const adminEvents = await storage.getEventsByAdmin(user.id);
@@ -8681,10 +9725,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
   );
 
   // POST /api/email-provider - Switch email provider
+  // Phase 1 multi-tenancy: ULTIMATE-ONLY. The provider is deployment-wide;
+  // a per-symposium super_admin must not switch delivery for every tenant.
   app.post(
     "/api/email-provider",
     requireAuth,
-    requireSuperAdmin,
+    requireUltimateAdmin,
     async (req: AuthRequest, res: Response) => {
       try {
         const { provider } = req.body;

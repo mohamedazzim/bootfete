@@ -4,7 +4,7 @@ import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { AuthProvider, useAuth, hasSuperAdminAccess } from "@/lib/auth";
+import { AuthProvider, useAuth, getPostLoginPath } from "@/lib/auth";
 import { BrandingProvider } from "@/lib/branding";
 import { WebSocketProvider } from "@/contexts/WebSocketContext";
 import AppHeader from "@/components/Header";
@@ -13,7 +13,6 @@ import AppHeader from "@/components/Header";
 // latency. Everything admin-side is route-split.
 import NotFound from "@/pages/not-found";
 import Login from "@/pages/login";
-import LandingPage from "@/pages/public/landing";
 import ParticipantRegisterPage from "@/pages/public/register";
 import PublicRegistrationFormPage from "@/pages/public/registration-form";
 import EventRegistrationPage from "@/pages/public/event-registration";
@@ -49,6 +48,12 @@ const EmailLogsPage = lazy(() => import("@/pages/admin/email-logs"));
 const AdminSettingsPage = lazy(() => import("@/pages/admin/settings"));
 // Ultimate-admin surfaces (lazy) — Phase B branding settings, strict ultimate-only.
 const UltimateAdminBrandingPage = lazy(() => import("@/pages/ultimate-admin/settings"));
+// Phase 2: ultimate-admin landing (symposium provisioning dashboard).
+const UltimateAdminDashboardPage = lazy(() => import("@/pages/ultimate-admin/dashboard"));
+// Phase 2: public per-symposium landing + directory; forced password change.
+const SymposiumLandingPage = lazy(() => import("@/pages/public/symposium-landing"));
+const SymposiumDirectoryPage = lazy(() => import("@/pages/public/symposium-directory"));
+const ForcePasswordChangePage = lazy(() => import("@/pages/force-password-change"));
 // Event-admin surfaces (lazy)
 const EventAdminDashboard = lazy(() => import("@/pages/event-admin/dashboard"));
 const EventAdminEventsPage = lazy(() => import("@/pages/event-admin/events"));
@@ -126,14 +131,28 @@ function Router() {
       <Switch>
       <Route path="/login" component={Login} />
 
+      {/* Phase 2: forced password change for provisioned staff accounts. */}
+      <Route path="/force-password-change">
+        {user ? <ForcePasswordChangePage /> : <Redirect to="/login" />}
+      </Route>
+
+      {/* Phase 2: ultimate-admin landing — symposium provisioning dashboard. */}
+      <Route path="/ultimate-admin">
+        <ProtectedRoute component={UltimateAdminDashboardPage} allowedRoles={['ultimate_admin']} />
+      </Route>
+
+      {/* Phase 2: public per-symposium landing page, keyed by locked slug. */}
+      <Route path="/s/:slug" component={SymposiumLandingPage} />
+
       <Route path="/">
         {user ? (
-          hasSuperAdminAccess(user.role) ? <Redirect to="/admin/dashboard" /> :
-            user.role === 'event_admin' ? <Redirect to="/event-admin/dashboard" /> :
-              user.role === 'registration_committee' ? <Redirect to="/registration-committee/dashboard" /> :
-                <Redirect to="/participant/dashboard" />
+          // Single-sourced post-auth routing: ultimate_admin -> /ultimate-admin,
+          // mustChangePassword -> /force-password-change (never bypassed).
+          <Redirect to={getPostLoginPath(user)} />
         ) : (
-          <LandingPage />
+          // Phase 2: bare "/" is a public symposium directory (see
+          // symposium-directory.tsx for the decision rationale).
+          <SymposiumDirectoryPage />
         )}
       </Route>
 

@@ -1,13 +1,41 @@
 import { sql, relations } from "drizzle-orm";
-import { pgTable, text, varchar, timestamp, integer, boolean, jsonb, unique } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, timestamp, integer, boolean, jsonb, unique, check } from "drizzle-orm/pg-core";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 import { z } from "zod";
+
+// Symposiums table — multi-tenant root (Phase 1 multi-tenancy).
+// Each symposium is an independent tenant: its own super_admin, events,
+// branding, and fully isolated data. ultimate_admin rows keep
+// users.symposium_id NULL and see across all symposiums.
+// IMMUTABLE NAME + SLUG: no update route may ever touch `name` or `slug` —
+// there is intentionally no PUT/PATCH endpoint for symposiums. Renaming
+// would rewrite historical branding identity; create a new symposium
+// instead. The slug is auto-derived from the name at creation
+// ("BootFete 2K26" → "bootfete-2k26") and drives public per-symposium
+// landing pages (/s/:slug).
+export const symposiums = pgTable("symposiums", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: text("name").notNull().unique(),
+  slug: text("slug").notNull().unique(),
+  organizerName: text("organizer_name").notNull(),
+  logoUrl: text("logo_url"),
+  primaryColor: text("primary_color").notNull().default('#4F46E5'),
+  supportEmail: text("support_email").notNull().default('Not configured'),
+  footerText: text("footer_text").notNull().default(''),
+  createdBy: varchar("created_by").references(() => users.id, { onDelete: 'set null' }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
 
 // Users table - supports ultimate_admin, super_admin, event_admin, participant, and registration_committee roles.
 // ultimate_admin is the top tier: it inherits every super_admin capability (see
 // hasSuperAdminAccess in server/middleware/auth.ts) plus exclusive rights such
 // as branding administration. Existing super_admin rows are untouched by this
 // change — ultimate_admin is a distinct role, not a rename.
+// Multi-tenancy: symposium_id scopes a user to exactly one symposium.
+// ultimate_admin rows keep symposium_id NULL (unscoped, sees all).
+// Participant users keep symposium_id NULL — their tenant context derives
+// from the event they act on (a participant may join events across
+// symposiums), so a single column cannot represent it.
 export const users: any = pgTable("users", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   username: text("username").notNull().unique(),
@@ -16,9 +44,19 @@ export const users: any = pgTable("users", {
   fullName: text("full_name").notNull(),
   phone: text("phone"),
   role: varchar("role", { enum: ['ultimate_admin', 'super_admin', 'event_admin', 'participant', 'registration_committee'] }).notNull(),
+  symposiumId: varchar("symposium_id").references(() => symposiums.id, { onDelete: 'restrict' }),
+  // Phase 2 credential safety: staff accounts provisioned with a generated
+  // password must change it on first login. Set true at creation/reset;
+  // cleared when the user sets their own password via /api/auth/change-password.
+  mustChangePassword: boolean("must_change_password").notNull().default(false),
   createdBy: varchar("created_by").references(() => users.id, { onDelete: 'set null' }),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-});
+}, (t) => [
+  // Phase 1 hardening (migration 006): scoped admin roles must carry a
+  // symposium_id — NULL is only legal for ultimate_admin and participant.
+  check("users_symposium_required_for_scoped_roles",
+    sql`${t.role} IN ('ultimate_admin', 'participant') OR ${t.symposiumId} IS NOT NULL`),
+]);
 
 // Events table - created by super admin
 // Note: createdBy uses onDelete: 'set null' to preserve event history even if creator is deleted
@@ -26,6 +64,9 @@ export const events = pgTable("events", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   name: text("name").notNull(),
   description: text("description").notNull(),
+  // Multi-tenancy: every event belongs to exactly one symposium (NOT NULL
+  // after migration 005 backfill). Tenant isolation filters on this column.
+  symposiumId: varchar("symposium_id").references(() => symposiums.id, { onDelete: 'restrict' }).notNull(),
   type: varchar("type", { enum: ['technical', 'non_technical'] }).notNull().default('technical'), // technical or non-technical
   category: varchar("category", { enum: ['technical', 'non_technical'] }).notNull().default('technical'),
   minMembers: integer("min_members").notNull().default(1), // Minimum team members (1 for solo)
@@ -43,7 +84,11 @@ export const events = pgTable("events", {
   appName: text("app_name"),
   organizerName: text("organizer_name"),
   logoUrl: text("logo_url"),
-});
+}, (t) => [
+  // Phase 1 hardening (migration 006): event names are unique per symposium,
+  // not globally — two symposiums may have identically-named events.
+  unique("events_symposium_name_unique").on(t.symposiumId, t.name),
+]);
 
 // Event Admins - assignment of admins to events
 export const eventAdmins = pgTable("event_admins", {
@@ -198,6 +243,9 @@ export const answers = pgTable("answers", {
 export const reports = pgTable("reports", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   eventId: varchar("event_id").references(() => events.id, { onDelete: 'cascade' }),
+  // Multi-tenancy: symposium_wide reports have NULL eventId, so the tenant
+  // is stored directly. NOT NULL after migration 005 backfill.
+  symposiumId: varchar("symposium_id").references(() => symposiums.id, { onDelete: 'restrict' }).notNull(),
   reportType: text("report_type").notNull(), // event_wise, symposium_wide
   title: text("title").notNull(),
   generatedBy: varchar("generated_by").references(() => users.id, { onDelete: 'set null' }),
@@ -207,8 +255,11 @@ export const reports = pgTable("reports", {
 });
 
 // Registration Forms - public registration forms for events (general, not tied to specific event)
+// Multi-tenancy: each form belongs to exactly one symposium (NOT NULL after
+// migration 005 backfill); committee/super_admin form routes are tenant-scoped.
 export const registrationForms = pgTable("registration_forms", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  symposiumId: varchar("symposium_id").references(() => symposiums.id, { onDelete: 'restrict' }).notNull(),
   title: varchar("title").notNull(),
   description: text("description"),
   headerImage: text("header_image"), // URL or base64 encoded image for form header
@@ -354,8 +405,11 @@ export const auditLogs = pgTable("audit_logs", {
 });
 
 // Email Logs - track all email notifications sent by the system
+// Multi-tenancy: symposium_id is stamped at send time (NOT NULL after
+// migration 005 backfill) so email-log reads can be tenant-scoped.
 export const emailLogs = pgTable("email_logs", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  symposiumId: varchar("symposium_id").references(() => symposiums.id, { onDelete: 'restrict' }).notNull(),
   recipientEmail: text("recipient_email").notNull(),
   recipientName: text("recipient_name"),
   subject: text("subject").notNull(),
@@ -594,6 +648,9 @@ export const insertEventWinnerSchema = createInsertSchema(eventWinners).omit({
 // TypeScript types
 export type User = typeof users.$inferSelect;
 export type InsertUser = z.infer<typeof insertUserSchema>;
+
+export type Symposium = typeof symposiums.$inferSelect;
+export type InsertSymposium = typeof symposiums.$inferInsert;
 
 export type Event = typeof events.$inferSelect;
 export type InsertEvent = z.infer<typeof insertEventSchema>;
